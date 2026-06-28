@@ -11,6 +11,9 @@ export const EnvSchema = z.object({
   JWT_SECRET: z.string().min(1, 'JWT_SECRET is required'),
   PORT: z.coerce.number().int('PORT must be an integer').positive('PORT must be positive'),
   TOKEN_TRANSFER_CONTRACT_ID: z.string().min(1, 'TOKEN_TRANSFER_CONTRACT_ID is required'),
+  VAPID_PUBLIC_KEY: z.string().min(1, 'VAPID_PUBLIC_KEY is required'),
+  VAPID_PRIVATE_KEY: z.string().min(1, 'VAPID_PRIVATE_KEY is required'),
+  VAPID_SUBJECT: z.string().min(1, 'VAPID_SUBJECT is required'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

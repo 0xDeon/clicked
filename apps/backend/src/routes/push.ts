@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { IRouter } from 'express';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, isNull } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { pushSubscriptions } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
@@ -18,7 +18,6 @@ pushRouter.post('/subscriptions', async (req: AuthRequest, res) => {
   }
 
   try {
-    // Upsert subscription
     await db
       .insert(pushSubscriptions)
       .values({
@@ -26,6 +25,7 @@ pushRouter.post('/subscriptions', async (req: AuthRequest, res) => {
         endpoint,
         p256dh: keys.p256dh,
         auth: keys.auth,
+        lastUsedAt: new Date(),
       })
       .onConflictDoUpdate({
         target: [pushSubscriptions.endpoint],
@@ -33,6 +33,8 @@ pushRouter.post('/subscriptions', async (req: AuthRequest, res) => {
           deviceId,
           p256dh: keys.p256dh,
           auth: keys.auth,
+          disabledAt: null,
+          lastUsedAt: new Date(),
         },
       });
 
@@ -62,3 +64,24 @@ pushRouter.delete('/subscriptions', async (req: AuthRequest, res) => {
     res.status(500).json({ error: 'Failed to delete subscription' });
   }
 });
+
+/**
+ * Touch lastUsedAt for active (non-disabled) subscriptions by device.
+ * Called internally before sending a push notification.
+ */
+export async function touchSubscription(endpoint: string): Promise<void> {
+  await db
+    .update(pushSubscriptions)
+    .set({ lastUsedAt: new Date() })
+    .where(and(eq(pushSubscriptions.endpoint, endpoint), isNull(pushSubscriptions.disabledAt)));
+}
+
+/**
+ * Mark a subscription as disabled (e.g. after a 410 Gone from the push service).
+ */
+export async function disableSubscription(endpoint: string): Promise<void> {
+  await db
+    .update(pushSubscriptions)
+    .set({ disabledAt: new Date() })
+    .where(eq(pushSubscriptions.endpoint, endpoint));
+}
