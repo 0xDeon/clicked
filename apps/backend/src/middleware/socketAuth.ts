@@ -39,6 +39,7 @@ export async function socketAuthMiddleware(
     return;
   }
 
+
   socket.auth = payload;
   next();
 }
