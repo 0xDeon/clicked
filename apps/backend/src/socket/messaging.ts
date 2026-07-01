@@ -66,7 +66,19 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
 
   // ── send_message ───────────────────────────────────────────────────────────
   dispatcher.register('send_message', async (payload) => {
+
     const { conversationId, messageId, content, contentType, ciphertext, envelopes, fileId } = payload as {
+
+    const {
+      conversationId,
+      messageId,
+      content,
+      contentType,
+      ciphertext,
+      envelopes,
+      fileId: payloadFileId,
+    } = payload as {
+
       conversationId: string;
       messageId?: string;
       content?: string;
@@ -101,10 +113,17 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     const effectiveCiphertext = ciphertext ?? content ?? undefined;
 
     const validation = validateMessagePayload({
+
       ...(contentType !== undefined ? { contentType } : {}),
       ...(effectiveCiphertext !== undefined ? { ciphertext: effectiveCiphertext } : {}),
       ...(envelopes !== undefined ? { envelopes } : {}),
       ...(fileId !== undefined ? { fileId } : {}),
+
+      contentType,
+      ciphertext: effectiveCiphertext,
+      envelopes,
+      fileId: payloadFileId,
+
     });
     if (!validation.ok) {
       socket.emit('error', {
@@ -137,15 +156,25 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       return;
     }
 
+
     const resolvedContentType = contentType?.trim().toLowerCase() || 'text';
     let persistedFileId = fileId;
     if (FILE_CONTENT_TYPES.has(resolvedContentType) && !persistedFileId) {
+
+    let fileId: string | undefined = payloadFileId;
+    const resolvedContentType = contentType || 'text/plain';
+    if (FILE_CONTENT_TYPES.has(resolvedContentType)) {
+
       const [fileRow] = await db
         .insert(files)
         .values({ storageKey: messageId })
         .onConflictDoUpdate({ target: files.storageKey, set: { storageKey: messageId } })
         .returning({ id: files.id });
+
       persistedFileId = fileRow?.id;
+
+      fileId = fileRow?.id ?? payloadFileId;
+
     }
 
     const [message] = await db
@@ -198,13 +227,19 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       }
     }
 
-    if (message) {
-      socket.emit('message_ack', { messageId, sequenceNumber: message.sequenceNumber });
+    if (!message) {
+      socket.emit('error', { event: 'send_message', message: 'Failed to persist message' });
+      return;
     }
 
     if (message) {
       await deliverMessage(io, message, conversationId);
     }
+
+    socket.emit('message_ack', { messageId, sequenceNumber: message.sequenceNumber });
+
+    await deliverMessage(io, message, conversationId);
+
 
     const members = await db.query.conversationMembers.findMany({
       where: eq(conversationMembers.conversationId, conversationId),

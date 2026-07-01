@@ -12,19 +12,27 @@ import { registerMessagingHandlers } from './socket/messaging.js';
 import { app } from './app.js';
 import { redis as appRedis } from './lib/redis.js';
 import { setSocketServer } from './lib/socket.js';
-import { setOnline, setOffline } from './services/presence.js';
+import {
+  cleanupStaleSockets,
+  reconcileBoot,
+  refreshPresenceSocket,
+  registerPresenceSocket,
+  setOffline,
+  setOnline,
+  unregisterPresenceSocket,
+} from './services/presence.js';
 import { startHeartbeatTimer, clearHeartbeatTimer } from './services/heartbeat.js';
 import {
-  registerDeviceSocket,
-  unregisterDeviceSocket,
   isDeviceRevoked,
+  registerDeviceSocket,
   startDeviceRevocationListener,
+  unregisterDeviceSocket,
 } from './services/deviceRevocation.js';
 import {
-  checkRateLimit,
   checkPayloadSize,
-  recordViolation,
+  checkRateLimit,
   clearViolations,
+  recordViolation,
 } from './services/rateLimit.js';
 import { registerForBackpressure, unregisterForBackpressure } from './services/backpressure.js';
 import { getGatewaySubscriber } from './services/deviceDelivery.js';
@@ -47,6 +55,27 @@ const io = new Server(httpServer, {
   cors: { origin: '*' },
 });
 
+let isShuttingDown = false;
+
+const handleShutdown = () => {
+  isShuttingDown = true;
+};
+
+process.on('SIGTERM', handleShutdown);
+process.on('SIGINT', handleShutdown);
+
+const origIoClose = io.close.bind(io);
+io.close = ((fn?: () => void) => {
+  isShuttingDown = true;
+  return origIoClose(fn);
+}) as typeof io.close;
+
+const origHttpClose = httpServer.close.bind(httpServer);
+httpServer.close = ((fn?: (err?: Error) => void) => {
+  isShuttingDown = true;
+  return origHttpClose(fn);
+}) as typeof httpServer.close;
+
 setSocketServer(io);
 
 // Record a presence change on the resume streams of everyone who shares a
@@ -60,10 +89,12 @@ async function recordPresenceForCoMembers(
   if (!appRedis || conversationIds.length === 0) {
     return;
   }
+
   const coMembers = await db.query.conversationMembers.findMany({
     where: inArray(conversationMembers.conversationId, conversationIds),
     columns: { userId: true },
   });
+
   await publishEphemeral(
     appRedis,
     coMembers.map((m) => m.userId).filter((id) => id !== userId),
@@ -78,10 +109,11 @@ io.on('connection', async (socket: AuthSocket) => {
   const deviceId = socket.auth!.deviceId;
   console.log('User connected:', userId, socket.id);
 
+  socket.data['userId'] = userId;
+  socket.data['deviceId'] = deviceId;
+
   // Register socket for device-revocation tracking (cross-instance via Redis pub/sub).
-  if (appRedis) {
-    registerDeviceSocket(deviceId, socket.id);
-  }
+  registerDeviceSocket(deviceId, socket.id);
 
   // Start the server-side heartbeat watchdog (90 s timeout).
   startHeartbeatTimer(socket, userId, deviceId, appRedis, io);
@@ -148,6 +180,9 @@ io.on('connection', async (socket: AuthSocket) => {
   const presenceVisible = user?.presenceVisible ?? true;
 
   if (appRedis) {
+    await registerPresenceSocket(appRedis, userId, deviceId, socket.id);
+    await cleanupStaleSockets(io, appRedis, userId, socket.id);
+
     const becameOnline = await setOnline(appRedis, userId, deviceId);
     if (becameOnline && presenceVisible) {
       for (const m of memberships) {
@@ -161,6 +196,13 @@ io.on('connection', async (socket: AuthSocket) => {
       );
     }
   }
+
+  socket.on('heartbeat', async () => {
+    if (appRedis) {
+      await refreshPresenceSocket(appRedis, userId, deviceId, socket.id);
+      await cleanupStaleSockets(io, appRedis, userId, socket.id);
+    }
+  });
 
   registerMessagingHandlers(io, socket);
 
@@ -180,8 +222,9 @@ io.on('connection', async (socket: AuthSocket) => {
   // Monitor send-buffer to detect slow/stalled consumers.
   registerForBackpressure(socket);
 
-  socket.on('disconnect', async () => {
-    console.log('User disconnected:', userId);
+  socket.on('disconnect', async (reason: string) => {
+    console.log('User disconnected:', userId, reason);
+
     clearHeartbeatTimer(socket.id);
     unregisterDeviceSocket(socket.id);
 
@@ -190,11 +233,33 @@ io.on('connection', async (socket: AuthSocket) => {
       const gatewaySub = getGatewaySubscriber(appRedis);
       gatewaySub.removeDevice(deviceId).catch(() => {});
     }
+
     unregisterForBackpressure(socket);
     clearViolations(socket.id);
 
+    // During a gateway restart we must NOT wipe presence — surviving devices
+    // re-assert via heartbeat and Redis TTLs.
+    if (
+      isShuttingDown ||
+      reason === 'server shutting down' ||
+      reason === 'server namespace disconnect'
+    ) {
+      return;
+    }
+
     if (appRedis) {
-      const fullyOffline = await setOffline(appRedis, userId, deviceId);
+      const deviceHasNoSockets = await unregisterPresenceSocket(
+        appRedis,
+        userId,
+        deviceId,
+        socket.id,
+      );
+      await cleanupStaleSockets(io, appRedis, userId);
+
+      const fullyOffline = deviceHasNoSockets
+        ? await setOffline(appRedis, userId, deviceId)
+        : false;
+
       if (fullyOffline) {
         const user = await db.query.users.findFirst({
           where: eq(users.id, userId),
@@ -251,6 +316,15 @@ async function attachRedisAdapter(): Promise<void> {
     const message = err instanceof Error ? err.message : String(err);
     console.warn(`[socket.io] Redis unavailable (${message}) — running in single-instance mode`);
     await Promise.allSettled([pubClient.quit(), subClient.quit()]);
+  } finally {
+    if (appRedis) {
+      try {
+        await reconcileBoot(io, appRedis);
+        console.log('[presence] Boot reconciliation complete');
+      } catch (err) {
+        console.warn('[presence] Boot reconciliation failed:', err);
+      }
+    }
   }
 }
 
@@ -299,3 +373,5 @@ if (stellarRpcUrl && tokenTransferContractId) {
     '[stellar-listener] STELLAR_RPC_URL or TOKEN_TRANSFER_CONTRACT_ID unset; listener disabled.',
   );
 }
+
+export { httpServer, io };

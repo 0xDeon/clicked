@@ -16,13 +16,13 @@
 
 export interface MessagePayload {
   /** MIME-like content type token, e.g. "text", "image", "file", "system" */
-  contentType?: string;
+  contentType?: string | undefined;
   /** Base64-encoded ciphertext of the message body (optional for file types) */
-  ciphertext?: string;
+  ciphertext?: string | undefined;
   /** Per-recipient E2EE envelopes carrying the encrypted key */
-  envelopes?: Array<{ recipientDeviceId: string; ciphertext: string }>;
+  envelopes?: Array<{ recipientDeviceId: string; ciphertext: string }> | undefined;
   /** UUID referencing the uploaded file (required for file/image/video/audio) */
-  fileId?: string;
+  fileId?: string | undefined;
 }
 
 export type MessagePayloadValidationResult =
