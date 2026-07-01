@@ -7,7 +7,7 @@
  */
 
 import { Router, type Router as RouterType } from 'express';
-import { eq, count, desc, sql } from 'drizzle-orm';
+import { eq, and, ne, count, desc, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/index.js';
 import { devices, signedPreKeys, oneTimePreKeys } from '../db/schema.js';
@@ -52,6 +52,9 @@ devicesRouter.get('/', async (req: AuthRequest, res) => {
       rows.map((device) => ({
         id: device.id,
         identityPublicKey: device.identityPublicKey,
+        deviceName: device.deviceName,
+        platform: device.platform,
+        lastSeenAt: device.lastSeenAt,
         isRevoked: device.isRevoked,
         createdAt: device.createdAt,
         current: device.id === currentDeviceId,
@@ -60,6 +63,114 @@ devicesRouter.get('/', async (req: AuthRequest, res) => {
   } catch {
     res.status(500).json({ error: 'Failed to list devices' });
   }
+});
+
+// ─── DELETE /devices/:id ────────────────────────────────────────────────────
+// Revoke a single device (issue #302). Idempotent — revoking an already
+// revoked device just confirms the current state instead of erroring, since
+// a client racing two revoke clicks shouldn't see a failure.
+
+devicesRouter.delete('/:id', async (req: AuthRequest, res) => {
+  const deviceId = req.params['id'] as string;
+  const callerId = req.auth!.userId;
+
+  const device = await db.query.devices.findFirst({
+    where: eq(devices.id, deviceId),
+  });
+
+  if (!device || device.userId !== callerId) {
+    res.status(404).json({ error: 'Device not found' });
+    return;
+  }
+
+  await db
+    .update(devices)
+    .set({ isRevoked: true, updatedAt: new Date() })
+    .where(eq(devices.id, deviceId));
+
+  res.json({ id: deviceId, isRevoked: true });
+});
+
+// ─── POST /devices/logout-everywhere ───────────────────────────────────────
+// Revokes every device on the account except the one making the request
+// (issue #302). Mirrors a "log out everywhere" security action.
+
+devicesRouter.post('/logout-everywhere', async (req: AuthRequest, res) => {
+  const { userId, deviceId: currentDeviceId } = req.auth!;
+
+  const revoked = await db
+    .update(devices)
+    .set({ isRevoked: true, updatedAt: new Date() })
+    .where(
+      and(
+        eq(devices.userId, userId),
+        ne(devices.id, currentDeviceId),
+        eq(devices.isRevoked, false),
+      ),
+    )
+    .returning({ id: devices.id });
+
+  res.json({ revokedCount: revoked.length });
+});
+
+// ─── GET /devices/:id/bundle ────────────────────────────────────────────────
+// X3DH prekey bundle (issue #305): identity key + signed prekey + one
+// one-time prekey, atomically claimed so it is never handed out twice. Falls
+// back to a signed-prekey-only bundle once one-time prekeys are exhausted —
+// the initiator just runs 3-DH instead of 4-DH in that case.
+
+devicesRouter.get('/:id/bundle', async (req: AuthRequest, res) => {
+  const deviceId = req.params['id'] as string;
+
+  const device = await db.query.devices.findFirst({
+    where: eq(devices.id, deviceId),
+  });
+
+  if (!device || device.isRevoked) {
+    res.status(404).json({ error: 'Device not found or has been revoked' });
+    return;
+  }
+
+  const signedPreKey = await db.query.signedPreKeys.findFirst({
+    where: eq(signedPreKeys.deviceId, deviceId),
+  });
+
+  if (!signedPreKey) {
+    res.status(409).json({ error: 'Device has not uploaded a signed prekey yet' });
+    return;
+  }
+
+  const claimedOneTimePreKey = await db.transaction(async (tx) => {
+    const [candidate] = await tx
+      .select({
+        id: oneTimePreKeys.id,
+        keyId: oneTimePreKeys.keyId,
+        publicKey: oneTimePreKeys.publicKey,
+      })
+      .from(oneTimePreKeys)
+      .where(eq(oneTimePreKeys.deviceId, deviceId))
+      .orderBy(oneTimePreKeys.createdAt)
+      .limit(1)
+      .for('update', { skipLocked: true });
+
+    if (!candidate) return null;
+
+    await tx.delete(oneTimePreKeys).where(eq(oneTimePreKeys.id, candidate.id));
+
+    return { keyId: candidate.keyId, publicKey: candidate.publicKey };
+  });
+
+  res.json({
+    deviceId: device.id,
+    identityPublicKey: device.identityPublicKey,
+    registrationId: device.registrationId,
+    signedPreKey: {
+      keyId: signedPreKey.keyId,
+      publicKey: signedPreKey.publicKey,
+      signature: signedPreKey.signature,
+    },
+    oneTimePreKey: claimedOneTimePreKey,
+  });
 });
 
 // ─── POST /devices/:id/prekeys ─────────────────────────────────────────────────

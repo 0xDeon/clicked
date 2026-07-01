@@ -20,6 +20,7 @@ export const DeviceSchema = z.object({
   registrationId: z.string().optional(),
 });
 
+
 export const VerifySchema = z
   .object({
     walletAddress: z.string().min(1, 'walletAddress is required'),
@@ -32,6 +33,20 @@ export const VerifySchema = z
     identityPublicKey: IdentityPublicKeySchema,
   })
   .merge(DeviceRegistrationSchema);
+export const VerifySchema = z.object({
+  walletAddress: z.string().min(1, 'walletAddress is required'),
+  signature: z.string().min(1, 'signature is required'),
+  nonce: z.string().min(1, 'nonce is required'),
+  /**
+   * Base64-encoded Ed25519 SPKI DER identity public key (44 bytes).
+   * Validated for correct base64 and exact byte length before any crypto operation.
+   */
+  identityPublicKey: IdentityPublicKeySchema,
+  deviceName: z.string().min(1).max(100).optional(),
+  platform: z.enum(['web', 'ios', 'android']).optional(),
+  registrationId: z.number().int().nonnegative().optional(),
+});
+
 
 export type ChallengeBody = z.infer<typeof ChallengeSchema>;
 export type DeviceBody = z.infer<typeof DeviceSchema>;

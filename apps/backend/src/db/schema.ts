@@ -136,12 +136,14 @@ export const messageEnvelopes = pgTable(
   ],
 );
 
-// ─── Devices & prekeys (issues #158, #159, #162) ─────────────────────────────
+// ─── Devices & prekeys (issues #158, #159, #162, #305, #302) ─────────────────
 //
 // Each user may register multiple devices. Each device has an Ed25519 identity
 // key pair; the public key is stored here for fingerprint derivation and prekey
 // signature validation.  `isRevoked` lets the server reject stale devices
 // without deleting the row (preserving audit history).
+
+export const devicePlatformEnum = pgEnum('device_platform', ['web', 'ios', 'android']);
 
 export const devices = pgTable(
   'devices',
@@ -152,6 +154,11 @@ export const devices = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     // Base64-encoded Ed25519 public key for this device.
     identityPublicKey: text('identity_public_key').notNull(),
+    // X3DH/Signal registration id published in the prekey bundle (#305).
+    registrationId: integer('registration_id'),
+    deviceName: text('device_name'),
+    platform: devicePlatformEnum('platform'),
+    lastSeenAt: timestamp('last_seen_at'),
     isRevoked: boolean('is_revoked').notNull().default(false),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
@@ -224,8 +231,6 @@ export const tokenTransfers = pgTable('token_transfers', {
 // auditable. `(userId, deviceId)` is unique so a client re-registering the same
 // device upserts instead of duplicating, and the partial index keeps lookups of
 // a user's *active* devices fast.
-
-export const devicePlatformEnum = pgEnum('device_platform', ['web', 'ios', 'android']);
 
 export const userDevices = pgTable(
   'user_devices',

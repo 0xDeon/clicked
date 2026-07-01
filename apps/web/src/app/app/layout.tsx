@@ -108,6 +108,34 @@ const ProposalsIcon = () => (
   </svg>
 );
 
+const DevicesIcon = () => (
+  <svg
+    className="w-5 h-5 transition-transform group-hover:scale-110"
+    viewBox="0 0 24 24"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <rect
+      x="4"
+      y="2"
+      width="10"
+      height="16"
+      rx="2"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M9 16H9.01M16 8H19C19.5523 8 20 8.44772 20 9V20C20 20.5523 19.5523 21 19 21H16C15.4477 21 15 20.5523 15 20V9C15 8.44772 15.4477 8 16 8Z"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 const WalletIcon = () => (
   <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path
@@ -194,6 +222,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     { href: '/app/messages', label: 'Messages', icon: <MessagesIcon /> },
     { href: '/app/treasury', label: 'Treasury', icon: <TreasuryIcon /> },
     { href: '/app/proposals', label: 'Proposals', icon: <ProposalsIcon /> },
+    { href: '/app/devices', label: 'Devices', icon: <DevicesIcon /> },
   ];
 
   const displayAddress = publicKey ? `${publicKey.slice(0, 4)}...${publicKey.slice(-4)}` : '';
