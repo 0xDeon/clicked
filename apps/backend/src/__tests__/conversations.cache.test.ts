@@ -198,10 +198,14 @@ describe('GET /conversations/:id/search', () => {
     vi.clearAllMocks();
   });
 
-  it('returns 501 for E2EE environments', async () => {
+  it('returns 410 Gone for E2EE environments', async () => {
     const res = await request(makeApp()).get('/conversations/conv-1/search?q=hello');
 
-    expect(res.status).toBe(501);
+    expect(res.status).toBe(410);
+    expect(res.body).toEqual({
+      error: 'Server-side search removed; search is now client-side over decrypted messages',
+      docs: 'https://github.com/DripWave/clicked/blob/main/docs/message-encryption-migration.md'
+    });
   });
 });
 

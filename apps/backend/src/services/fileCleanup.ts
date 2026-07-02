@@ -9,7 +9,7 @@
  * delete, so a crash between steps is safe to retry.
  */
 import { S3Client, DeleteObjectCommand } from '@aws-sdk/client-s3';
-import { isNotNull, isNull, sql } from 'drizzle-orm';
+import { isNotNull, isNull, sql, and, eq, lt } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { files } from '../db/schema.js';
 import { reenableExpiredBackoffs } from './pushNotification.js';
@@ -65,6 +65,23 @@ export async function runHardDeletePass(): Promise<void> {
       console.log(`[file-cleanup] hard-deleted s3://${BUCKET}/${file.storageKey}`);
     } catch (err) {
       console.error(`[file-cleanup] failed to delete ${file.storageKey}:`, err);
+    }
+  }
+
+  // Garbage-collect unconfirmed pending files older than 24 hours
+  const stalePendingDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const pendingCandidates = await db.query.files.findMany({
+    where: (f) => and(eq(f.status, 'pending'), lt(f.createdAt, stalePendingDate)),
+    columns: { id: true, storageKey: true },
+  });
+
+  for (const file of pendingCandidates) {
+    try {
+      await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: file.storageKey }));
+      await db.delete(files).where(eq(files.id, file.id));
+      console.log(`[file-cleanup] deleted pending file s3://${BUCKET}/${file.storageKey}`);
+    } catch (err) {
+      console.error(`[file-cleanup] failed to delete pending file ${file.storageKey}:`, err);
     }
   }
 }

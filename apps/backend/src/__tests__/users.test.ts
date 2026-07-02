@@ -226,7 +226,9 @@ describe('GET /users/search', () => {
       { id: 'u1', username: 'nowallet', avatarUrl: null, wallets: [] },
     ] as any); // eslint-disable-line
 
-    const res = await request(app).get('/users/search?q=no').set('Authorization', AUTH_HEADER);
+    const res = await request(app)
+      .get('/users/search?q=nowallet')
+      .set('Authorization', AUTH_HEADER);
 
     expect(res.status).toBe(200);
     expect(res.body[0].primaryWalletAddress).toBeNull();

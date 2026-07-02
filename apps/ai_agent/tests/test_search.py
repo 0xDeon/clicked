@@ -1,9 +1,9 @@
 """Unit tests for GET /search (issue #149)."""
 
-import pytest
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
+
 from main import app
 
 client = TestClient(app)
@@ -62,8 +62,10 @@ def test_returns_results_with_correct_shape():
     }
     mock_wv = _make_weaviate_client(exists=True, objects=[obj])
 
-    with patch("main.weaviate.connect_to_local", return_value=mock_wv), \
-         patch("main._openai_client", return_value=_make_openai_embedding()):
+    with (
+        patch("main.weaviate.connect_to_local", return_value=mock_wv),
+        patch("main._openai_client", return_value=_make_openai_embedding()),
+    ):
         response = client.get("/search", params=_BASE_PARAMS)
 
     assert response.status_code == 200
@@ -87,8 +89,10 @@ def test_filters_by_conversation_id():
     }
     mock_wv = _make_weaviate_client(exists=True, objects=[obj])
 
-    with patch("main.weaviate.connect_to_local", return_value=mock_wv), \
-         patch("main._openai_client", return_value=_make_openai_embedding()):
+    with (
+        patch("main.weaviate.connect_to_local", return_value=mock_wv),
+        patch("main._openai_client", return_value=_make_openai_embedding()),
+    ):
         response = client.get("/search", params={"q": "transfer", "conversationId": "conv-xyz"})
 
     assert response.status_code == 200
@@ -103,8 +107,10 @@ def test_close_called_on_success():
     mock_wv = _make_weaviate_client(exists=True, objects=[])
     mock_wv.collections.get.return_value.query.near_vector.return_value.objects = []
 
-    with patch("main.weaviate.connect_to_local", return_value=mock_wv), \
-         patch("main._openai_client", return_value=_make_openai_embedding()):
+    with (
+        patch("main.weaviate.connect_to_local", return_value=mock_wv),
+        patch("main._openai_client", return_value=_make_openai_embedding()),
+    ):
         response = client.get("/search", params=_BASE_PARAMS)
 
     assert response.status_code == 200
