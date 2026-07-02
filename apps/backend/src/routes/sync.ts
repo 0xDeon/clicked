@@ -80,6 +80,10 @@ syncRouter.get('/', async (req: AuthRequest, res) => {
       createdAt: messageEnvelopes.createdAt,
       sequenceNumber: messages.sequenceNumber,
       conversationId: messages.conversationId,
+      senderId: messages.senderId,
+      senderDeviceId: messages.senderDeviceId,
+      contentType: messages.contentType,
+      messageCreatedAt: messages.createdAt,
     })
     .from(messageEnvelopes)
     .innerJoin(messages, eq(messageEnvelopes.messageId, messages.id))
@@ -118,8 +122,12 @@ syncRouter.get('/', async (req: AuthRequest, res) => {
       conversationId: r.conversationId,
       ciphertext: r.ciphertext,
       sequenceNumber: r.sequenceNumber,
+      senderId: r.senderId,
+      senderDeviceId: r.senderDeviceId,
+      contentType: r.contentType,
       deliveredAt: r.deliveredAt,
       createdAt: r.createdAt,
+      messageCreatedAt: r.messageCreatedAt,
     })),
     nextCursor,
     hasMore,
