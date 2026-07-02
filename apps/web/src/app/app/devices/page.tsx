@@ -176,8 +176,8 @@ export default function DevicesPage() {
       <div className="mb-6 rounded-lg border border-[var(--border)] bg-[var(--card)]/40 p-4">
         <h3 className="text-sm font-semibold">Link a new device</h3>
         <p className="mt-1 text-sm text-[var(--foreground)]/45">
-          Open Clicked on the new device and connect the same wallet. It registers automatically
-          and shows up in the list below the moment it signs in.
+          Open Clicked on the new device and connect the same wallet. It registers automatically and
+          shows up in the list below the moment it signs in.
         </p>
       </div>
 
@@ -240,10 +240,10 @@ export default function DevicesPage() {
         title="Revoke this device?"
       >
         <p className="text-sm text-[var(--foreground)]/60">
-          This device will be signed out immediately. Because your identity keys change for
-          anyone who messages you on this account, contacts may see a key-change notice the next
-          time they message you — that&apos;s expected and confirms the old device can no longer
-          read new messages.
+          This device will be signed out immediately. Because your identity keys change for anyone
+          who messages you on this account, contacts may see a key-change notice the next time they
+          message you — that&apos;s expected and confirms the old device can no longer read new
+          messages.
         </p>
         <div className="mt-6 flex justify-end gap-3">
           <button

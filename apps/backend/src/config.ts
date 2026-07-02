@@ -1,5 +1,9 @@
 import { z } from 'zod';
 
+const booleanEnv = z
+  .enum(['true', 'false', '1', '0'])
+  .transform((value) => value === 'true' || value === '1');
+
 /**
  * Startup environment schema. Every variable here is required for the
  * backend to boot; `loadEnv` validates `process.env` against it and exits
@@ -11,6 +15,24 @@ export const EnvSchema = z.object({
   JWT_SECRET: z.string().min(1, 'JWT_SECRET is required'),
   PORT: z.coerce.number().int('PORT must be an integer').positive('PORT must be positive'),
   TOKEN_TRANSFER_CONTRACT_ID: z.string().min(1, 'TOKEN_TRANSFER_CONTRACT_ID is required'),
+  S3_ENDPOINT: z.string().optional(),
+  S3_REGION: z.string().optional(),
+  S3_ACCESS_KEY_ID: z.string().optional(),
+  S3_SECRET_ACCESS_KEY: z.string().optional(),
+  S3_BUCKET: z.string().optional(),
+  S3_FORCE_PATH_STYLE: z
+    .preprocess((val) => {
+      if (val === 'true' || val === true) return true;
+      if (val === 'false' || val === false) return false;
+      return undefined;
+    }, z.boolean())
+    .optional(),
+  OBJECT_STORE_ENDPOINT: z.string().min(1, 'OBJECT_STORE_ENDPOINT is required'),
+  OBJECT_STORE_BUCKET: z.string().min(1, 'OBJECT_STORE_BUCKET is required'),
+  OBJECT_STORE_ACCESS_KEY: z.string().min(1, 'OBJECT_STORE_ACCESS_KEY is required'),
+  OBJECT_STORE_SECRET_KEY: z.string().min(1, 'OBJECT_STORE_SECRET_KEY is required'),
+  OBJECT_STORE_REGION: z.string().min(1, 'OBJECT_STORE_REGION is required'),
+  OBJECT_STORE_FORCE_PATH_STYLE: booleanEnv,
 });
 
 export type Env = z.infer<typeof EnvSchema>;

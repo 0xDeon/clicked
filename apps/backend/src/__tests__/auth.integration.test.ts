@@ -37,6 +37,20 @@ vi.mock('@stellar/stellar-sdk', () => ({
   },
 }));
 
+vi.mock('../services/pushNotification.js', () => ({
+  dispatchOfflinePush: vi.fn().mockResolvedValue(undefined),
+  reenableExpiredBackoffs: vi.fn().mockResolvedValue(undefined),
+  FILE_CONTENT_TYPES: new Set<string>(),
+}));
+
+vi.mock('../services/deliveryPipeline.js', () => ({
+  deliverMessage: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../services/deviceDelivery.js', () => ({
+  publishToDevice: vi.fn().mockResolvedValue(undefined),
+}));
+
 // ── Import app after mocks are registered ─────────────────────────────────
 
 const { app } = await import('../app.js');

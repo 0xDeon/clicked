@@ -7,6 +7,12 @@ const validEnv = {
   JWT_SECRET: 'test-secret',
   PORT: '3001',
   TOKEN_TRANSFER_CONTRACT_ID: 'CONTRACT123',
+  OBJECT_STORE_ENDPOINT: 'http://localhost:9000',
+  OBJECT_STORE_BUCKET: 'clicked',
+  OBJECT_STORE_ACCESS_KEY: 'clicked',
+  OBJECT_STORE_SECRET_KEY: 'clickedsecret',
+  OBJECT_STORE_REGION: 'us-east-1',
+  OBJECT_STORE_FORCE_PATH_STYLE: 'true',
 };
 
 describe('loadEnv', () => {
@@ -26,6 +32,12 @@ describe('loadEnv', () => {
       JWT_SECRET: 'test-secret',
       PORT: 3001,
       TOKEN_TRANSFER_CONTRACT_ID: 'CONTRACT123',
+      OBJECT_STORE_ENDPOINT: 'http://localhost:9000',
+      OBJECT_STORE_BUCKET: 'clicked',
+      OBJECT_STORE_ACCESS_KEY: 'clicked',
+      OBJECT_STORE_SECRET_KEY: 'clickedsecret',
+      OBJECT_STORE_REGION: 'us-east-1',
+      OBJECT_STORE_FORCE_PATH_STYLE: true,
     });
     expect(errorSpy).not.toHaveBeenCalled();
     expect(logSpy).not.toHaveBeenCalled();
@@ -77,5 +89,16 @@ describe('loadEnv', () => {
   it('coerces a numeric PORT string to a number', () => {
     const parsed = EnvSchema.parse({ ...validEnv, PORT: '8080' });
     expect(parsed.PORT).toBe(8080);
+  });
+
+  it('coerces OBJECT_STORE_FORCE_PATH_STYLE from string to boolean', () => {
+    expect(
+      EnvSchema.parse({ ...validEnv, OBJECT_STORE_FORCE_PATH_STYLE: 'false' })
+        .OBJECT_STORE_FORCE_PATH_STYLE,
+    ).toBe(false);
+    expect(
+      EnvSchema.parse({ ...validEnv, OBJECT_STORE_FORCE_PATH_STYLE: 'true' })
+        .OBJECT_STORE_FORCE_PATH_STYLE,
+    ).toBe(true);
   });
 });

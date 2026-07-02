@@ -6,6 +6,9 @@ import { useParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/useAuth';
 import { useSocket } from '@/hooks/useSocket';
 import { emitSocketEnvelope, parseJwtClaims, setSyncCursor } from '@/lib/realtime';
+import { useInboundPipeline } from '@/hooks/useInboundPipeline';
+import { InboundMessageRow } from '@/components/messaging/InboundMessageRow';
+import { parseJwtPayload } from '@/lib/jwt';
 
 interface Sender {
   id: string;
@@ -241,9 +244,16 @@ export default function ConversationPage() {
     <div className="flex flex-col h-screen bg-[var(--background)]">
       <header className="flex-shrink-0 border-b border-[var(--border)] px-4 py-3 bg-[var(--card)]">
         <h1 className="text-sm font-semibold text-[var(--foreground)]">Conversation</h1>
+        {syncing && (
+          <p className="text-xs text-[var(--muted)] mt-0.5">Syncing encrypted messages…</p>
+        )}
       </header>
 
       <div ref={containerRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
+        {messages.length === 0 && !syncing && (
+          <p className="text-center text-sm text-[var(--muted)] py-8">No messages yet.</p>
+        )}
+
         {grouped.map((group) => (
           <div key={group.label}>
             <div className="flex items-center gap-3 my-4">

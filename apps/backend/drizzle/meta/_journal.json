@@ -68,6 +68,8 @@
     {
       "idx": 9,
       "version": "7",
+      "when": 1785000000000,
+      "tag": "0009_push_enabled",
       "when": 1783500000000,
       "tag": "0009_message_edits",
       "breakpoints": true

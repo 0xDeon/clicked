@@ -5,7 +5,7 @@ import { db } from '../db/index.js';
 import { users, wallets, devices, conversationMembers } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { redis } from '../lib/redis.js';
-import { isOnline } from '../services/presence.js';
+import { isOnline, deriveDevicePresence } from '../services/presence.js';
 import { getSocketServer } from '../lib/socket.js';
 
 export const usersRouter: RouterType = Router();
@@ -163,12 +163,22 @@ usersRouter.get('/:id/presence', async (req: AuthRequest, res) => {
       return;
     }
 
-    if (!redis) {
-      res.json({ online: false });
-      return;
+    // Check Redis for active WS connections first.
+    if (redis) {
+      const online = await isOnline(redis, id);
+      if (online) {
+        res.json({ online: true });
+        return;
+      }
     }
-    const online = await isOnline(redis, id);
-    res.json({ online });
+
+    // Fall back to device-based presence from user_devices.lastSeenAt.
+    try {
+      const { online, lastSeen } = await deriveDevicePresence(id);
+      res.json({ online, ...(lastSeen ? { lastSeen } : {}) });
+    } catch {
+      res.json({ online: false });
+    }
   } catch {
     res.status(404).json({ error: 'User not found' });
   }

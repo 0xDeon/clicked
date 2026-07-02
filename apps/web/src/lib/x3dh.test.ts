@@ -33,7 +33,10 @@ function bundleFrom(
       signature: toBase64(responder.signedPreKey.signature),
     },
     oneTimePreKey: includeOtp
-      ? { keyId: responder.oneTimePreKey.keyId, publicKey: toBase64(responder.oneTimePreKey.publicKey) }
+      ? {
+          keyId: responder.oneTimePreKey.keyId,
+          publicKey: toBase64(responder.oneTimePreKey.publicKey),
+        }
       : null,
   };
 }

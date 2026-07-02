@@ -241,8 +241,9 @@ export function ConversationListSidebar() {
       handleOffline(data.userId);
     }
 
-    function onPresenceUpdate(data: { userId: string; online: boolean }) {
-      if (data.online) {
+    function onPresenceUpdate(data: { userId: string; online?: boolean; status?: 'online' | 'offline'; lastSeen?: number }) {
+      const isOnline = data.status ? data.status === 'online' : !!data.online;
+      if (isOnline) {
         handleOnline(data.userId);
       } else {
         handleOffline(data.userId);

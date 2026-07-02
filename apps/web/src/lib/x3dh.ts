@@ -130,10 +130,7 @@ function concatBytes(...chunks: Uint8Array[]): Uint8Array {
  * Initiator side: establish a session with `bundle` fetched from
  * GET /devices/:id/bundle. Verifies the signed prekey before using it.
  */
-export function initiateSession(
-  bundle: PreKeyBundle,
-  myIdentity: IdentityKeyPair,
-): X3dhSession {
+export function initiateSession(bundle: PreKeyBundle, myIdentity: IdentityKeyPair): X3dhSession {
   const theirIdentityRawEd = spkiToRawEd25519PublicKey(fromBase64(bundle.identityPublicKey));
   const theirSpkPub = fromBase64(bundle.signedPreKey.publicKey);
   const theirSpkSig = fromBase64(bundle.signedPreKey.signature);

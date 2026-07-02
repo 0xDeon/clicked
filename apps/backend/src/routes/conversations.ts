@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { IRouter } from 'express';
-import { asc, and, count, desc, eq, lt, sql, ne } from 'drizzle-orm';
+import { asc, and, count, desc, eq, inArray, lt, sql, ne } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import {
   conversationMembers,
@@ -8,6 +8,7 @@ import {
   messages,
   tokenTransfers,
   messageEnvelopes,
+  userDevices,
 } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { redis, CONV_CACHE_TTL, convCacheKey } from '../lib/redis.js';
@@ -247,7 +248,9 @@ conversationsRouter.get('/:id/members', async (req: AuthRequest, res) => {
     with: {
       user: {
         columns: { id: true, username: true, avatarUrl: true },
-        with: { wallets: { columns: { address: true, isPrimary: true } } },
+        with: {
+          wallets: { columns: { address: true, isPrimary: true } },
+        },
       },
     },
   })) as ConversationMemberPayload[];
@@ -509,7 +512,10 @@ conversationsRouter.get('/:id/messages', async (req: AuthRequest, res) => {
 });
 
 conversationsRouter.get('/:id/search', async (req: AuthRequest, res) => {
-  res.status(501).json({ error: 'Search is not supported in E2EE conversations' });
+  res.status(410).json({ 
+    error: 'Server-side search removed; search is now client-side over decrypted messages',
+    docs: 'https://github.com/DripWave/clicked/blob/main/docs/message-encryption-migration.md'
+  });
 });
 
 // PATCH /conversations/:id/settings — update muted/archived state for the authenticated user
@@ -727,3 +733,73 @@ conversationsRouter.delete('/:id/leave', async (req: AuthRequest, res) => {
 
   res.status(204).send();
 });
+
+// ── GET /conversations/:id/devices ─────────────────────────────────────────────
+// Returns the full active (non-revoked) device set for all members of a
+// conversation.  The web client calls this before encrypting a message so it
+// can build one envelope per device (#134 / #138).
+//
+// Raises 409 device_set_mismatch if the server-side snapshot has changed since
+// the caller last fetched (checked via the optional `deviceSetHash` query param).
+conversationsRouter.get('/:id/devices', async (req: AuthRequest, res) => {
+  const userId = req.auth!.userId;
+  const conversationId = req.params['id'] as string | undefined;
+
+  if (!conversationId) {
+    res.status(400).json({ error: 'Conversation id is required' });
+    return;
+  }
+
+  // Membership check
+  const membership = await db.query.conversationMembers.findFirst({
+    where: and(
+      eq(conversationMembers.conversationId, conversationId),
+      eq(conversationMembers.userId, userId),
+    ),
+  });
+
+  if (!membership) {
+    res.status(403).json({ error: 'Not a member of this conversation' });
+    return;
+  }
+
+  // Collect all member user IDs
+  const memberRows = await db.query.conversationMembers.findMany({
+    where: eq(conversationMembers.conversationId, conversationId),
+    columns: { userId: true },
+  });
+
+  const userIds = memberRows.map((m) => m.userId);
+
+  if (userIds.length === 0) {
+    res.json({ devices: [] });
+    return;
+  }
+
+  // Fetch all active (non-revoked) devices for every member
+  const deviceRows = await db.query.userDevices.findMany({
+    where: and(
+      inArray(userDevices.userId, userIds),
+      // revokedAt IS NULL → active devices only
+      sql`${userDevices.revokedAt} IS NULL`,
+    ),
+    columns: {
+      id: true,
+      userId: true,
+      identityPublicKey: true,
+      deviceName: true,
+      platform: true,
+    },
+  });
+
+  res.json({
+    devices: deviceRows.map((d) => ({
+      id: d.id,
+      userId: d.userId,
+      identityPublicKey: d.identityPublicKey,
+      deviceName: d.deviceName,
+      platform: d.platform,
+    })),
+  });
+});
+

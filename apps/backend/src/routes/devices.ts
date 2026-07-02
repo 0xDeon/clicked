@@ -13,6 +13,9 @@ import { db } from '../db/index.js';
 import { devices, signedPreKeys, oneTimePreKeys } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
+import { userDevices, conversationMembers, messages } from '../db/schema.js';
+import { getSocketServer } from '../lib/socket.js';
+import { invalidateConversationCaches } from '../lib/conversationCache.js';
 import { SignedPreKeyEntrySchema, PreKeyEntrySchema, verifyEd25519Signature } from '../lib/keys.js';
 
 export const devicesRouter: RouterType = Router();
@@ -26,6 +29,14 @@ devicesRouter.use(requireAuth);
 const UploadPreKeysSchema = z.object({
   signedPreKey: SignedPreKeyEntrySchema,
   oneTimePreKeys: z.array(PreKeyEntrySchema).min(1, 'At least one one-time prekey is required'),
+});
+
+const RegisterDeviceSchema = z.object({
+  deviceId: z.string().min(1, 'deviceId is required'),
+  deviceName: z.string().min(1, 'deviceName is required'),
+  platform: z.enum(['web', 'ios', 'android']),
+  identityPublicKey: z.string().min(1, 'identityPublicKey is required'),
+  registrationId: z.number().int().nonnegative().optional(),
 });
 
 /** Maximum number of stored one-time prekeys per device. */
@@ -273,3 +284,128 @@ devicesRouter.post('/:id/prekeys', validate(UploadPreKeysSchema), async (req: Au
     capped: trimmedBatch.length < otpBatch.length,
   });
 });
+
+// ─── POST /devices — register a new device for an existing user --------------
+
+devicesRouter.post('/', validate(RegisterDeviceSchema), async (req: AuthRequest, res) => {
+  const body = req.body as z.infer<typeof RegisterDeviceSchema>;
+  const userId = req.auth!.userId;
+
+  // Validate identityPublicKey is base64 and 32 bytes when decoded (X25519)
+  try {
+    const key = Buffer.from(body.identityPublicKey, 'base64');
+    if (key.length !== 32) {
+      res.status(400).json({ error: 'identityPublicKey must be 32 bytes (base64-encoded)' });
+      return;
+    }
+  } catch {
+    res.status(400).json({ error: 'identityPublicKey must be valid base64' });
+    return;
+  }
+
+  // Reject duplicate (userId, deviceId)
+  const existing = await db.query.userDevices.findFirst({
+    where: eq(userDevices.deviceId, body.deviceId),
+  });
+
+  if (existing && existing.userId === userId) {
+    res.status(409).json({ error: 'Device already registered for this user' });
+    return;
+  }
+
+  try {
+    const [row] = await db
+      .insert(userDevices)
+      .values({
+        userId,
+        deviceId: body.deviceId,
+        deviceName: body.deviceName,
+        platform: body.platform,
+        identityPublicKey: body.identityPublicKey,
+        registrationId: body.registrationId ?? undefined,
+      })
+      .returning({
+        id: userDevices.id,
+        deviceId: userDevices.deviceId,
+        createdAt: userDevices.createdAt,
+      });
+
+    // Emit system event to each conversation the user belongs to
+    void emitDeviceChangeEvent(userId, 'device_added');
+
+    res.status(201).json({ id: row.id, deviceId: row.deviceId, createdAt: row.createdAt });
+  } catch (err) {
+    console.error('Failed to register device:', err);
+    res.status(500).json({ error: 'Failed to register device' });
+  }
+});
+
+// ─── DELETE /devices/:id — revoke a device for the authenticated user --------
+devicesRouter.delete('/:id', async (req: AuthRequest, res) => {
+  const userId = req.auth!.userId;
+  const deviceId = req.params['id'] as string;
+
+  try {
+    const result = await db
+      .update(userDevices)
+      .set({ revokedAt: new Date() })
+      .where(eq(userDevices.deviceId, deviceId))
+      .returning();
+
+    if (!result || result.length === 0) {
+      res.status(404).json({ error: 'Device not found' });
+      return;
+    }
+
+    // Only emit if the device belonged to the user (safety: check last row)
+    if (result[0].userId !== userId) {
+      res.status(403).json({ error: 'Not allowed to revoke this device' });
+      return;
+    }
+
+    // Emit system event to each conversation the user belongs to
+    void emitDeviceChangeEvent(userId, 'device_revoked');
+
+    res.status(200).json({ revoked: true });
+  } catch (err) {
+    console.error('Failed to revoke device:', err);
+    res.status(500).json({ error: 'Failed to revoke device' });
+  }
+});
+
+async function emitDeviceChangeEvent(userId: string, change: 'device_added' | 'device_revoked') {
+  try {
+    const memberships = await db.query.conversationMembers.findMany({
+      where: eq(conversationMembers.userId, userId),
+      columns: { conversationId: true },
+    });
+
+    if (memberships.length === 0) return;
+
+    for (const m of memberships) {
+      const [msg] = await db
+        .insert(messages)
+        .values({
+          conversationId: m.conversationId,
+          senderId: userId,
+          contentType: 'system',
+          ciphertext: JSON.stringify({ userId, change }),
+        })
+        .returning();
+
+      const io = getSocketServer();
+      if (io) {
+        io.to(m.conversationId).emit('new_message', msg);
+      }
+
+      // invalidate caches for conversation members
+      const members = await db.query.conversationMembers.findMany({
+        where: eq(conversationMembers.conversationId, m.conversationId),
+        columns: { userId: true },
+      });
+      await invalidateConversationCaches(members.map((mm) => mm.userId));
+    }
+  } catch (err) {
+    console.error('emitDeviceChangeEvent error:', err);
+  }
+}

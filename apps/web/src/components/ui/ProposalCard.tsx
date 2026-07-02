@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect } from 'react';
 
-export type ProposalStatus = "pending" | "approved" | "executed" | "rejected" | "expired";
+export type ProposalStatus = 'pending' | 'approved' | 'executed' | 'rejected' | 'expired';
 
 interface ProposalCardProps {
   proposal: {
@@ -22,17 +22,17 @@ export const ProposalCard: React.FC<ProposalCardProps> = ({
   onFinalize,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(
-    proposal.status === "executed" || proposal.status === "rejected"
+    proposal.status === 'executed' || proposal.status === 'rejected',
   );
-  const [timeLeft, setTimeLeft] = useState("");
+  const [timeLeft, setTimeLeft] = useState('');
 
   // Calculate countdown: 1 ledger ≈ 5s. Updates every minute.
   useEffect(() => {
     const calculateTime = () => {
-      if (proposal.status !== "pending") return;
+      if (proposal.status !== 'pending') return;
       const ledgersLeft = proposal.expiryLedger - currentLedger;
       if (ledgersLeft <= 0) {
-        setTimeLeft("Expired");
+        setTimeLeft('Expired');
         return;
       }
       const totalSeconds = ledgersLeft * 5;
@@ -47,11 +47,11 @@ export const ProposalCard: React.FC<ProposalCardProps> = ({
 
   // Map explicitly defined color configurations
   const badgeColors: Record<ProposalStatus, string> = {
-    pending: "bg-yellow-500 text-black",
-    approved: "bg-blue-500 text-white",
-    executed: "bg-green-500 text-white",
-    rejected: "bg-red-500 text-white",
-    expired: "bg-gray-500 text-white",
+    pending: 'bg-yellow-500 text-black',
+    approved: 'bg-blue-500 text-white',
+    executed: 'bg-green-500 text-white',
+    rejected: 'bg-red-500 text-white',
+    expired: 'bg-gray-500 text-white',
   };
 
   return (
@@ -64,27 +64,33 @@ export const ProposalCard: React.FC<ProposalCardProps> = ({
       </div>
 
       {/* Expiry Countdown for pending proposals */}
-      {proposal.status === "pending" && <p className="text-sm text-gray-500 mt-1">{timeLeft}</p>}
+      {proposal.status === 'pending' && <p className="text-sm text-gray-500 mt-1">{timeLeft}</p>}
 
       {/* Collapsible content section toggle wrapper */}
-      {(proposal.status === "executed" || proposal.status === "rejected") && (
+      {(proposal.status === 'executed' || proposal.status === 'rejected') && (
         <button className="text-xs underline mt-2" onClick={() => setIsCollapsed(!isCollapsed)}>
-          {isCollapsed ? "Show Past Details" : "Hide Details"}
+          {isCollapsed ? 'Show Past Details' : 'Hide Details'}
         </button>
       )}
 
       {!isCollapsed && (
         <div className="mt-4 flex gap-2">
           {/* Execute button only visible to verified members when status is approved */}
-          {proposal.status === "approved" && isMember && (
-            <button className="btn bg-blue-600 text-white px-4 py-2" onClick={() => onExecute(proposal.id)}>
+          {proposal.status === 'approved' && isMember && (
+            <button
+              className="btn bg-blue-600 text-white px-4 py-2"
+              onClick={() => onExecute(proposal.id)}
+            >
               Execute Withdrawal
             </button>
           )}
 
           {/* Expired proposals replace approve/reject with a Finalize button */}
-          {proposal.status === "expired" && (
-            <button className="btn bg-gray-700 text-white px-4 py-2" onClick={() => onFinalize(proposal.id)}>
+          {proposal.status === 'expired' && (
+            <button
+              className="btn bg-gray-700 text-white px-4 py-2"
+              onClick={() => onFinalize(proposal.id)}
+            >
               Finalize
             </button>
           )}
