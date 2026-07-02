@@ -1,6 +1,5 @@
 """Shared pytest fixtures for the ai_agent test suite."""
 
-import os
 import pytest
 from fastapi.testclient import TestClient
 
@@ -15,6 +14,7 @@ def set_openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
 def client() -> TestClient:
     """FastAPI TestClient for the main app."""
     from main import app
+
     return TestClient(app)
 
 

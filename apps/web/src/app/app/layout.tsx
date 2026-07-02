@@ -1,10 +1,10 @@
 'use client';
 
-import React, { useEffect, useState } from "react";
-import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { useWallet } from "@/contexts/WalletContext";
-import { PushPermissionPrompt } from "@/components/PushPermissionPrompt";
+import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { usePathname, useRouter } from 'next/navigation';
+import { useWallet } from '@/contexts/WalletContext';
+import { PushPermissionPrompt } from '@/components/PushPermissionPrompt';
 
 // Custom premium SVG Icons to avoid dependency weight
 const LogoIcon = () => (
@@ -108,6 +108,34 @@ const ProposalsIcon = () => (
   </svg>
 );
 
+const DevicesIcon = () => (
+  <svg
+    className="w-5 h-5 transition-transform group-hover:scale-110"
+    viewBox="0 0 24 24"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <rect
+      x="4"
+      y="2"
+      width="10"
+      height="16"
+      rx="2"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M9 16H9.01M16 8H19C19.5523 8 20 8.44772 20 9V20C20 20.5523 19.5523 21 19 21H16C15.4477 21 15 20.5523 15 20V9C15 8.44772 15.4477 8 16 8Z"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 const WalletIcon = () => (
   <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path
@@ -159,20 +187,20 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   // Listen for sw:sync messages from the service worker (notification click).
   // Navigate to the conversation so the page re-fetches fresh data.
   useEffect(() => {
-    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
 
     function onSwMessage(event: MessageEvent<{ type: string; conversationId?: string | null }>) {
-      if (event.data?.type !== "sw:sync") return;
+      if (event.data?.type !== 'sw:sync') return;
       const { conversationId } = event.data;
       if (conversationId) {
         router.push(`/app/conversations/${conversationId}`);
       } else {
-        router.push("/app/messages");
+        router.push('/app/messages');
       }
     }
 
-    navigator.serviceWorker.addEventListener("message", onSwMessage);
-    return () => navigator.serviceWorker.removeEventListener("message", onSwMessage);
+    navigator.serviceWorker.addEventListener('message', onSwMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onSwMessage);
   }, [router]);
 
   const handleWalletAction = async () => {
@@ -194,6 +222,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     { href: '/app/messages', label: 'Messages', icon: <MessagesIcon /> },
     { href: '/app/treasury', label: 'Treasury', icon: <TreasuryIcon /> },
     { href: '/app/proposals', label: 'Proposals', icon: <ProposalsIcon /> },
+    { href: '/app/devices', label: 'Devices', icon: <DevicesIcon /> },
   ];
 
   const displayAddress = publicKey ? `${publicKey.slice(0, 4)}...${publicKey.slice(-4)}` : '';

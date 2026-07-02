@@ -4,11 +4,15 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { apiFetch } from '@/lib/api';
 import { signWalletMessage } from '@/lib/freighter';
 import { useWallet } from '@/contexts/WalletContext';
+import { getOrCreateDeviceIdentity } from '@/lib/deviceIdentity';
+import { parseJwtClaims, rememberRealtimeDeviceId } from '@/lib/realtime';
 
-const TOKEN_STORAGE_KEY = 'clicked.jwt';
+const TOKEN_STORAGE_KEYS = ['clicked.jwt', 'clicked_token', 'auth_token'];
 
 interface AuthUser {
+  id?: string;
   walletAddress: string;
+  deviceId?: string;
 }
 
 interface AuthContextValue {
@@ -21,16 +25,23 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+function persistToken(token: string) {
+  for (const key of TOKEN_STORAGE_KEYS) window.localStorage.setItem(key, token);
+}
+
+function removeToken() {
+  for (const key of TOKEN_STORAGE_KEYS) window.localStorage.removeItem(key);
+}
+
+function readToken(): string | null {
+  return TOKEN_STORAGE_KEYS.map((key) => window.localStorage.getItem(key)).find(Boolean) ?? null;
+}
+
 function parseJwtUser(token: string): AuthUser | null {
-  try {
-    const [, payload] = token.split('.');
-    if (!payload) return null;
-    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
-    const decoded = JSON.parse(window.atob(normalized)) as { walletAddress?: string };
-    return decoded.walletAddress ? { walletAddress: decoded.walletAddress } : null;
-  } catch {
-    return null;
-  }
+  const claims = parseJwtClaims(token);
+  return claims.walletAddress
+    ? { id: claims.userId, walletAddress: claims.walletAddress, deviceId: claims.deviceId }
+    : null;
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -40,7 +51,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    const savedToken = window.localStorage.getItem(TOKEN_STORAGE_KEY);
+    const savedToken = readToken();
     if (savedToken) {
       setToken(savedToken);
       setUser(parseJwtUser(savedToken));
@@ -51,14 +62,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsLoading(true);
     try {
       const walletAddress = publicKey ?? (await connect());
+      const device = await getOrCreateDeviceIdentity();
       const challengeResponse = await apiFetch('/auth/challenge', {
         method: 'POST',
         body: JSON.stringify({ walletAddress }),
       });
 
-      if (!challengeResponse.ok) {
-        throw new Error('Unable to request sign-in challenge');
-      }
+      if (!challengeResponse.ok) throw new Error('Unable to request sign-in challenge');
 
       const { message, nonce } = (await challengeResponse.json()) as {
         message: string;
@@ -67,15 +77,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const signature = await signWalletMessage(message, walletAddress);
       const verifyResponse = await apiFetch('/auth/verify', {
         method: 'POST',
-        body: JSON.stringify({ walletAddress, signature, nonce }),
+        body: JSON.stringify({
+          walletAddress,
+          signature,
+          nonce,
+          identityPublicKey: device.identityPublicKey,
+        }),
       });
 
-      if (!verifyResponse.ok) {
-        throw new Error('Unable to verify signed challenge');
-      }
+      if (!verifyResponse.ok) throw new Error('Unable to verify signed challenge');
 
-      const { token: nextToken } = (await verifyResponse.json()) as { token: string };
-      window.localStorage.setItem(TOKEN_STORAGE_KEY, nextToken);
+      const { token: nextToken, deviceId } = (await verifyResponse.json()) as { token: string; deviceId?: string };
+      if (deviceId) rememberRealtimeDeviceId(deviceId);
+      persistToken(nextToken);
       setToken(nextToken);
       setUser(parseJwtUser(nextToken) ?? { walletAddress });
     } finally {
@@ -84,7 +98,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [connect, publicKey]);
 
   const signOut = useCallback(() => {
-    window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+    removeToken();
     setToken(null);
     setUser(null);
   }, []);
@@ -99,8 +113,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within AuthProvider');
-  }
+  if (!context) throw new Error('useAuth must be used within AuthProvider');
   return context;
 }

@@ -1,10 +1,10 @@
-"use client";
+'use client';
 
-import { useEffect, useState } from "react";
-import { useAuth } from "@/components/auth/useAuth";
-import { usePushSubscription } from "@/hooks/usePushSubscription";
+import { useEffect, useState } from 'react';
+import { useAuth } from '@/components/auth/useAuth';
+import { usePushSubscription } from '@/hooks/usePushSubscription';
 
-const DISMISSED_KEY = "clicked.push.dismissed";
+const DISMISSED_KEY = 'clicked.push.dismissed';
 
 // Shown contextually inside the authenticated app shell, not on first page load.
 // Appears 5 seconds after the component mounts (i.e. after the user navigates
@@ -16,8 +16,8 @@ export function PushPermissionPrompt() {
 
   useEffect(() => {
     if (!token) return;
-    if (permission !== "default") return;
-    if (typeof sessionStorage !== "undefined" && sessionStorage.getItem(DISMISSED_KEY)) return;
+    if (permission !== 'default') return;
+    if (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(DISMISSED_KEY)) return;
 
     const timer = setTimeout(() => setVisible(true), 5000);
     return () => clearTimeout(timer);
@@ -25,7 +25,7 @@ export function PushPermissionPrompt() {
 
   function dismiss() {
     setVisible(false);
-    sessionStorage.setItem(DISMISSED_KEY, "1");
+    sessionStorage.setItem(DISMISSED_KEY, '1');
   }
 
   async function enable() {
@@ -34,7 +34,7 @@ export function PushPermissionPrompt() {
   }
 
   // Hide when not visible, permission already decided, or already subscribed.
-  if (!visible || permission !== "default" || subscribed) return null;
+  if (!visible || permission !== 'default' || subscribed) return null;
 
   return (
     <div

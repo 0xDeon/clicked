@@ -196,10 +196,13 @@ export function MessageThread({
 }
 
 function DefaultMessageRow({ message }: { message: ChatMessage }) {
+  // #185 – display decrypted content. In E2EE mode content comes in as ciphertext,
+  // which our decryption shim currently passes through verbatim.
+  const text = message.content || message.ciphertext || '';
   return (
     <div className="rounded-lg bg-gray-50 px-3 py-2 text-sm">
       <div className="text-xs font-semibold text-gray-700">{message.senderId}</div>
-      <div className="text-gray-900">{message.content}</div>
+      <div className="text-gray-900">{text}</div>
       <div className="mt-1 text-[10px] uppercase tracking-wide text-gray-400">
         {new Date(message.createdAt).toLocaleString()}
       </div>

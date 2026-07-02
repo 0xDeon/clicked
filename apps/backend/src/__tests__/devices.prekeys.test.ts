@@ -131,7 +131,7 @@ describe('POST /devices/:id/prekeys', () => {
   it('returns 400 when signed prekey signature is invalid', async () => {
     mockDeviceFindFirst.mockResolvedValue(ACTIVE_DEVICE);
     // Override the crypto mock to return false for this test.
-    vi.mocked(cryptoVerify).mockReturnValueOnce(false);
+    vi.mocked(cryptoVerify).mockReturnValueOnce(false as never);
 
     const res = await request(makeApp()).post('/devices/device-1/prekeys').send(VALID_BODY);
 

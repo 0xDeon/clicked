@@ -45,6 +45,7 @@ export async function requireAuth(
     return;
   }
 
+
   req.auth = payload;
   next();
 }

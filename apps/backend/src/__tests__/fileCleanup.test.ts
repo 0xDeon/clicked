@@ -19,12 +19,14 @@ vi.mock('@aws-sdk/client-s3', () => ({
 const mockFindMany = vi.fn();
 const mockUpdate = vi.fn();
 const mockExecute = vi.fn();
+const mockDelete = vi.fn();
 
 vi.mock('../db/index.js', () => ({
   db: {
     query: { files: { findMany: mockFindMany } },
     update: mockUpdate,
     execute: mockExecute,
+    delete: mockDelete,
   },
 }));
 
@@ -35,6 +37,9 @@ vi.mock('../db/schema.js', () => ({
 vi.mock('drizzle-orm', () => ({
   isNotNull: vi.fn((col: unknown) => ({ col, isNotNull: true })),
   isNull: vi.fn((col: unknown) => ({ col, isNull: true })),
+  and: vi.fn(),
+  eq: vi.fn(),
+  lt: vi.fn(),
   sql: Object.assign(
     vi.fn((strings: TemplateStringsArray, ...vals: unknown[]) => ({ strings, vals })),
     { raw: vi.fn() },
@@ -53,6 +58,7 @@ beforeEach(() => {
   mockS3Send.mockResolvedValue(undefined);
   mockUpdate.mockReturnValue({ set: mockSetFn });
   mockSetFn.mockReturnValue({ where: mockWhereFn });
+  mockDelete.mockReturnValue({ where: mockWhereFn });
 });
 
 const { softDeleteFile, runHardDeletePass } = await import('../services/fileCleanup.js');
@@ -67,7 +73,8 @@ describe('#231 – softDeleteFile', () => {
 
 describe('#231 – runHardDeletePass', () => {
   it('skips files that still have live message references', async () => {
-    mockFindMany.mockResolvedValue([{ id: 'file-1', storageKey: 'key-1' }]);
+    mockFindMany.mockResolvedValueOnce([{ id: 'file-1', storageKey: 'key-1' }]) // first pass (candidates)
+                .mockResolvedValueOnce([]); // second pass (pendingCandidates)
     mockExecute.mockResolvedValueOnce([{ '?column?': 1 }]); // live ref exists
 
     await runHardDeletePass();
@@ -77,7 +84,8 @@ describe('#231 – runHardDeletePass', () => {
   });
 
   it('hard-deletes from S3 and marks hardDeletedAt when no live refs', async () => {
-    mockFindMany.mockResolvedValue([{ id: 'file-2', storageKey: 'key-2' }]);
+    mockFindMany.mockResolvedValueOnce([{ id: 'file-2', storageKey: 'key-2' }])
+                .mockResolvedValueOnce([]);
     mockExecute.mockResolvedValueOnce([]); // no live refs
 
     await runHardDeletePass();
@@ -87,7 +95,8 @@ describe('#231 – runHardDeletePass', () => {
   });
 
   it('does not mark hardDeletedAt when S3 delete throws (safe retry)', async () => {
-    mockFindMany.mockResolvedValue([{ id: 'file-3', storageKey: 'key-3' }]);
+    mockFindMany.mockResolvedValueOnce([{ id: 'file-3', storageKey: 'key-3' }])
+                .mockResolvedValueOnce([]);
     mockExecute.mockResolvedValueOnce([]);
     mockS3Send.mockRejectedValueOnce(new Error('NoSuchKey'));
 
@@ -97,14 +106,26 @@ describe('#231 – runHardDeletePass', () => {
   });
 
   it('processes multiple files in one pass', async () => {
-    mockFindMany.mockResolvedValue([
+    mockFindMany.mockResolvedValueOnce([
       { id: 'file-a', storageKey: 'key-a' },
       { id: 'file-b', storageKey: 'key-b' },
-    ]);
+    ]).mockResolvedValueOnce([]);
     mockExecute.mockResolvedValue([]); // no live refs for either
 
     await runHardDeletePass();
 
     expect(mockS3Send).toHaveBeenCalledTimes(2);
+  });
+
+  it('deletes pending files older than 24 hours', async () => {
+    mockFindMany.mockResolvedValueOnce([]) // no soft-deleted candidates
+                .mockResolvedValueOnce([
+                  { id: 'pending-1', storageKey: 'pending-key-1' },
+                ]);
+
+    await runHardDeletePass();
+
+    expect(mockS3Send).toHaveBeenCalledTimes(1);
+    expect(mockDelete).toHaveBeenCalled();
   });
 });
