@@ -360,6 +360,8 @@ export const pushSubscriptions = pgTable('push_subscriptions', {
   lastUsedAt: timestamp('last_used_at'),
   disabledAt: timestamp('disabled_at'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
+  lastUsedAt: timestamp('last_used_at'),
+  disabledAt: timestamp('disabled_at'),
 });
 
 export type PushSubscription = typeof pushSubscriptions.$inferSelect;
