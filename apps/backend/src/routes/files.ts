@@ -4,6 +4,7 @@ import { eq, and } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { messages, conversationMembers, files } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
+import { objectStore } from '../lib/objectStore.js';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { randomUUID } from 'node:crypto';
@@ -148,7 +149,7 @@ filesRouter.get('/:fileId', async (req: AuthRequest, res) => {
       Key: fileRecord.storageKey,
     });
     // Short-lived URL: 5 minutes
-    const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
+    const presignedUrl = await objectStore.getDownloadUrl(fileId, 300);
     res.json({ url: presignedUrl });
   } catch {
     res.status(500).json({ error: 'Failed to generate download URL' });
