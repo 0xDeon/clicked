@@ -1,7 +1,8 @@
-"use client";
+'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Socket } from "socket.io-client";
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { Socket } from 'socket.io-client';
+import { useMessageSearchIndex } from './useMessageSearchIndex';
 
 /**
  * Shape we keep in client state. Mirrors the columns the backend currently
@@ -14,6 +15,10 @@ export interface ChatMessage {
   senderId: string;
   content: string;
   createdAt: string; // ISO timestamp
+  /** E2EE fields – present when messages come from the real backend */
+  ciphertext?: string | null;
+  contentType?: string;
+  sequenceNumber?: number | null;
 }
 
 interface HistoryAck {
@@ -52,6 +57,10 @@ interface UseMessageHistoryReturn {
  * Tying the de-duplication to ids (not indices) is what lets
  * `MessageThread` use `id` as a React key without ever rendering two
  * rows with the same key.
+ *
+ * #185 – messages are indexed into a local E2EE search cache (IndexedDB +
+ * Web Worker) as they arrive, so search works offline over decrypted
+ * plaintext.
  */
 export function useMessageHistory({
   socket,
@@ -82,18 +91,16 @@ export function useMessageHistory({
     (next: ChatMessage[] | ((current: ChatMessage[]) => ChatMessage[])) =>
       setConversationState((state) => ({
         ...state,
-        messages: typeof next === "function" ? next(state.messages) : next,
+        messages: typeof next === 'function' ? next(state.messages) : next,
       })),
     [],
   );
   const setLoadingOlder = useCallback(
-    (next: boolean) =>
-      setConversationState((state) => ({ ...state, loadingOlder: next })),
+    (next: boolean) => setConversationState((state) => ({ ...state, loadingOlder: next })),
     [],
   );
   const setHasReachedStart = useCallback(
-    (next: boolean) =>
-      setConversationState((state) => ({ ...state, hasReachedStart: next })),
+    (next: boolean) => setConversationState((state) => ({ ...state, hasReachedStart: next })),
     [],
   );
 
@@ -120,26 +127,52 @@ export function useMessageHistory({
         // Backend may return newest-first or oldest-first; normalize to
         // oldest-first so prepending is just a head splice.
         const ordered = [...fresh].sort(
-          (left, right) =>
-            new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime(),
+          (left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime(),
         );
         return [...ordered, ...current];
       });
     }
-    socket.on("message_history", onHistory);
+    socket.on('message_history', onHistory);
     return () => {
-      socket.off("message_history", onHistory);
+      socket.off('message_history', onHistory);
     };
   }, [socket, conversationId, setHasReachedStart, setLoadingOlder, setMessages]);
+
+  // Listen for live new_message events and append them.
+  useEffect(() => {
+    if (!socket) return;
+    function onNewMessage(raw: any) {
+      if (!raw || raw.conversationId !== conversationId) return;
+      const msg: ChatMessage = {
+        id: raw.id,
+        conversationId: raw.conversationId,
+        senderId: raw.senderId,
+        content: raw.ciphertext ?? raw.content ?? '',
+        createdAt: raw.createdAt ?? new Date().toISOString(),
+        ciphertext: raw.ciphertext ?? null,
+        contentType: raw.contentType,
+        sequenceNumber: raw.sequenceNumber ?? null,
+      };
+      setMessages((current) => {
+        if (current.some(m => m.id === msg.id)) return current;
+        return [...current, msg];
+      });
+    }
+    socket.on('new_message', onNewMessage);
+    return () => { socket.off('new_message', onNewMessage); };
+  }, [socket, conversationId, setMessages]);
 
   const loadOlder = useCallback(() => {
     if (!socket || loadingOlder || hasReachedStart) return;
     setLoadingOlder(true);
-    socket.emit("message_history", {
+    socket.emit('message_history', {
       conversationId,
       before: oldestIdRef.current ?? undefined,
     });
   }, [socket, conversationId, loadingOlder, hasReachedStart, setLoadingOlder]);
+
+  // #185 – index decrypted messages for local search
+  useMessageSearchIndex(messages);
 
   return useMemo(
     () => ({ messages, loadingOlder, hasReachedStart, loadOlder }),

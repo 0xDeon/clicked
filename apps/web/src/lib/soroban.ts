@@ -7,41 +7,38 @@
 export async function transferToken(
   recipient: string,
   amount: number | string,
-  memo = ""
+  memo = '',
 ): Promise<string> {
-  const freighter = await import("@stellar/freighter-api");
-  const stellar = await import("stellar-sdk");
+  const freighter = await import('@stellar/freighter-api');
+  const stellar = await import('stellar-sdk');
 
   const { SorobanRpc, xdr, TransactionBuilder, BASE_FEE, Contract, Networks, nativeToScVal } =
     stellar;
 
-  const RPC_URL =
-    process.env.NEXT_PUBLIC_SOROBAN_RPC_URL || "https://soroban-testnet.stellar.org";
-  const NETWORK_PASSPHRASE =
-    process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE || Networks.TESTNET;
+  const RPC_URL = process.env.NEXT_PUBLIC_SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org';
+  const NETWORK_PASSPHRASE = process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE || Networks.TESTNET;
   const CONTRACT_ID =
-    process.env.NEXT_PUBLIC_TOKEN_TRANSFER_CONTRACT ||
-    "REPLACE_WITH_TOKEN_TRANSFER_CONTRACT_ID";
+    process.env.NEXT_PUBLIC_TOKEN_TRANSFER_CONTRACT || 'REPLACE_WITH_TOKEN_TRANSFER_CONTRACT_ID';
 
   const connectionStatus = await freighter.isConnected();
   if (!connectionStatus.isConnected) {
-    throw new Error("Freighter not installed or not connected");
+    throw new Error('Freighter not installed or not connected');
   }
 
   const { address: publicKey, error: addressError } = await freighter.getAddress();
   if (addressError || !publicKey) {
-    throw new Error("Unable to read Freighter wallet address");
+    throw new Error('Unable to read Freighter wallet address');
   }
 
   const contract = new Contract(CONTRACT_ID);
 
-  const fromSc = nativeToScVal(publicKey, { type: "address" });
-  const toSc = nativeToScVal(recipient, { type: "address" });
+  const fromSc = nativeToScVal(publicKey, { type: 'address' });
+  const toSc = nativeToScVal(recipient, { type: 'address' });
   const amountBigInt = BigInt(String(amount));
-  const amountSc = nativeToScVal(amountBigInt, { type: "i128" });
-  const memoSc = xdr.ScVal.scvSymbol(String(memo || ""));
+  const amountSc = nativeToScVal(amountBigInt, { type: 'i128' });
+  const memoSc = xdr.ScVal.scvSymbol(String(memo || ''));
 
-  const op = contract.call("transfer", fromSc, toSc, amountSc, memoSc);
+  const op = contract.call('transfer', fromSc, toSc, amountSc, memoSc);
 
   const server = new SorobanRpc.Server(RPC_URL, { allowHttp: false });
   const account = await server.getAccount(publicKey);
@@ -67,14 +64,14 @@ export async function transferToken(
   });
 
   if (signResult.error || !signResult.signedTxXdr) {
-    throw new Error("Unable to sign transaction with Freighter");
+    throw new Error('Unable to sign transaction with Freighter');
   }
 
   const { Transaction } = stellar;
   const signedTx = new Transaction(signResult.signedTxXdr, NETWORK_PASSPHRASE);
   const sendResult = await server.sendTransaction(signedTx);
 
-  if (sendResult.status === "ERROR") {
+  if (sendResult.status === 'ERROR') {
     throw new Error(`Transaction failed: ${String(sendResult.errorResult || sendResult)}`);
   }
 

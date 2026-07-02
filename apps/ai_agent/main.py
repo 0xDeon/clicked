@@ -3,10 +3,9 @@ import os
 from typing import Literal
 
 import uvicorn
+import weaviate
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-
-import weaviate
 from weaviate.classes.query import Filter
 
 app = FastAPI(title="AI Agent API")
@@ -23,6 +22,7 @@ _HIGH_VALUE_THRESHOLD = 10_000.0
 
 
 # ── Request / response models ─────────────────────────────────────────────────
+
 
 class ChatRequest(BaseModel):
     message: str
@@ -69,15 +69,18 @@ class ProposalSummariseResponse(BaseModel):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _openai_client():
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured")
     from openai import OpenAI  # imported lazily so missing package gives a clear error
+
     return OpenAI(api_key=api_key)
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
+
 
 @app.get("/health")
 def health_check():
@@ -142,9 +145,9 @@ def summarise_proposal(request: ProposalSummariseRequest):
         f"Description: {request.description}\n"
         f"Amount: {request.amount} XLM\n\n"
         "Reply with JSON only using keys: summary (a plain-English summary of "
-        "exactly 2 sentences), risk (one of \"low\", \"medium\", \"high\"). "
-        "Use \"high\" for large amounts, unclear intent, or obvious red flags; "
-        "\"low\" for small, well-scoped, low-impact proposals; otherwise \"medium\"."
+        'exactly 2 sentences), risk (one of "low", "medium", "high"). '
+        'Use "high" for large amounts, unclear intent, or obvious red flags; '
+        '"low" for small, well-scoped, low-impact proposals; otherwise "medium".'
     )
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -172,20 +175,20 @@ def index_message(request: IndexMessageRequest):
     try:
         # Attempt connection to Weaviate
         client = weaviate.connect_to_local()
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=503, detail="Weaviate connection failed")
-    
+
     try:
         if not client.collections.exists("Message"):
             client.collections.create(name="Message")
-        
+
         collection = client.collections.get("Message")
-        
+
         # Get embedding via OpenAI
         openai_client = _openai_client()
         res = openai_client.embeddings.create(input=request.content, model="text-embedding-3-small")
         vector = res.data[0].embedding
-        
+
         # Upsert
         if collection.data.exists(request.messageId):
             collection.data.replace(
@@ -196,7 +199,7 @@ def index_message(request: IndexMessageRequest):
                     "senderId": request.senderId,
                     "content": request.content,
                 },
-                vector=vector
+                vector=vector,
             )
         else:
             collection.data.insert(
@@ -207,13 +210,13 @@ def index_message(request: IndexMessageRequest):
                     "senderId": request.senderId,
                     "content": request.content,
                 },
-                vector=vector
+                vector=vector,
             )
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
     finally:
         client.close()
-        
+
     return {"status": "ok"}
 
 
@@ -221,35 +224,37 @@ def index_message(request: IndexMessageRequest):
 def search_messages(q: str, conversationId: str):
     try:
         client = weaviate.connect_to_local()
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=503, detail="Weaviate connection failed")
-        
+
     try:
         if not client.collections.exists("Message"):
             return {"results": []}
-            
+
         collection = client.collections.get("Message")
-        
+
         # Get embedding for query
         openai_client = _openai_client()
         res = openai_client.embeddings.create(input=q, model="text-embedding-3-small")
         vector = res.data[0].embedding
-        
+
         results = collection.query.near_vector(
             near_vector=vector,
             limit=5,
-            filters=Filter.by_property("conversationId").equal(conversationId)
+            filters=Filter.by_property("conversationId").equal(conversationId),
         )
-        
+
         hits = []
         for obj in results.objects:
-            hits.append({
-                "messageId": obj.properties.get("messageId"),
-                "conversationId": obj.properties.get("conversationId"),
-                "senderId": obj.properties.get("senderId"),
-                "content": obj.properties.get("content"),
-            })
-            
+            hits.append(
+                {
+                    "messageId": obj.properties.get("messageId"),
+                    "conversationId": obj.properties.get("conversationId"),
+                    "senderId": obj.properties.get("senderId"),
+                    "content": obj.properties.get("content"),
+                }
+            )
+
         return {"results": hits}
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))

@@ -1,9 +1,9 @@
-"use client";
+'use client';
 
-import { useRef, useEffect } from "react";
-import { useState } from "react";
-import { useWallet } from "@/contexts/WalletContext";
-import { useRouter } from "next/navigation";
+import { useRef, useEffect } from 'react';
+import { useState } from 'react';
+import { useWallet } from '@/contexts/WalletContext';
+import { useRouter } from 'next/navigation';
 
 function truncateAddress(address: string) {
   return `${address.slice(0, 4)}…${address.slice(-4)}`;
@@ -23,7 +23,7 @@ export function WalletConnectButton() {
     try {
       await connect();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Wallet connection failed");
+      setError(err instanceof Error ? err.message : 'Wallet connection failed');
     } finally {
       setIsConnecting(false);
     }
@@ -38,7 +38,7 @@ export function WalletConnectButton() {
   };
 
   const handleEditProfile = () => {
-    router.push("/app/profile");
+    router.push('/app/profile');
     setIsDropdownOpen(false);
   };
 
@@ -56,19 +56,19 @@ export function WalletConnectButton() {
     }
 
     function handleEscapeKey(event: KeyboardEvent) {
-      if (event.key === "Escape") {
+      if (event.key === 'Escape') {
         setIsDropdownOpen(false);
       }
     }
 
     if (isDropdownOpen) {
-      document.addEventListener("mousedown", handleClickOutside);
-      document.addEventListener("keydown", handleEscapeKey);
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleEscapeKey);
     }
 
     return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-      document.removeEventListener("keydown", handleEscapeKey);
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscapeKey);
     };
   }, [isDropdownOpen]);
 
@@ -118,7 +118,7 @@ export function WalletConnectButton() {
           disabled={isConnecting}
           className="rounded-full bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {isConnecting ? "Connecting…" : "Connect Wallet"}
+          {isConnecting ? 'Connecting…' : 'Connect Wallet'}
         </button>
       )}
       {error && <p className="max-w-64 text-xs text-red-300">{error}</p>}

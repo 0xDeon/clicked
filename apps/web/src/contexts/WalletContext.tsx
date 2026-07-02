@@ -1,7 +1,7 @@
-"use client";
+'use client';
 
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
-import { requestWalletAccess } from "@/lib/freighter";
+import { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import { requestWalletAccess } from '@/lib/freighter';
 
 interface WalletContextValue {
   publicKey: string | null;
@@ -35,7 +35,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 export function useWallet() {
   const context = useContext(WalletContext);
   if (!context) {
-    throw new Error("useWallet must be used within WalletProvider");
+    throw new Error('useWallet must be used within WalletProvider');
   }
   return context;
 }

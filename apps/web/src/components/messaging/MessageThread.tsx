@@ -1,11 +1,11 @@
-"use client";
+'use client';
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
-import type { ChatMessage } from "@/hooks/useMessageHistory";
-import type { Socket } from "socket.io-client";
-import { EmptyState } from "@/components/ui/EmptyState";
-import { Spinner } from "@/components/ui/Spinner";
+import type { ChatMessage } from '@/hooks/useMessageHistory';
+import type { Socket } from 'socket.io-client';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Spinner } from '@/components/ui/Spinner';
 
 export interface MessageThreadProps {
   messages: ChatMessage[];
@@ -87,14 +87,14 @@ export function MessageThread({
       setTypingUsers(new Set());
     }
 
-    socket.on("typing_start", onTypingStart);
-    socket.on("typing_stop", onTypingStop);
-    socket.on("new_message", onNewMessage);
+    socket.on('typing_start', onTypingStart);
+    socket.on('typing_stop', onTypingStop);
+    socket.on('new_message', onNewMessage);
 
     return () => {
-      socket.off("typing_start", onTypingStart);
-      socket.off("typing_stop", onTypingStop);
-      socket.off("new_message", onNewMessage);
+      socket.off('typing_start', onTypingStart);
+      socket.off('typing_stop', onTypingStop);
+      socket.off('new_message', onNewMessage);
     };
   }, [socket, conversationId, currentUserId]);
 
@@ -141,8 +141,8 @@ export function MessageThread({
       triggeredRef.current = true;
       onLoadOlder();
     }
-    el.addEventListener("scroll", handleScroll, { passive: true });
-    return () => el.removeEventListener("scroll", handleScroll);
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    return () => el.removeEventListener('scroll', handleScroll);
   }, [triggerDistance, loadingOlder, hasReachedStart, onLoadOlder]);
 
   return (
@@ -181,8 +181,12 @@ export function MessageThread({
           )}
 
           {typingUsers.size > 0 && (
-            <div aria-live="polite" aria-atomic="true" className="px-1 text-xs text-gray-500 italic">
-              {[...typingUsers].join(", ")} {typingUsers.size === 1 ? "is" : "are"} typing…
+            <div
+              aria-live="polite"
+              aria-atomic="true"
+              className="px-1 text-xs text-gray-500 italic"
+            >
+              {[...typingUsers].join(', ')} {typingUsers.size === 1 ? 'is' : 'are'} typing…
             </div>
           )}
         </>
@@ -192,10 +196,13 @@ export function MessageThread({
 }
 
 function DefaultMessageRow({ message }: { message: ChatMessage }) {
+  // #185 – display decrypted content. In E2EE mode content comes in as ciphertext,
+  // which our decryption shim currently passes through verbatim.
+  const text = message.content || message.ciphertext || '';
   return (
     <div className="rounded-lg bg-gray-50 px-3 py-2 text-sm">
       <div className="text-xs font-semibold text-gray-700">{message.senderId}</div>
-      <div className="text-gray-900">{message.content}</div>
+      <div className="text-gray-900">{text}</div>
       <div className="mt-1 text-[10px] uppercase tracking-wide text-gray-400">
         {new Date(message.createdAt).toLocaleString()}
       </div>

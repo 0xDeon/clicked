@@ -1,6 +1,6 @@
-"use client";
+'use client';
 
-import { useMemo, useState } from "react";
+import { useMemo, useState } from 'react';
 
 const SIZE_MAP = {
   sm: 24,
@@ -13,12 +13,12 @@ type Size = keyof typeof SIZE_MAP;
 function getInitials(value: string) {
   const cleaned = value.trim();
   if (!cleaned) {
-    return "?";
+    return '?';
   }
 
   const parts = cleaned
     .split(/\s+/)
-    .map((part) => part.replace(/[^\p{L}\p{N}]/gu, ""))
+    .map((part) => part.replace(/[^\p{L}\p{N}]/gu, ''))
     .filter(Boolean);
 
   if (parts.length === 0) {
@@ -64,11 +64,7 @@ export function Avatar({ src, fallback, size, online }: AvatarProps & { online?:
   } as const;
 
   return (
-    <div
-      className="relative inline-flex shrink-0"
-      style={style}
-      aria-label={ariaLabel}
-    >
+    <div className="relative inline-flex shrink-0" style={style} aria-label={ariaLabel}>
       <div className="h-full w-full overflow-hidden rounded-full bg-[var(--border)] flex">
         {showImage ? (
           // eslint-disable-next-line @next/next/no-img-element

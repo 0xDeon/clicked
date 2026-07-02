@@ -1,14 +1,14 @@
-"use client";
+'use client';
 
-import Link from "next/link";
-import { useParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { API_BASE_URL } from "@/lib/api";
-import { useAuth } from "@/contexts/AuthContext";
-import { useSocket } from "@/hooks/useSocket";
-import { EmptyState } from "@/components/ui/EmptyState";
-import { SkeletonLoader } from "@/components/ui/SkeletonLoader";
-import { Avatar } from "@/components/ui/Avatar";
+import Link from 'next/link';
+import { useParams } from 'next/navigation';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { API_BASE_URL } from '@/lib/api';
+import { useAuth } from '@/contexts/AuthContext';
+import { useSocket } from '@/hooks/useSocket';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { SkeletonLoader } from '@/components/ui/SkeletonLoader';
+import { Avatar } from '@/components/ui/Avatar';
 
 interface Wallet {
   address?: string;
@@ -32,7 +32,7 @@ interface Message {
 
 interface Conversation {
   id: string;
-  type: "dm" | "group";
+  type: 'dm' | 'group';
   name?: string | null;
   createdAt?: string;
   members?: Member[];
@@ -45,22 +45,22 @@ function truncate(value: string, length: number) {
 }
 
 function relativeTime(value?: string) {
-  if (!value) return "";
+  if (!value) return '';
 
   const diffSeconds = Math.max(1, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
   const units = [
-    ["y", 31536000],
-    ["mo", 2592000],
-    ["d", 86400],
-    ["h", 3600],
-    ["m", 60],
+    ['y', 31536000],
+    ['mo', 2592000],
+    ['d', 86400],
+    ['h', 3600],
+    ['m', 60],
   ] as const;
 
   for (const [label, seconds] of units) {
     if (diffSeconds >= seconds) return `${Math.floor(diffSeconds / seconds)}${label} ago`;
   }
 
-  return "just now";
+  return 'just now';
 }
 
 function conversationTitle(conversation: Conversation, walletAddress?: string) {
@@ -70,13 +70,13 @@ function conversationTitle(conversation: Conversation, walletAddress?: string) {
     ?.flatMap((member) => member.user?.wallets ?? [])
     .find((wallet) => wallet.address && wallet.address !== walletAddress);
 
-  return peer?.address ?? "Direct message";
+  return peer?.address ?? 'Direct message';
 }
 
 function getPeerUser(conversation: Conversation, currentWalletAddress?: string) {
-  if (conversation.type !== "dm") return null;
+  if (conversation.type !== 'dm') return null;
   const peerMember = conversation.members?.find((m) =>
-    m.user?.wallets?.some((w) => w.address && w.address !== currentWalletAddress)
+    m.user?.wallets?.some((w) => w.address && w.address !== currentWalletAddress),
   );
   return peerMember?.user ?? null;
 }
@@ -85,7 +85,7 @@ function UnreadBadge({ count }: { count: number }) {
   if (count <= 0) return null;
   return (
     <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
-      {count > 99 ? "99+" : count}
+      {count > 99 ? '99+' : count}
     </span>
   );
 }
@@ -132,7 +132,7 @@ export function ConversationListSidebar() {
         });
 
         if (!response.ok) {
-          throw new Error("Unable to fetch conversations");
+          throw new Error('Unable to fetch conversations');
         }
 
         const data = (await response.json()) as Conversation[];
@@ -151,7 +151,8 @@ export function ConversationListSidebar() {
         setUnreadCounts(counts);
         latestMessageIds.current = lastIds;
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Unable to load conversations");
+        if (!cancelled)
+          setError(err instanceof Error ? err.message : 'Unable to load conversations');
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -167,7 +168,7 @@ export function ConversationListSidebar() {
   useEffect(() => {
     if (!token || conversations.length === 0) return;
 
-    const dmConversations = conversations.filter((c) => c.type === "dm");
+    const dmConversations = conversations.filter((c) => c.type === 'dm');
     dmConversations.forEach(async (conv) => {
       const peer = getPeerUser(conv, user?.walletAddress);
       const peerUserId = peer?.id;
@@ -186,7 +187,7 @@ export function ConversationListSidebar() {
           });
         }
       } catch (err) {
-        console.error("Failed to fetch presence for", peerUserId, err);
+        console.error('Failed to fetch presence for', peerUserId, err);
       }
     });
   }, [conversations, token, user?.walletAddress]);
@@ -240,22 +241,23 @@ export function ConversationListSidebar() {
       handleOffline(data.userId);
     }
 
-    function onPresenceUpdate(data: { userId: string; online: boolean }) {
-      if (data.online) {
+    function onPresenceUpdate(data: { userId: string; online?: boolean; status?: 'online' | 'offline'; lastSeen?: number }) {
+      const isOnline = data.status ? data.status === 'online' : !!data.online;
+      if (isOnline) {
         handleOnline(data.userId);
       } else {
         handleOffline(data.userId);
       }
     }
 
-    socket.on("user_online", onUserOnline);
-    socket.on("user_offline", onUserOffline);
-    socket.on("presence_update", onPresenceUpdate);
+    socket.on('user_online', onUserOnline);
+    socket.on('user_offline', onUserOffline);
+    socket.on('presence_update', onPresenceUpdate);
 
     return () => {
-      socket.off("user_online", onUserOnline);
-      socket.off("user_offline", onUserOffline);
-      socket.off("presence_update", onPresenceUpdate);
+      socket.off('user_online', onUserOnline);
+      socket.off('user_offline', onUserOffline);
+      socket.off('presence_update', onPresenceUpdate);
     };
   }, [socket]);
 
@@ -272,7 +274,7 @@ export function ConversationListSidebar() {
 
       if (conversationId === selectedIdRef.current) {
         // Conversation is open — mark read immediately
-        socket!.emit("message_read", { conversationId, lastReadMessageId: id });
+        socket!.emit('message_read', { conversationId, lastReadMessageId: id });
       } else {
         // Background conversation — increment badge
         setUnreadCounts((prev) => {
@@ -283,9 +285,9 @@ export function ConversationListSidebar() {
       }
     }
 
-    socket.on("new_message", onNewMessage);
+    socket.on('new_message', onNewMessage);
     return () => {
-      socket.off("new_message", onNewMessage);
+      socket.off('new_message', onNewMessage);
     };
   }, [socket]);
 
@@ -302,7 +304,7 @@ export function ConversationListSidebar() {
 
     const lastId = latestMessageIds.current.get(selectedId);
     if (lastId) {
-      socket.emit("message_read", { conversationId: selectedId, lastReadMessageId: lastId });
+      socket.emit('message_read', { conversationId: selectedId, lastReadMessageId: lastId });
     }
   }, [selectedId, socket]);
 
@@ -342,25 +344,23 @@ export function ConversationListSidebar() {
                 href={`/app/conversations/${conversation.id}`}
                 className={`flex gap-3 rounded-2xl border p-4 transition-colors ${
                   isSelected
-                    ? "border-accent bg-(--accent)/15"
-                    : "border-transparent hover:border-border hover:bg-(--background)/60"
+                    ? 'border-accent bg-(--accent)/15'
+                    : 'border-transparent hover:border-border hover:bg-(--background)/60'
                 }`}
               >
                 <Avatar
                   src={avatarUrl ?? undefined}
                   fallback={title}
                   size="md"
-                  online={conversation.type === "dm" && isOnline}
+                  online={conversation.type === 'dm' && isOnline}
                 />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <h3 className="truncate text-sm font-semibold">
-                        {title}
-                      </h3>
-                      {conversation.type === "group" && (
+                      <h3 className="truncate text-sm font-semibold">{title}</h3>
+                      {conversation.type === 'group' && (
                         <span className="text-xs text-(--foreground)/45">
-                          {memberCount} member{memberCount !== 1 ? "s" : ""}
+                          {memberCount} member{memberCount !== 1 ? 's' : ''}
                         </span>
                       )}
                     </div>
@@ -372,7 +372,7 @@ export function ConversationListSidebar() {
                     </div>
                   </div>
                   <p className="mt-1 truncate text-sm text-(--foreground)/45">
-                    {lastMessage ? truncate(lastMessage.content, 40) : "No messages yet"}
+                    {lastMessage ? truncate(lastMessage.content, 40) : 'No messages yet'}
                   </p>
                 </div>
               </Link>

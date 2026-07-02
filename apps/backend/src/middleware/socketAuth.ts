@@ -6,6 +6,7 @@ import { devices } from '../db/schema.js';
 
 export interface AuthSocket extends Socket {
   auth?: JwtPayload;
+  identityPublicKey?: string;
 }
 
 export async function socketAuthMiddleware(
@@ -39,6 +40,8 @@ export async function socketAuthMiddleware(
     return;
   }
 
+
   socket.auth = payload;
+  socket.identityPublicKey = device.identityPublicKey;
   next();
 }

@@ -1,7 +1,7 @@
-from fastapi.testclient import TestClient
-from unittest.mock import MagicMock, patch
 import json
-import pytest
+from unittest.mock import MagicMock, patch
+
+from fastapi.testclient import TestClient
 
 from main import app
 
@@ -26,9 +26,10 @@ def test_llm_path_flagged_transfer():
         mock_client.chat.completions.create.return_value = _fake_openai_response(
             {"flagged": True, "reason": "Suspicious memo", "confidence": 0.9}
         )
-        response = client.post("/transfers/analyse", json={
-            "amount": 100.0, "sender": "GABC", "recipient": "GDEF", "memo": "test"
-        })
+        response = client.post(
+            "/transfers/analyse",
+            json={"amount": 100.0, "sender": "GABC", "recipient": "GDEF", "memo": "test"},
+        )
         assert response.status_code == 200
         data = response.json()
         assert data["flagged"] is True
@@ -42,9 +43,10 @@ def test_llm_path_clean_transfer():
         mock_client.chat.completions.create.return_value = _fake_openai_response(
             {"flagged": False, "reason": None, "confidence": 0.1}
         )
-        response = client.post("/transfers/analyse", json={
-            "amount": 500.0, "sender": "GABC", "recipient": "GDEF", "memo": "payment"
-        })
+        response = client.post(
+            "/transfers/analyse",
+            json={"amount": 500.0, "sender": "GABC", "recipient": "GDEF", "memo": "payment"},
+        )
         assert response.status_code == 200
         data = response.json()
         assert data["flagged"] is False
@@ -58,9 +60,10 @@ def test_llm_path_missing_confidence_defaults_to_zero():
         mock_client.chat.completions.create.return_value = _fake_openai_response(
             {"flagged": False, "reason": None}
         )
-        response = client.post("/transfers/analyse", json={
-            "amount": 200.0, "sender": "GABC", "recipient": "GDEF", "memo": "normal"
-        })
+        response = client.post(
+            "/transfers/analyse",
+            json={"amount": 200.0, "sender": "GABC", "recipient": "GDEF", "memo": "normal"},
+        )
         assert response.status_code == 200
         data = response.json()
         assert data["confidence"] == 0.0
@@ -73,9 +76,10 @@ def test_llm_path_missing_flagged_defaults_to_false():
         mock_client.chat.completions.create.return_value = _fake_openai_response(
             {"reason": None, "confidence": 0.5}
         )
-        response = client.post("/transfers/analyse", json={
-            "amount": 300.0, "sender": "GABC", "recipient": "GDEF", "memo": "salary"
-        })
+        response = client.post(
+            "/transfers/analyse",
+            json={"amount": 300.0, "sender": "GABC", "recipient": "GDEF", "memo": "salary"},
+        )
         assert response.status_code == 200
         data = response.json()
         assert data["flagged"] is False
@@ -83,13 +87,15 @@ def test_llm_path_missing_flagged_defaults_to_false():
 
 def test_llm_path_missing_api_key_returns_500(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    response = client.post("/transfers/analyse", json={
-        "amount": 100.0, "sender": "GABC", "recipient": "GDEF", "memo": "test"
-    })
+    response = client.post(
+        "/transfers/analyse",
+        json={"amount": 100.0, "sender": "GABC", "recipient": "GDEF", "memo": "test"},
+    )
     assert response.status_code == 500
 
 
 # ── Rule-based path (issue #145) ──────────────────────────────────────────────
+
 
 def test_high_value_transfer_is_flagged_without_llm_call():
     """High-value path bypasses the LLM — mandatory security property."""

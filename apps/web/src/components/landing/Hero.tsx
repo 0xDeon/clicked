@@ -16,16 +16,15 @@ export function Hero() {
         </span>
 
         <h1 className="text-5xl font-bold leading-tight tracking-tight text-[var(--foreground)] sm:text-6xl lg:text-7xl">
-          Chat. Pay.{" "}
+          Chat. Pay.{' '}
           <span className="bg-gradient-to-r from-[var(--accent)] to-[var(--accent-light)] bg-clip-text text-transparent">
             Build together.
           </span>
         </h1>
 
         <p className="max-w-xl text-lg leading-relaxed text-[var(--foreground)]/60">
-          Clicked is a decentralized messaging platform where you can send tokens
-          as easily as messages, fund community ideas, and govern shared
-          treasuries — all in one place.
+          Clicked is a decentralized messaging platform where you can send tokens as easily as
+          messages, fund community ideas, and govern shared treasuries — all in one place.
         </p>
 
         <div className="flex flex-col gap-3 sm:flex-row">
@@ -57,8 +56,17 @@ export function Hero() {
             </div>
           </div>
           <div className="flex flex-col gap-3 text-sm">
-            <ChatBubble align="left" name="alice.xlm" message="Should we fund the new UI sprint? 🎨" />
-            <ChatBubble align="right" name="You" message="Sent 50 XLM to the treasury ✓" highlight />
+            <ChatBubble
+              align="left"
+              name="alice.xlm"
+              message="Should we fund the new UI sprint? 🎨"
+            />
+            <ChatBubble
+              align="right"
+              name="You"
+              message="Sent 50 XLM to the treasury ✓"
+              highlight
+            />
             <ChatBubble align="left" name="bob.xlm" message="Proposal live — 3/4 votes so far 🗳️" />
           </div>
         </div>
@@ -73,21 +81,23 @@ function ChatBubble({
   message,
   highlight,
 }: {
-  align: "left" | "right";
+  align: 'left' | 'right';
   name: string;
   message: string;
   highlight?: boolean;
 }) {
   return (
-    <div className={`flex gap-2 ${align === "right" ? "flex-row-reverse" : ""}`}>
+    <div className={`flex gap-2 ${align === 'right' ? 'flex-row-reverse' : ''}`}>
       <div className="mt-1 h-6 w-6 shrink-0 rounded-full bg-[var(--muted)]" />
-      <div className={`max-w-xs ${align === "right" ? "items-end" : "items-start"} flex flex-col gap-0.5`}>
+      <div
+        className={`max-w-xs ${align === 'right' ? 'items-end' : 'items-start'} flex flex-col gap-0.5`}
+      >
         <span className="px-1 text-xs text-[var(--foreground)]/40">{name}</span>
         <div
           className={`rounded-2xl px-4 py-2 text-sm ${
             highlight
-              ? "bg-[var(--accent)] text-white"
-              : "bg-[var(--border)] text-[var(--foreground)]/80"
+              ? 'bg-[var(--accent)] text-white'
+              : 'bg-[var(--border)] text-[var(--foreground)]/80'
           }`}
         >
           {message}

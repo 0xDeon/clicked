@@ -594,3 +594,253 @@ fn test_vote_without_auth_panics() {
 
     client.approve_withdraw(&member, &0);
 }
+
+// ── Full multisig flow suite (#127) ────────────────────────────────────────────
+//
+// A dedicated suite walking the multisig withdraw lifecycle end to end:
+// propose → approve/reject → execute, plus expiry and pending-filtering.
+//
+// Four scenarios exercise APIs that already exist on `main`
+// (`approve_withdraw` / `reject_withdraw`) and run as real, passing tests; they
+// create proposals via the in-file `seed_proposal` stand-in until
+// `propose_withdraw` (#122) lands.
+//
+// The remaining six scenarios depend on contract functions that are not yet
+// implemented (`propose_withdraw` #122, an execute entrypoint, an expiry
+// finalizer, and `get_pending_proposals`). Calling a not-yet-generated client
+// method does not compile even inside an `#[ignore]`d test, so those scenarios
+// are documented stubs carrying an explicit `#[ignore = "..."]` reason and the
+// exact assertions to wire up once their owning work merges. They are written
+// against the ledger-sequence (`set_sequence_number` / `ttl_ledgers`) timing
+// model that #122 introduces.
+mod multisig_flow {
+    use super::{seed_proposal, voting_setup};
+    use crate::storage::ProposalStatus;
+    use crate::GroupTreasuryContractClient;
+    use soroban_sdk::testutils::{Address as _, Ledger as _};
+    use soroban_sdk::{Address, Env};
+
+    // ── Implemented behavior: real, passing tests ──────────────────────────────
+
+    /// Scenario 3 — approvals reaching the threshold flip the proposal to `Passed`.
+    #[test]
+    fn multisig_approvals_reach_threshold_passes() {
+        let env = Env::default();
+        let (contract_id, token_id, members) = voting_setup(&env, 2, 2);
+        let client = GroupTreasuryContractClient::new(&env, &contract_id);
+        let recipient = Address::generate(&env);
+        seed_proposal(&env, &contract_id, 0, &recipient, &token_id, 1_000, 10_000);
+
+        client.approve_withdraw(&members.get(0).unwrap(), &0);
+        assert_eq!(client.get_proposal(&0).status, ProposalStatus::Active);
+
+        client.approve_withdraw(&members.get(1).unwrap(), &0);
+        let passed = client.get_proposal(&0);
+        assert_eq!(passed.approvals, 2);
+        assert_eq!(passed.status, ProposalStatus::Passed);
+    }
+
+    /// Scenario 4 — a member voting twice on the same proposal panics.
+    #[test]
+    #[should_panic(expected = "already voted")]
+    fn multisig_double_vote_panics() {
+        let env = Env::default();
+        let (contract_id, token_id, members) = voting_setup(&env, 2, 2);
+        let client = GroupTreasuryContractClient::new(&env, &contract_id);
+        let recipient = Address::generate(&env);
+        seed_proposal(&env, &contract_id, 0, &recipient, &token_id, 1_000, 10_000);
+
+        let voter = members.get(0).unwrap();
+        client.approve_withdraw(&voter, &0);
+        client.approve_withdraw(&voter, &0); // second vote must panic
+    }
+
+    /// Scenario 5 — rejections reaching the blocking minority flip the proposal
+    /// to `Rejected`. threshold 2 of 3 → blocking minority = 3 - 2 + 1 = 2.
+    #[test]
+    fn multisig_rejection_blocks_proposal() {
+        let env = Env::default();
+        let (contract_id, token_id, members) = voting_setup(&env, 2, 3);
+        let client = GroupTreasuryContractClient::new(&env, &contract_id);
+        let recipient = Address::generate(&env);
+        seed_proposal(&env, &contract_id, 0, &recipient, &token_id, 1_000, 10_000);
+
+        client.reject_withdraw(&members.get(0).unwrap(), &0);
+        assert_eq!(client.get_proposal(&0).status, ProposalStatus::Active);
+
+        client.reject_withdraw(&members.get(1).unwrap(), &0);
+        let rejected = client.get_proposal(&0);
+        assert_eq!(rejected.rejections, 2);
+        assert_eq!(rejected.status, ProposalStatus::Rejected);
+    }
+
+    /// Scenario 9 — approving after the proposal has expired panics.
+    ///
+    /// The live contract checks expiry against `ledger().timestamp()`, so this
+    /// active test advances time with `set_timestamp`. Once #122 migrates expiry
+    /// to ledger sequence, switch this to `env.ledger().set_sequence_number(...)`.
+    #[test]
+    #[should_panic(expected = "proposal expired")]
+    fn multisig_approve_after_expiry_panics() {
+        let env = Env::default();
+        let (contract_id, token_id, members) = voting_setup(&env, 2, 2);
+        let client = GroupTreasuryContractClient::new(&env, &contract_id);
+        let recipient = Address::generate(&env);
+        seed_proposal(&env, &contract_id, 0, &recipient, &token_id, 1_000, 100);
+
+        env.ledger().set_timestamp(200); // past expires_at
+        client.approve_withdraw(&members.get(0).unwrap(), &0);
+    }
+
+    // ── Pending contract work: documented, ignored stubs ───────────────────────
+    //
+    // Each stub compiles (no calls to not-yet-generated client methods) and
+    // carries the precise assertions to enable once its dependency merges.
+
+    /// Scenario 1 — a member can submit a withdraw proposal.
+    #[test]
+    #[ignore = "blocked on #122: propose_withdraw not yet implemented"]
+    fn multisig_propose_by_member() {
+        // TODO(#122): with
+        //   propose_withdraw(env, proposer, to, token, amount, ttl_ledgers) -> u32
+        // assert:
+        //   - the returned id equals the stored proposal's id
+        //   - the proposer is auto-recorded as the first approval (approvals == 1)
+        //   - status == Active and
+        //     expires_at == env.ledger().sequence() + ttl_ledgers
+        //   - a ProposalCreatedEvent is emitted
+        // Drive time with env.ledger().set_sequence_number(...).
+    }
+
+    /// Scenario 2 — a non-member submitting a proposal panics.
+    #[test]
+    #[ignore = "blocked on #122: propose_withdraw not yet implemented"]
+    fn multisig_propose_by_non_member_panics() {
+        // TODO(#122): calling propose_withdraw with a non-member proposer must
+        // panic ("not a member"); insufficient treasury balance must panic with
+        // "insufficient funds".
+    }
+
+    /// Scenario 6 — executing an approved (`Passed`) proposal transfers funds and
+    /// marks it `Executed`.
+    #[test]
+    #[ignore = "blocked: group_treasury execute entrypoint not yet implemented (no issue identified)"]
+    fn multisig_execute_on_approved() {
+        // TODO: once an execute fn exists, drive a proposal to `Passed` via
+        // approvals, deposit funds, execute, then assert:
+        //   - recipient balance increased by amount
+        //   - treasury balance decreased by amount
+        //   - proposal status == Executed
+        //   - a WithdrawEvent is emitted
+    }
+
+    /// Scenario 7 — executing a still-pending (`Active`) proposal panics.
+    #[test]
+    #[ignore = "blocked: group_treasury execute entrypoint not yet implemented (no issue identified)"]
+    fn multisig_execute_on_pending_panics() {
+        // TODO: executing a proposal that has not reached threshold must panic
+        // (expected message TBD by the execute implementation, e.g. "not approved").
+    }
+
+    /// Scenario 8 — an expired proposal can be finalized to its terminal state.
+    #[test]
+    #[ignore = "blocked: expiry finalizer not yet implemented (no issue identified)"]
+    fn multisig_finalize_expired() {
+        // TODO: with ledger-sequence expiry, seed/propose a proposal, advance past
+        // expiry via env.ledger().set_sequence_number(expires_at + 1), then call
+        // the finalizer and assert the proposal settles (e.g. Rejected when it
+        // never reached threshold) and cannot be voted on afterwards.
+    }
+
+    /// Scenario 10 — `get_pending_proposals` returns only still-`Active` proposals.
+    #[test]
+    #[ignore = "blocked: get_pending_proposals not yet implemented (no issue identified)"]
+    fn multisig_get_pending_proposals_filtering() {
+        // TODO: create several proposals, drive some to Passed/Rejected/Executed,
+        // then assert get_pending_proposals() returns exactly the Active ones and
+        // excludes terminal-state proposals.
+    }
+}
+// ── propose_withdraw Tests (#122) ─────────────────────────────────────────────
+
+#[test]
+fn test_propose_withdraw_returned_id_matches_stored() {
+    let env = Env::default();
+    let (contract_id, token_id, members) = voting_setup(&env, 1, 1);
+    let client = GroupTreasuryContractClient::new(&env, &contract_id);
+    let token = mock_token::MockTokenClient::new(&env, &token_id);
+    let member = members.get(0).unwrap();
+    token.mint(&member, &500_000);
+    client.deposit(&member, &token_id, &500_000);
+
+    let recipient = Address::generate(&env);
+    let id = client.propose_withdraw(&member, &recipient, &token_id, &100_000, &100);
+    let proposal = client.get_proposal(&id);
+
+    assert_eq!(id, proposal.id);
+}
+
+#[test]
+#[should_panic(expected = "proposer is not a member")]
+fn test_propose_withdraw_non_member_panics() {
+    let env = Env::default();
+    let (contract_id, token_id, _members) = voting_setup(&env, 1, 1);
+    let client = GroupTreasuryContractClient::new(&env, &contract_id);
+    let token = mock_token::MockTokenClient::new(&env, &token_id);
+    let outsider = Address::generate(&env);
+    token.mint(&outsider, &500_000);
+    client.deposit(&outsider, &token_id, &500_000);
+
+    let recipient = Address::generate(&env);
+    client.propose_withdraw(&outsider, &recipient, &token_id, &100_000, &100);
+}
+
+#[test]
+#[should_panic(expected = "insufficient funds")]
+fn test_propose_withdraw_insufficient_balance_panics() {
+    let env = Env::default();
+    let (contract_id, token_id, members) = voting_setup(&env, 1, 1);
+    let client = GroupTreasuryContractClient::new(&env, &contract_id);
+    let token = mock_token::MockTokenClient::new(&env, &token_id);
+    let member = members.get(0).unwrap();
+    token.mint(&member, &50_000);
+    client.deposit(&member, &token_id, &50_000);
+
+    let recipient = Address::generate(&env);
+    client.propose_withdraw(&member, &recipient, &token_id, &100_000, &100);
+}
+
+#[test]
+fn test_propose_withdraw_auto_adds_proposer_approval() {
+    let env = Env::default();
+    let (contract_id, token_id, members) = voting_setup(&env, 1, 1);
+    let client = GroupTreasuryContractClient::new(&env, &contract_id);
+    let token = mock_token::MockTokenClient::new(&env, &token_id);
+    let member = members.get(0).unwrap();
+    token.mint(&member, &500_000);
+    client.deposit(&member, &token_id, &500_000);
+
+    let recipient = Address::generate(&env);
+    let id = client.propose_withdraw(&member, &recipient, &token_id, &100_000, &100);
+    let proposal = client.get_proposal(&id);
+
+    assert_eq!(proposal.approvals, 1);
+}
+
+#[test]
+fn test_propose_withdraw_increments_proposal_id() {
+    let env = Env::default();
+    let (contract_id, token_id, members) = voting_setup(&env, 1, 1);
+    let client = GroupTreasuryContractClient::new(&env, &contract_id);
+    let token = mock_token::MockTokenClient::new(&env, &token_id);
+    let member = members.get(0).unwrap();
+    token.mint(&member, &500_000);
+    client.deposit(&member, &token_id, &500_000);
+
+    let recipient = Address::generate(&env);
+    let id0 = client.propose_withdraw(&member, &recipient, &token_id, &100_000, &100);
+    let id1 = client.propose_withdraw(&member, &recipient, &token_id, &100_000, &100);
+
+    assert_eq!(id0, 0);
+    assert_eq!(id1, 1);
+}

@@ -38,7 +38,6 @@ pub struct Proposal {
     pub amount: i128,
 }
 
-
 // ── Events ───────────────────────────────────────────────────────────────────
 
 #[contracttype]
@@ -53,7 +52,6 @@ pub struct ProposalCreatedEvent {
     pub to: Address,
     pub amount: i128,
 }
-
 
 #[contracttype]
 #[derive(Clone)]

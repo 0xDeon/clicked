@@ -35,6 +35,11 @@ export function isDeviceRevoked(deviceId: string): boolean {
   return revokedMidSession.has(deviceId);
 }
 
+export function isDeviceConnected(deviceId: string): boolean {
+  const sockets = deviceSockets.get(deviceId);
+  return sockets !== undefined && sockets.size > 0;
+}
+
 export function markDeviceRevoked(deviceId: string): void {
   revokedMidSession.add(deviceId);
 }
@@ -63,7 +68,7 @@ export async function startDeviceRevocationListener(
           const socket = io.sockets.sockets.get(socketId) as AuthSocket | undefined;
           if (socket) {
             if (appRedis && socket.auth) {
-              await setOffline(appRedis, socket.auth.userId, socketId);
+              await setOffline(appRedis, socket.auth.userId, socket.auth.deviceId);
             }
             socket.emit('device_revoked', { message: 'This device has been revoked' });
             socket.disconnect(true);

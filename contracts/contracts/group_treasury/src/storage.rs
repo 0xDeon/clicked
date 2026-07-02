@@ -81,3 +81,14 @@ pub struct ProposalRejectedEvent {
     pub id: u32,
     pub rejections: u32,
 }
+
+/// Emitted when a new withdraw proposal is created.
+#[contracttype]
+pub struct ProposalCreatedEvent {
+    pub id: u32,
+    pub proposer: Address,
+    pub to: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub expires_at: u64,
+}

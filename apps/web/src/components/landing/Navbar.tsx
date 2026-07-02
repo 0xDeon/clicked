@@ -6,9 +6,15 @@ export function Navbar() {
           clicked<span className="text-[var(--accent)]">.</span>
         </span>
         <div className="hidden items-center gap-8 text-sm text-[var(--foreground)]/60 sm:flex">
-          <a href="#features" className="hover:text-[var(--foreground)] transition-colors">Features</a>
-          <a href="#how-it-works" className="hover:text-[var(--foreground)] transition-colors">How it works</a>
-          <a href="#tech" className="hover:text-[var(--foreground)] transition-colors">Tech</a>
+          <a href="#features" className="hover:text-[var(--foreground)] transition-colors">
+            Features
+          </a>
+          <a href="#how-it-works" className="hover:text-[var(--foreground)] transition-colors">
+            How it works
+          </a>
+          <a href="#tech" className="hover:text-[var(--foreground)] transition-colors">
+            Tech
+          </a>
         </div>
         <a
           href="/app"

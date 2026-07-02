@@ -1,9 +1,10 @@
-"use client";
+'use client';
 
-import React, { useState } from "react";
-import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useWallet } from "@/contexts/WalletContext";
+import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { usePathname, useRouter } from 'next/navigation';
+import { useWallet } from '@/contexts/WalletContext';
+import { PushPermissionPrompt } from '@/components/PushPermissionPrompt';
 
 // Custom premium SVG Icons to avoid dependency weight
 const LogoIcon = () => (
@@ -107,13 +108,36 @@ const ProposalsIcon = () => (
   </svg>
 );
 
-const WalletIcon = () => (
+const DevicesIcon = () => (
   <svg
-    className="w-5 h-5"
+    className="w-5 h-5 transition-transform group-hover:scale-110"
     viewBox="0 0 24 24"
     fill="none"
     xmlns="http://www.w3.org/2000/svg"
   >
+    <rect
+      x="4"
+      y="2"
+      width="10"
+      height="16"
+      rx="2"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M9 16H9.01M16 8H19C19.5523 8 20 8.44772 20 9V20C20 20.5523 19.5523 21 19 21H16C15.4477 21 15 20.5523 15 20V9C15 8.44772 15.4477 8 16 8Z"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const WalletIcon = () => (
+  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path
       d="M20 12V8C20 5.79086 18.2091 4 16 4H4C2.89543 4 2 4.89543 2 6V18C2 19.1046 2.89543 20 4 20H16C18.2091 20 20 18.2091 20 16V14M22 12H18C16.8954 12 16 12.8954 16 14C16 15.1046 16.8954 16 18 16H22"
       stroke="currentColor"
@@ -137,14 +161,14 @@ const NavItem: React.FC<NavItemProps> = ({ href, label, icon, active }) => {
       href={href}
       className={`group relative flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-300 ${
         active
-          ? "bg-accent/15 text-white font-medium shadow-[0_0_15px_rgba(124,92,252,0.15)]"
-          : "text-foreground/60 hover:text-foreground hover:bg-white/5"
+          ? 'bg-accent/15 text-white font-medium shadow-[0_0_15px_rgba(124,92,252,0.15)]'
+          : 'text-foreground/60 hover:text-foreground hover:bg-white/5'
       }`}
     >
       {active && (
         <span className="absolute left-0 top-1/4 bottom-1/4 w-[4px] bg-accent rounded-r-md" />
       )}
-      <div className={active ? "text-accent" : "text-foreground/40 group-hover:text-foreground/75"}>
+      <div className={active ? 'text-accent' : 'text-foreground/40 group-hover:text-foreground/75'}>
         {icon}
       </div>
       <span className="hidden md:inline text-sm tracking-wide transition-opacity duration-300">
@@ -156,8 +180,28 @@ const NavItem: React.FC<NavItemProps> = ({ href, label, icon, active }) => {
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const { publicKey, connect, disconnect } = useWallet();
   const [isConnecting, setIsConnecting] = useState(false);
+
+  // Listen for sw:sync messages from the service worker (notification click).
+  // Navigate to the conversation so the page re-fetches fresh data.
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+
+    function onSwMessage(event: MessageEvent<{ type: string; conversationId?: string | null }>) {
+      if (event.data?.type !== 'sw:sync') return;
+      const { conversationId } = event.data;
+      if (conversationId) {
+        router.push(`/app/conversations/${conversationId}`);
+      } else {
+        router.push('/app/messages');
+      }
+    }
+
+    navigator.serviceWorker.addEventListener('message', onSwMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onSwMessage);
+  }, [router]);
 
   const handleWalletAction = async () => {
     if (publicKey) {
@@ -167,7 +211,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       try {
         await connect();
       } catch (err) {
-        console.error("Wallet connection failed:", err);
+        console.error('Wallet connection failed:', err);
       } finally {
         setIsConnecting(false);
       }
@@ -175,14 +219,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   };
 
   const navItems = [
-    { href: "/app/messages", label: "Messages", icon: <MessagesIcon /> },
-    { href: "/app/treasury", label: "Treasury", icon: <TreasuryIcon /> },
-    { href: "/app/proposals", label: "Proposals", icon: <ProposalsIcon /> },
+    { href: '/app/messages', label: 'Messages', icon: <MessagesIcon /> },
+    { href: '/app/treasury', label: 'Treasury', icon: <TreasuryIcon /> },
+    { href: '/app/proposals', label: 'Proposals', icon: <ProposalsIcon /> },
+    { href: '/app/devices', label: 'Devices', icon: <DevicesIcon /> },
   ];
 
-  const displayAddress = publicKey
-    ? `${publicKey.slice(0, 4)}...${publicKey.slice(-4)}`
-    : "";
+  const displayAddress = publicKey ? `${publicKey.slice(0, 4)}...${publicKey.slice(-4)}` : '';
 
   return (
     <div className="flex min-h-screen bg-background text-foreground font-sans">
@@ -205,7 +248,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 href={item.href}
                 label={item.label}
                 icon={item.icon}
-                active={pathname === item.href || (item.href === "/app/messages" && pathname === "/app")} // default to messages if exactly /app
+                active={
+                  pathname === item.href || (item.href === '/app/messages' && pathname === '/app')
+                } // default to messages if exactly /app
               />
             ))}
           </nav>
@@ -243,7 +288,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           >
             <WalletIcon />
             <span className="hidden md:inline">
-              {isConnecting ? "Connecting..." : "Connect Wallet"}
+              {isConnecting ? 'Connecting...' : 'Connect Wallet'}
             </span>
           </button>
         )}
@@ -251,10 +296,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
       {/* Main Content Area */}
       <div className="flex-1 pl-16 md:pl-[240px] transition-all duration-300 min-h-screen flex flex-col">
-        <main className="flex-1 p-4 md:p-8 max-w-7xl mx-auto w-full">
-          {children}
-        </main>
+        <main className="flex-1 p-4 md:p-8 max-w-7xl mx-auto w-full">{children}</main>
       </div>
+
+      {/* Contextual push permission prompt — shown 5 s after the user enters
+          the app, suppressed on denial or dismissal. */}
+      <PushPermissionPrompt />
     </div>
   );
 }

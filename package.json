@@ -6,11 +6,18 @@
     "dev": "turbo run dev",
     "build": "turbo run build",
     "lint": "turbo run lint",
-    "format": "prettier --write \"**/*.{ts,tsx,md,json}\""
+    "format": "prettier --write \"**/*.{ts,tsx,md,json}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,md,json}\""
   },
   "devDependencies": {
     "turbo": "latest",
-    "prettier": "latest"
+    "prettier": "latest",
+    "supertest": "^2.0.0",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.0",
+    "ioredis": "^5.3.2",
+    "@stellar/stellar-sdk": "^11.2.0",
+    "vitest": "^1.0.0"
   },
   "packageManager": "pnpm@10.28.1+sha512.7d7dbbca9e99447b7c3bf7a73286afaaf6be99251eb9498baefa7d406892f67b879adb3a1d7e687fc4ccc1a388c7175fbaae567a26ab44d1067b54fcb0d6a316"
 }
