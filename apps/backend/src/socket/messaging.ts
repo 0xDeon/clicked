@@ -122,10 +122,17 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     const effectiveCiphertext = ciphertext ?? content ?? undefined;
 
     const validation = validateMessagePayload({
+
+      ...(contentType !== undefined ? { contentType } : {}),
+      ...(effectiveCiphertext !== undefined ? { ciphertext: effectiveCiphertext } : {}),
+      ...(envelopes !== undefined ? { envelopes } : {}),
+      ...(fileId !== undefined ? { fileId } : {}),
+
       contentType,
       ciphertext: effectiveCiphertext,
       envelopes,
       fileId: payloadFileId,
+
     });
     if (!validation.ok) {
       socket.emit('error', {
@@ -176,15 +183,32 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     let fileId: string | undefined = payloadFileId;
     const resolvedContentType = contentType || 'text/plain';
     if (FILE_CONTENT_TYPES.has(resolvedContentType)) {
+
       const [fileRow] = await db
         .insert(files)
         .values({ storageKey: messageId })
         .onConflictDoUpdate({ target: files.storageKey, set: { storageKey: messageId } })
         .returning({ id: files.id });
+
+      persistedFileId = fileRow?.id;
+
       fileId = fileRow?.id ?? payloadFileId;
+
     }
 
-    let message;
+    const [message] = await db
+      .insert(messages)
+      .values({
+        id: messageId,
+        conversationId,
+        senderId: userId,
+        senderDeviceId: deviceId,
+        contentType: resolvedContentType,
+        ciphertext: effectiveCiphertext,
+        fileId: persistedFileId ?? null,
+      })
+      .returning();
+
     let recipientDeviceIds: string[] = [];
     try {
       message = await db.transaction(async (tx) => {
@@ -267,7 +291,19 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       }
     }
 
+    if (!message) {
+      socket.emit('error', { event: 'send_message', message: 'Failed to persist message' });
+      return;
+    }
+
+    if (message) {
+      await deliverMessage(io, message, conversationId);
+    }
+
+    socket.emit('message_ack', { messageId, sequenceNumber: message.sequenceNumber });
+
     await deliverMessage(io, message, conversationId);
+
 
     const members = await db.query.conversationMembers.findMany({
       where: eq(conversationMembers.conversationId, conversationId),
@@ -695,7 +731,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         ),
       );
 
-    io.to(conversationId).volatile.emit('read_receipt', { userId, lastReadMessageId });
+    io.to(conversationId).volatile.emit('read_receipt', { conversationId, userId, lastReadMessageId });
 
     if (redis) {
       const members = await db.query.conversationMembers.findMany({
@@ -706,6 +742,71 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         redis,
         members.map((member) => member.userId),
         { type: 'read_receipt', data: { conversationId, userId, lastReadMessageId } },
+      );
+    }
+  });
+
+  // ── message_delivered ──────────────────────────────────────────────────────
+  dispatcher.register('message_delivered', async (payload) => {
+    const { conversationId, messageId, envelopeId, sequenceNumber } = payload as {
+      conversationId?: string;
+      messageId?: string;
+      envelopeId?: string;
+      sequenceNumber?: number;
+    };
+
+    if (!conversationId || !messageId) {
+      socket.emit('error', {
+        event: 'message_delivered',
+        message: 'conversationId and messageId are required',
+      });
+      return;
+    }
+
+    const membership = await db.query.conversationMembers.findFirst({
+      where: and(
+        eq(conversationMembers.conversationId, conversationId),
+        eq(conversationMembers.userId, userId),
+      ),
+    });
+
+    if (!membership) {
+      socket.emit('error', { event: 'message_delivered', message: 'Not a member of this conversation' });
+      return;
+    }
+
+    await db
+      .update(messageEnvelopes)
+      .set({ deliveredAt: new Date() })
+      .where(
+        and(
+          eq(messageEnvelopes.messageId, messageId),
+          eq(messageEnvelopes.recipientDeviceId, socket.auth!.deviceId),
+        ),
+      );
+
+    io.to(conversationId).volatile.emit('delivery_receipt', {
+      conversationId,
+      messageId,
+      envelopeId,
+      userId,
+      deviceId: socket.auth!.deviceId,
+      sequenceNumber,
+      deliveredAt: new Date().toISOString(),
+    });
+
+    if (redis) {
+      const members = await db.query.conversationMembers.findMany({
+        where: eq(conversationMembers.conversationId, conversationId),
+        columns: { userId: true },
+      });
+      await publishEphemeral(
+        redis,
+        members.map((member) => member.userId),
+        {
+          type: 'delivery_receipt',
+          data: { conversationId, messageId, envelopeId, userId, deviceId: socket.auth!.deviceId, sequenceNumber },
+        },
       );
     }
   });

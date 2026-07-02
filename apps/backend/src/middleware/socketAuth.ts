@@ -40,6 +40,7 @@ export async function socketAuthMiddleware(
     return;
   }
 
+
   socket.auth = payload;
   socket.identityPublicKey = device.identityPublicKey;
   next();

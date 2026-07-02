@@ -31,7 +31,12 @@ messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, r
   };
 
   // ── content-type-specific validation ──────────────────────────────────────
-  const validation = validateMessagePayload({ contentType, ciphertext, envelopes, fileId });
+  const validation = validateMessagePayload({
+    ...(contentType !== undefined ? { contentType } : {}),
+    ...(ciphertext !== undefined ? { ciphertext } : {}),
+    ...(envelopes !== undefined ? { envelopes } : {}),
+    ...(fileId !== undefined ? { fileId } : {}),
+  });
   if (!validation.ok) {
     res.status(validation.code).json({ error: validation.message });
     return;

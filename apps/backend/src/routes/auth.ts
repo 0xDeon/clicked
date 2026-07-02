@@ -4,7 +4,7 @@ import type { Request, Response, IRouter } from 'express';
 import rateLimit, { type RateLimitRequestHandler } from 'express-rate-limit';
 import { Keypair } from '@stellar/stellar-sdk';
 import { db } from '../db/index.js';
-import { users, wallets, devices } from '../db/schema.js';
+import { users, wallets, devices, userDevices } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
 import { createNonce, consumeNonce } from '../lib/nonce.js';
 import { signToken } from '../lib/jwt.js';
@@ -57,6 +57,9 @@ authRouter.post(
   verifyLimiter,
   validate(VerifySchema),
   async (req: Request, res: Response) => {
+
+    const { walletAddress, signature, nonce, identityPublicKey, deviceId: clientDeviceId, deviceName, platform, registrationId } = req.body as VerifyBody;
+
     const {
       walletAddress,
       signature,
@@ -66,6 +69,7 @@ authRouter.post(
       platform,
       registrationId,
     } = req.body as VerifyBody;
+
 
     // Validate and consume nonce
     const valid = consumeNonce(walletAddress, nonce);
@@ -159,7 +163,42 @@ authRouter.post(
       deviceId = newDevice.id;
     }
 
-    const token = signToken({ userId, walletAddress, deviceId });
-    res.json({ token });
+    let tokenDeviceId = deviceId;
+
+    if (clientDeviceId) {
+      const [userDevice] = await db
+        .insert(userDevices)
+        .values({
+          userId,
+          deviceId: clientDeviceId,
+          deviceName: deviceName ?? 'Web browser',
+          platform: platform ?? 'web',
+          identityPublicKey,
+          registrationId: registrationId ? Number(registrationId) : null,
+          lastSeenAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: [userDevices.userId, userDevices.deviceId],
+          set: {
+            deviceName: deviceName ?? 'Web browser',
+            platform: platform ?? 'web',
+            identityPublicKey,
+            registrationId: registrationId ? Number(registrationId) : null,
+            lastSeenAt: new Date(),
+            revokedAt: null,
+          },
+        })
+        .returning({ id: userDevices.id });
+
+      if (!userDevice) {
+        res.status(500).json({ error: 'Failed to register messaging device' });
+        return;
+      }
+
+      tokenDeviceId = userDevice.id;
+    }
+
+    const token = signToken({ userId, walletAddress, deviceId: tokenDeviceId });
+    res.json({ token, deviceId: tokenDeviceId });
   },
 );
