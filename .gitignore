@@ -12,5 +12,12 @@ target/
 .DS_Store
 .turbo/
 
+# TypeScript build artifacts
+apps/backend/src/**/*.js
+apps/backend/src/**/*.js.map
+apps/backend/src/**/*.d.ts
+apps/backend/src/**/*.d.ts.map
+
+
 ISSUES.md
 IMPLEMENTATION_DOCS.md

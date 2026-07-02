@@ -61,8 +61,24 @@
     {
       "idx": 8,
       "version": "7",
-      "when": 1785600000000,
-      "tag": "0008_files",
+      "when": 1783000000000,
+      "tag": "0008_extend_messages",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1785000000000,
+      "tag": "0009_push_enabled",
+      "when": 1783500000000,
+      "tag": "0009_message_edits",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1783700000000,
+      "tag": "0010_device_management",
       "breakpoints": true
     }
   ]

@@ -10,7 +10,6 @@ use soroban_sdk::testutils::Address as _;
 use soroban_sdk::testutils::Ledger;
 use soroban_sdk::{Env, String};
 
-
 mod mock_token {
     use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
 
@@ -44,9 +43,7 @@ mod mock_token {
                 .set(&from_key, &(from_bal - amount));
 
             let to_bal: i128 = env.storage().persistent().get(&to_key).unwrap_or(0);
-            env.storage()
-                .persistent()
-                .set(&to_key, &(to_bal + amount));
+            env.storage().persistent().set(&to_key, &(to_bal + amount));
         }
 
         pub fn balance(env: Env, id: Address) -> i128 {
@@ -61,9 +58,9 @@ mod mock_token {
 use mock_token::MockTokenClient;
 
 fn advance_time(env: &Env, seconds: u64) {
-    env.ledger().set_timestamp(env.ledger().timestamp() + seconds);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + seconds);
 }
-
 
 fn setup(
     env: &Env,
@@ -73,8 +70,7 @@ fn setup(
     Address, // alice
     Address, // bob
     Address, // carol
-group_treasury::GroupTreasuryContractClient<'static>,
-
+    group_treasury::GroupTreasuryContractClient<'static>,
     Address, // treasury_admin
     Address, // treasury_member
     Address, // token_id
@@ -101,18 +97,12 @@ group_treasury::GroupTreasuryContractClient<'static>,
     token.mint(&treasury_member, &1_000_000);
 
     let treasury_addr = env.register(group_treasury::GroupTreasuryContract, ());
-    let treasury =
-        group_treasury::GroupTreasuryContractClient::new(env, &treasury_addr);
+    let treasury = group_treasury::GroupTreasuryContractClient::new(env, &treasury_addr);
     treasury.initialize(&treasury_admin, &token_id);
     treasury.add_member(&treasury_member);
 
     // Deposit into treasury so `execute_withdraw` has something to withdraw.
-    token.transfer(
-        env.clone(),
-        &treasury_member,
-        &treasury_addr,
-        &0,
-    );
+    token.transfer(env.clone(), &treasury_member, &treasury_addr, &0);
 
     // easier: call deposit, which also calls TokenClient::transfer from `from` to treasury
     treasury.deposit(&treasury_member, &token_id, &500);
@@ -161,14 +151,10 @@ fn create_then_vote_then_pass_then_execute_happy_path() {
         setup(&env);
 
     let id = create_proposal_in(
-        &env,
-        &client,
-        &alice,
-        1_000,
+        &env, &client, &alice, 1_000,
         &_m, // dummy treasury address for happy path; execute_withdraw not used here
         &_m, // dummy token
-        &alice,
-        1,
+        &alice, 1,
     );
 
     client.vote(&alice, &id, &true);
@@ -203,7 +189,8 @@ fn finalize_with_more_no_votes_rejects() {
 #[test]
 fn finalize_with_a_tie_rejects() {
     let env = Env::default();
-    let (client, _proposals_admin, alice, bob, _carol, _treasury, _tadmin, m, token_id) = setup(&env);
+    let (client, _proposals_admin, alice, bob, _carol, _treasury, _tadmin, m, token_id) =
+        setup(&env);
 
     let id = create_proposal_in(&env, &client, &alice, 500, &m, &token_id, &alice, 1);
     client.vote(&alice, &id, &true);
@@ -216,7 +203,8 @@ fn finalize_with_a_tie_rejects() {
 #[test]
 fn finalize_with_zero_votes_rejects() {
     let env = Env::default();
-    let (client, _proposals_admin, alice, _bob, _carol, _treasury, _tadmin, m, token_id) = setup(&env);
+    let (client, _proposals_admin, alice, _bob, _carol, _treasury, _tadmin, m, token_id) =
+        setup(&env);
 
     let id = create_proposal_in(&env, &client, &alice, 500, &m, &token_id, &alice, 1);
     advance_time(&env, 501);
@@ -228,7 +216,8 @@ fn finalize_with_zero_votes_rejects() {
 #[should_panic(expected = "cannot finalize before expiry")]
 fn finalize_before_expiry_panics() {
     let env = Env::default();
-    let (client, _proposals_admin, alice, _bob, _carol, _treasury, _tadmin, m, token_id) = setup(&env);
+    let (client, _proposals_admin, alice, _bob, _carol, _treasury, _tadmin, m, token_id) =
+        setup(&env);
 
     let id = create_proposal_in(&env, &client, &alice, 1_000, &m, &token_id, &alice, 1);
     client.finalize_proposal(&id);
@@ -238,7 +227,8 @@ fn finalize_before_expiry_panics() {
 #[should_panic(expected = "proposal already finalized")]
 fn finalize_twice_panics() {
     let env = Env::default();
-    let (client, _proposals_admin, alice, _bob, _carol, _treasury, _tadmin, m, token_id) = setup(&env);
+    let (client, _proposals_admin, alice, _bob, _carol, _treasury, _tadmin, m, token_id) =
+        setup(&env);
 
     let id = create_proposal_in(&env, &client, &alice, 500, &m, &token_id, &alice, 1);
 
@@ -251,7 +241,8 @@ fn finalize_twice_panics() {
 #[should_panic(expected = "proposal is not in Passed state")]
 fn execute_when_rejected_panics() {
     let env = Env::default();
-    let (client, _proposals_admin, alice, bob, carol, _treasury, _tadmin, m, token_id) = setup(&env);
+    let (client, _proposals_admin, alice, bob, carol, _treasury, _tadmin, m, token_id) =
+        setup(&env);
 
     let id = create_proposal_in(&env, &client, &alice, 500, &m, &token_id, &alice, 1);
     client.vote(&alice, &id, &false);
@@ -267,7 +258,8 @@ fn execute_when_rejected_panics() {
 #[should_panic(expected = "proposal is not in Passed state")]
 fn execute_when_still_active_panics() {
     let env = Env::default();
-    let (client, _proposals_admin, alice, _bob, _carol, _treasury, _tadmin, m, token_id) = setup(&env);
+    let (client, _proposals_admin, alice, _bob, _carol, _treasury, _tadmin, m, token_id) =
+        setup(&env);
 
     let id = create_proposal_in(&env, &client, &alice, 1_000, &m, &token_id, &alice, 1);
     client.execute_proposal(&alice, &id);
@@ -277,7 +269,8 @@ fn execute_when_still_active_panics() {
 #[should_panic(expected = "voting window has closed")]
 fn vote_after_expiry_panics() {
     let env = Env::default();
-    let (client, _proposals_admin, alice, bob, _carol, _treasury, _tadmin, m, token_id) = setup(&env);
+    let (client, _proposals_admin, alice, bob, _carol, _treasury, _tadmin, m, token_id) =
+        setup(&env);
 
     let id = create_proposal_in(&env, &client, &alice, 500, &m, &token_id, &alice, 1);
     advance_time(&env, 600);
@@ -288,7 +281,8 @@ fn vote_after_expiry_panics() {
 #[should_panic(expected = "voter has already voted")]
 fn double_vote_panics() {
     let env = Env::default();
-    let (client, _proposals_admin, alice, _bob, _carol, _treasury, _tadmin, m, token_id) = setup(&env);
+    let (client, _proposals_admin, alice, _bob, _carol, _treasury, _tadmin, m, token_id) =
+        setup(&env);
 
     let id = create_proposal_in(&env, &client, &alice, 500, &m, &token_id, &alice, 1);
     client.vote(&alice, &id, &true);
@@ -299,7 +293,8 @@ fn double_vote_panics() {
 #[should_panic(expected = "expires_at must be in the future")]
 fn create_with_past_expiry_panics() {
     let env = Env::default();
-    let (client, _proposals_admin, alice, _bob, _carol, _treasury, _tadmin, m, token_id) = setup(&env);
+    let (client, _proposals_admin, alice, _bob, _carol, _treasury, _tadmin, m, token_id) =
+        setup(&env);
 
     let desc = String::from_str(&env, "x");
     client.create_proposal(
@@ -311,6 +306,43 @@ fn create_with_past_expiry_panics() {
         alice,
         &1,
     );
+}
+
+#[test]
+#[should_panic(expected = "proposal not expired")]
+fn finalize_expired_before_expiry_panics() {
+    let env = Env::default();
+    let (client, _padmin, alice, _bob, _carol, _treasury, _tadmin, m, token_id) = setup(&env);
+
+    let id = create_proposal_in(&env, &client, &alice, 1_000, &m, &token_id, &alice, 1);
+    client.finalize_expired_proposal(&id);
+}
+
+#[test]
+#[should_panic(expected = "proposal not Pending")]
+fn finalize_expired_when_passed_panics() {
+    let env = Env::default();
+    let (client, _padmin, alice, _bob, _carol, _treasury, _tadmin, m, token_id) = setup(&env);
+
+    let id = create_proposal_in(&env, &client, &alice, 500, &m, &token_id, &alice, 1);
+
+    advance_time(&env, 501);
+    client.finalize_proposal(&id); // becomes Passed
+    client.finalize_expired_proposal(&id);
+}
+
+#[test]
+fn finalize_expired_success() {
+    let env = Env::default();
+    let (client, _padmin, alice, _bob, _carol, _treasury, _tadmin, m, token_id) = setup(&env);
+
+    let id = create_proposal_in(&env, &client, &alice, 500, &m, &token_id, &alice, 1);
+
+    advance_time(&env, 501);
+    client.finalize_expired_proposal(&id);
+
+    let proposal = client.get_proposal(&id);
+    assert_eq!(proposal.status, ProposalStatus::Expired);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -369,7 +401,6 @@ fn execute_withdraw_already_executed_panics() {
 
     client.execute_withdraw(&treasury_member, &id);
     client.execute_withdraw(&treasury_member, &id);
-
 }
 
 #[test]
@@ -415,8 +446,7 @@ fn execute_withdraw_reduces_balance() {
 #[should_panic(expected = "caller is not a treasury member")]
 fn execute_withdraw_non_member_panics() {
     let env = Env::default();
-    let (client, _padmin, alice, _bob, _carol, treasury, _tadmin, _member, token_id) =
-        setup(&env);
+    let (client, _padmin, alice, _bob, _carol, treasury, _tadmin, _member, token_id) = setup(&env);
 
     let treasury_addr = treasury.address();
     let to = alice.clone();
@@ -438,4 +468,3 @@ fn execute_withdraw_non_member_panics() {
     // alice is not a treasury member
     client.execute_withdraw(&alice, &id);
 }
-

@@ -24,8 +24,8 @@ mod treasury_interface;
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, String, Symbol};
 
 pub use storage::{
-    DataKey, Proposal, ProposalCreatedEvent, ProposalExecutedEvent, ProposalFinalizedEvent,
-    ProposalStatus, VoteCastEvent,
+    DataKey, Proposal, ProposalCreatedEvent, ProposalExecutedEvent, ProposalExpiredEvent,
+    ProposalFinalizedEvent, ProposalStatus, VoteCastEvent,
 };
 
 // ── Contract ─────────────────────────────────────────────────────────────────
@@ -90,7 +90,6 @@ impl ProposalsContract {
             amount,
         };
 
-
         env.storage()
             .instance()
             .set(&DataKey::Proposal(id), &proposal);
@@ -110,7 +109,6 @@ impl ProposalsContract {
                 amount,
             },
         );
-
 
         id
     }
@@ -191,6 +189,28 @@ impl ProposalsContract {
         new_status
     }
 
+    pub fn finalize_expired_proposal(env: Env, proposal_id: u64) {
+        let mut proposal = Self::load_proposal(&env, proposal_id);
+
+        if !matches!(proposal.status, ProposalStatus::Active) {
+            panic!("proposal not Pending");
+        }
+        let now = env.ledger().timestamp();
+        if now <= proposal.expires_at {
+            panic!("proposal not expired");
+        }
+
+        proposal.status = ProposalStatus::Expired;
+        env.storage()
+            .instance()
+            .set(&DataKey::Proposal(proposal_id), &proposal);
+
+        env.events().publish(
+            (Symbol::new(&env, "proposal_expired"),),
+            ProposalExpiredEvent { id: proposal_id },
+        );
+    }
+
     /// Execute a Passed proposal. Refuses unless `status == Passed`.
     /// MVP execution simply flips the status to `Executed` and emits
     /// the event; downstream wiring (treasury withdrawals, etc.) can
@@ -234,12 +254,9 @@ impl ProposalsContract {
             panic!("proposal not approved");
         }
 
-
         // Verify caller is a treasury member.
-        let treasury_client = crate::treasury_interface::TreasuryClient::new(
-            &env,
-            &proposal.treasury,
-        );
+        let treasury_client =
+            crate::treasury_interface::TreasuryClient::new(&env, &proposal.treasury);
 
         if !treasury_client.is_member(&caller.clone()) {
             panic!("caller is not a treasury member");
@@ -258,7 +275,6 @@ impl ProposalsContract {
             &proposal.amount,
         );
 
-
         // Update proposal status.
         proposal.status = ProposalStatus::Executed;
         env.storage()
@@ -273,10 +289,7 @@ impl ProposalsContract {
                 executor: caller,
             },
         );
-
     }
-
-
 
     pub fn get_proposal(env: Env, proposal_id: u64) -> Proposal {
         Self::load_proposal(&env, proposal_id)

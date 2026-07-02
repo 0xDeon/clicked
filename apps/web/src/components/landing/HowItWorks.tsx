@@ -1,27 +1,27 @@
 const STEPS = [
   {
-    step: "01",
-    title: "Connect your wallet",
+    step: '01',
+    title: 'Connect your wallet',
     description:
-      "Sign in with your Freighter wallet. No account creation — your Stellar address is your identity.",
+      'Sign in with your Freighter wallet. No account creation — your Stellar address is your identity.',
   },
   {
-    step: "02",
-    title: "Start or join a conversation",
+    step: '02',
+    title: 'Start or join a conversation',
     description:
-      "Open a DM with any wallet address or join a group. Conversations are end-to-end linked to on-chain identities.",
+      'Open a DM with any wallet address or join a group. Conversations are end-to-end linked to on-chain identities.',
   },
   {
-    step: "03",
-    title: "Send tokens inside the chat",
+    step: '03',
+    title: 'Send tokens inside the chat',
     description:
-      "Type a transfer command or tap the payment button. Tokens move on-chain; the receipt appears inline in the thread.",
+      'Type a transfer command or tap the payment button. Tokens move on-chain; the receipt appears inline in the thread.',
   },
   {
-    step: "04",
-    title: "Fund ideas together",
+    step: '04',
+    title: 'Fund ideas together',
     description:
-      "Create a proposal, let the group vote, and release treasury funds — all without leaving the conversation.",
+      'Create a proposal, let the group vote, and release treasury funds — all without leaving the conversation.',
   },
 ];
 

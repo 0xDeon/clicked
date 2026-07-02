@@ -22,11 +22,22 @@ on:
 
 jobs:
   test-and-build:
-    name: cargo test + build (wasm32)
+    name: cargo test + build (wasm32) - ${{ matrix.package }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       issues: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - token_transfer
+          - group_treasury
+          - proposals
+
+    env:
+      CARGO_TARGET_DIR: target/${{ matrix.package }}
 
     defaults:
       run:
@@ -49,15 +60,15 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             contracts/target
-          key: ${{ runner.os }}-cargo-contracts-${{ hashFiles('contracts/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-contracts-${{ matrix.package }}-${{ hashFiles('contracts/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-contracts-
+            ${{ runner.os }}-cargo-contracts-${{ matrix.package }}-
 
-      - name: cargo test -p token_transfer
-        run: cargo test -p token_transfer
+      - name: cargo test
+        run: cargo test -p ${{ matrix.package }}
 
       - name: cargo build (release wasm32)
-        run: cargo build -p token_transfer --target wasm32-unknown-unknown --release
+        run: cargo build -p ${{ matrix.package }} --target wasm32-unknown-unknown --release
 
       - name: Install GitHub CLI
         run: sudo apt-get update && sudo apt-get install -y gh

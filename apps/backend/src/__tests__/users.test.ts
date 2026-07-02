@@ -69,6 +69,7 @@ describe('GET /users/me', () => {
       id: 'auth-user-id',
       username: 'alice',
       avatarUrl: null,
+      presenceVisible: true,
       wallets: MOCK_USER.wallets,
       createdAt: MOCK_CREATED_AT,
     } as never);
@@ -80,6 +81,7 @@ describe('GET /users/me', () => {
       id: 'auth-user-id',
       username: 'alice',
       avatarUrl: null,
+      presenceVisible: true,
       wallets: [
         { address: 'GABCDEFG', isPrimary: true },
         { address: 'GHIJKLMN', isPrimary: false },
@@ -224,7 +226,9 @@ describe('GET /users/search', () => {
       { id: 'u1', username: 'nowallet', avatarUrl: null, wallets: [] },
     ] as any); // eslint-disable-line
 
-    const res = await request(app).get('/users/search?q=no').set('Authorization', AUTH_HEADER);
+    const res = await request(app)
+      .get('/users/search?q=nowallet')
+      .set('Authorization', AUTH_HEADER);
 
     expect(res.status).toBe(200);
     expect(res.body[0].primaryWalletAddress).toBeNull();
@@ -290,5 +294,83 @@ describe('PATCH /users/me', () => {
     expect(res.status).toBe(200);
     expect(res.body.username).toBe('new_name');
     expect(res.body.avatarUrl).toBe('new_url');
+  });
+
+  it('allows updating presenceVisible setting', async () => {
+    vi.mocked(db.query.users.findFirst).mockResolvedValue({
+      id: 'auth-user-id',
+      presenceVisible: true,
+    } as any);
+
+    const mockReturning = vi
+      .fn()
+      .mockResolvedValue([{ id: 'auth-user-id', username: 'alice', presenceVisible: false }]);
+    const mockWhere = vi.fn(() => ({ returning: mockReturning }));
+    const mockSet = vi.fn(() => ({ where: mockWhere }));
+    vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
+
+    const res = await request(app)
+      .patch('/users/me')
+      .set('Authorization', AUTH_HEADER)
+      .send({ presenceVisible: false });
+
+    expect(res.status).toBe(200);
+    expect(res.body.presenceVisible).toBe(false);
+  });
+
+  it('returns 400 when presenceVisible is not a boolean', async () => {
+    const res = await request(app)
+      .patch('/users/me')
+      .set('Authorization', AUTH_HEADER)
+      .send({ presenceVisible: 'not-a-boolean' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('presenceVisible must be a boolean');
+  });
+});
+
+describe('GET /users/:id/presence', () => {
+  it('returns 401 when no token is provided', async () => {
+    const res = await request(app).get('/users/user-uuid-123/presence');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 404 when user does not exist', async () => {
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined);
+
+    const res = await request(app)
+      .get('/users/unknown-uuid/presence')
+      .set('Authorization', AUTH_HEADER);
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'User not found' });
+  });
+
+  it('returns online: unknown when presenceVisible is false', async () => {
+    vi.mocked(db.query.users.findFirst).mockResolvedValue({
+      id: 'user-uuid-123',
+      presenceVisible: false,
+    } as any);
+
+    const res = await request(app)
+      .get('/users/user-uuid-123/presence')
+      .set('Authorization', AUTH_HEADER);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ online: 'unknown' });
+  });
+
+  it('returns online: false when presenceVisible is true but redis is not connected', async () => {
+    vi.mocked(db.query.users.findFirst).mockResolvedValue({
+      id: 'user-uuid-123',
+      presenceVisible: true,
+    } as any);
+
+    const res = await request(app)
+      .get('/users/user-uuid-123/presence')
+      .set('Authorization', AUTH_HEADER);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ online: false });
   });
 });

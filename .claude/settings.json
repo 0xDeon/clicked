@@ -12,8 +12,6 @@
       "Bash(git add *)",
       "Bash(echo \"exit: $?\")"
     ],
-    "additionalDirectories": [
-      "/private/tmp"
-    ]
+    "additionalDirectories": ["/private/tmp"]
   }
 }

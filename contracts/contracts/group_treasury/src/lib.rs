@@ -7,7 +7,8 @@ mod token_interface;
 use soroban_sdk::{contract, contractimpl, Address, Env, Map, Symbol, Vec};
 use storage::{
     DataKey, DepositEvent, MemberAddedEvent, MemberRemovedEvent, ProposalApprovedEvent,
-    ProposalRejectedEvent, ProposalStatus, WithdrawEvent, WithdrawProposal, WithdrawVoteCastEvent,
+    ProposalCreatedEvent, ProposalRejectedEvent, ProposalStatus, WithdrawEvent, WithdrawProposal,
+    WithdrawVoteCastEvent,
 };
 use token_interface::TokenClient;
 
@@ -211,6 +212,81 @@ impl GroupTreasuryContract {
         balances.get(token).unwrap_or(0)
     }
 
+    /// Member-only: create a new withdraw proposal.
+    /// Returns the new proposal ID.
+    pub fn propose_withdraw(
+        env: Env,
+        proposer: Address,
+        to: Address,
+        token: Address,
+        amount: i128,
+        ttl_ledgers: u32,
+    ) -> u32 {
+        proposer.require_auth();
+
+        if !Self::is_member(env.clone(), proposer.clone()) {
+            panic!("proposer is not a member");
+        }
+
+        if amount <= 0 {
+            panic!("amount must be positive");
+        }
+
+        let balances: Map<Address, i128> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Balances)
+            .unwrap_or_else(|| Map::new(&env));
+        if balances.get(token.clone()).unwrap_or(0) < amount {
+            panic!("insufficient funds");
+        }
+
+        let id: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProposalCount)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalCount, &(id + 1));
+
+        let expires_at = env.ledger().timestamp() + (ttl_ledgers as u64 * 5); // ~5s per ledger
+
+        let proposal = WithdrawProposal {
+            id,
+            proposer: proposer.clone(),
+            to: to.clone(),
+            token: token.clone(),
+            amount,
+            approvals: 1, // proposer auto-approves
+            rejections: 0,
+            status: ProposalStatus::Active,
+            expires_at,
+        };
+        env.storage()
+            .instance()
+            .set(&DataKey::Proposal(id), &proposal);
+
+        // Record proposer's auto-approval vote
+        env.storage()
+            .instance()
+            .set(&DataKey::Vote(id, proposer.clone()), &true);
+
+        env.events().publish(
+            (Symbol::new(&env, "proposal_created"),),
+            ProposalCreatedEvent {
+                id,
+                proposer,
+                to,
+                token,
+                amount,
+                expires_at,
+            },
+        );
+
+        id
+    }
+
     /// Member-only: approve a pending withdraw proposal. Each member may vote at
     /// most once per proposal. When the running approval count reaches the
     /// configured `threshold` the proposal transitions to `Passed` (approved)
@@ -313,6 +389,44 @@ impl GroupTreasuryContract {
             .expect("proposal not found")
     }
 
+    /// Returns a list of all proposals
+    pub fn list_proposals(env: Env) -> Vec<WithdrawProposal> {
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProposalCount)
+            .unwrap_or(0);
+        let mut proposals: Vec<WithdrawProposal> = Vec::new(&env);
+        for id in 1..=count {
+            if let Some(proposal) = env.storage().instance().get(&DataKey::Proposal(id)) {
+                proposals.push_back(proposal);
+            }
+        }
+        proposals
+    }
+
+    /// Returns a list of pending proposals
+    pub fn get_pending_proposals(env: Env) -> Vec<WithdrawProposal> {
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProposalCount)
+            .unwrap_or(0);
+        let mut proposals: Vec<WithdrawProposal> = Vec::new(&env);
+        for id in 1..=count {
+            if let Some(proposal) = env
+                .storage()
+                .instance()
+                .get::<_, WithdrawProposal>(&DataKey::Proposal(id))
+            {
+                if proposal.status == ProposalStatus::Active {
+                    proposals.push_back(proposal);
+                }
+            }
+        }
+        proposals
+    }
+
     /// Shared validation for voting: authenticates the voter, confirms
     /// membership, loads the proposal, and ensures it is pending, not expired,
     /// and not already voted on by this address. Returns the loaded proposal.
@@ -332,7 +446,9 @@ impl GroupTreasuryContract {
         if proposal.status != ProposalStatus::Active {
             panic!("proposal is not pending");
         }
-        if env.ledger().timestamp() >= proposal.expires_at {
+        if proposal.status == ProposalStatus::Expired
+            || env.ledger().timestamp() >= proposal.expires_at
+        {
             panic!("proposal expired");
         }
         if env

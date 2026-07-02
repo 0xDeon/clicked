@@ -1,8 +1,8 @@
-"use client";
+'use client';
 
-import { createContext, useContext } from "react";
+import { createContext, useContext } from 'react';
 
-type ToastVariant = "success" | "error" | "info";
+type ToastVariant = 'success' | 'error' | 'info';
 
 export type ToastOptions = {
   message: string;
@@ -24,7 +24,7 @@ export function useToast() {
   const context = useContext(ToastContext);
 
   if (!context) {
-    throw new Error("useToast must be used inside ToastProvider");
+    throw new Error('useToast must be used inside ToastProvider');
   }
 
   return context;

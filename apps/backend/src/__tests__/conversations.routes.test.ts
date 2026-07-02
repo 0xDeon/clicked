@@ -54,10 +54,11 @@ vi.mock('../db/schema.js', () => ({
     id: 'id',
     conversationId: 'conversationId',
     senderId: 'senderId',
-    content: 'content',
+    ciphertext: 'ciphertext',
     createdAt: 'createdAt',
     deletedAt: 'deletedAt',
   },
+  messageEnvelopes: { recipientDeviceId: 'recipientDeviceId' },
   tokenTransfers: {},
 }));
 
@@ -73,7 +74,10 @@ vi.mock('drizzle-orm', () => ({
 
 vi.mock('../middleware/auth.js', () => ({
   requireAuth: (req: express.Request, _res: express.Response, next: express.NextFunction) => {
-    (req as express.Request & { auth: { userId: string } }).auth = { userId: 'user-1' };
+    (req as express.Request & { auth: { userId: string; deviceId: string } }).auth = {
+      userId: 'user-1',
+      deviceId: 'device-1',
+    };
     next();
   },
 }));
@@ -138,7 +142,7 @@ describe('GET /conversations/:id', () => {
           id: 'msg-1',
           conversationId: 'conv-1',
           senderId: 'user-1',
-          content: 'hello',
+          ciphertext: 'hello',
           deletedAt: null,
           sender: {
             id: 'user-1',
@@ -157,7 +161,7 @@ describe('GET /conversations/:id', () => {
     expect(res.status).toBe(200);
     expect(res.body.id).toBe('conv-1');
     expect(res.body.messages).toHaveLength(1);
-    expect(res.body.messages[0].content).toBe('hello');
+    expect(res.body.messages[0].ciphertext).toBe('hello');
   });
 });
 

@@ -2,10 +2,11 @@ import { createHash } from 'node:crypto';
 import { Router, type Router as RouterType } from 'express';
 import { eq, and, or, ilike, exists, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { users, wallets, devices } from '../db/schema.js';
+import { users, wallets, devices, conversationMembers } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { redis } from '../lib/redis.js';
-import { isOnline } from '../services/presence.js';
+import { isOnline, deriveDevicePresence } from '../services/presence.js';
+import { getSocketServer } from '../lib/socket.js';
 
 export const usersRouter: RouterType = Router();
 
@@ -70,6 +71,7 @@ usersRouter.get('/me', async (req: AuthRequest, res) => {
         id: true,
         username: true,
         avatarUrl: true,
+        presenceVisible: true,
         createdAt: true,
       },
       with: {
@@ -91,6 +93,7 @@ usersRouter.get('/me', async (req: AuthRequest, res) => {
       id: user.id,
       username: user.username,
       avatarUrl: user.avatarUrl,
+      presenceVisible: user.presenceVisible,
       wallets: user.wallets.map((w) => ({
         address: w.address,
         isPrimary: w.isPrimary,
@@ -144,12 +147,41 @@ usersRouter.get('/:id', async (req: AuthRequest, res) => {
 
 usersRouter.get('/:id/presence', async (req: AuthRequest, res) => {
   const id = req.params['id'] as string;
-  if (!redis) {
-    res.json({ online: false });
-    return;
+  try {
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, id),
+      columns: { presenceVisible: true },
+    });
+
+    if (!user) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
+    if (!user.presenceVisible) {
+      res.json({ online: 'unknown' });
+      return;
+    }
+
+    // Check Redis for active WS connections first.
+    if (redis) {
+      const online = await isOnline(redis, id);
+      if (online) {
+        res.json({ online: true });
+        return;
+      }
+    }
+
+    // Fall back to device-based presence from user_devices.lastSeenAt.
+    try {
+      const { online, lastSeen } = await deriveDevicePresence(id);
+      res.json({ online, ...(lastSeen ? { lastSeen } : {}) });
+    } catch {
+      res.json({ online: false });
+    }
+  } catch {
+    res.status(404).json({ error: 'User not found' });
   }
-  const online = await isOnline(redis, id);
-  res.json({ online });
 });
 
 /**
@@ -252,12 +284,20 @@ usersRouter.get('/:id/key-fingerprint', async (req: AuthRequest, res) => {
 
 usersRouter.patch('/me', async (req: AuthRequest, res) => {
   const userId = req.auth!.userId;
-  const { username, avatarUrl } = req.body;
+  const { username, avatarUrl, presenceVisible } = req.body;
 
   const updateData: Partial<typeof users.$inferInsert> = {};
 
   if (avatarUrl !== undefined) {
     updateData.avatarUrl = avatarUrl;
+  }
+
+  if (presenceVisible !== undefined) {
+    if (typeof presenceVisible !== 'boolean') {
+      res.status(400).json({ error: 'presenceVisible must be a boolean' });
+      return;
+    }
+    updateData.presenceVisible = presenceVisible;
   }
 
   if (username !== undefined) {
@@ -283,6 +323,11 @@ usersRouter.patch('/me', async (req: AuthRequest, res) => {
   updateData.updatedAt = new Date();
 
   try {
+    const oldUser = await db.query.users.findFirst({
+      where: eq(users.id, userId),
+      columns: { presenceVisible: true },
+    });
+
     const [updatedUser] = await db
       .update(users)
       .set(updateData)
@@ -292,6 +337,28 @@ usersRouter.patch('/me', async (req: AuthRequest, res) => {
     if (!updatedUser) {
       res.status(404).json({ error: 'User not found' });
       return;
+    }
+
+    if (presenceVisible !== undefined && oldUser && presenceVisible !== oldUser.presenceVisible) {
+      const io = getSocketServer();
+      if (io && redis) {
+        const memberships = await db.query.conversationMembers.findMany({
+          where: eq(conversationMembers.userId, userId),
+          columns: { conversationId: true },
+        });
+        const online = await isOnline(redis, userId);
+        if (online) {
+          for (const m of memberships) {
+            if (presenceVisible) {
+              io.to(m.conversationId).emit('user_online', { userId });
+              io.to(m.conversationId).emit('presence_update', { userId, online: true });
+            } else {
+              io.to(m.conversationId).emit('user_offline', { userId });
+              io.to(m.conversationId).emit('presence_update', { userId, online: false });
+            }
+          }
+        }
+      }
     }
 
     res.json(updatedUser);

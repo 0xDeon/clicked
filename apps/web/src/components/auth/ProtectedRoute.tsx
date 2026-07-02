@@ -1,11 +1,11 @@
-"use client";
+'use client';
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
-import { useAuth } from "./useAuth";
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAuth } from './useAuth';
 
 type ProtectedRouteProps = {
-  mode: "authenticated" | "unauthenticated";
+  mode: 'authenticated' | 'unauthenticated';
   children: React.ReactNode;
 };
 
@@ -18,13 +18,13 @@ export function ProtectedRoute({ mode, children }: ProtectedRouteProps) {
       return;
     }
 
-    if (mode === "authenticated" && !token) {
-      router.replace("/");
+    if (mode === 'authenticated' && !token) {
+      router.replace('/');
       return;
     }
 
-    if (mode === "unauthenticated" && token) {
-      router.replace("/app");
+    if (mode === 'unauthenticated' && token) {
+      router.replace('/app');
     }
   }, [loading, mode, router, token]);
 
@@ -32,11 +32,11 @@ export function ProtectedRoute({ mode, children }: ProtectedRouteProps) {
     return null;
   }
 
-  if (mode === "authenticated" && !token) {
+  if (mode === 'authenticated' && !token) {
     return null;
   }
 
-  if (mode === "unauthenticated" && token) {
+  if (mode === 'unauthenticated' && token) {
     return null;
   }
 

@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "presence_visible" boolean DEFAULT true NOT NULL;

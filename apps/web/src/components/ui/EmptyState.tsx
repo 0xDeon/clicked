@@ -1,6 +1,6 @@
-"use client";
+'use client';
 
-import React from "react";
+import React from 'react';
 
 export interface EmptyStateProps {
   icon: string;
@@ -32,4 +32,3 @@ export function EmptyState({ icon, title, description, action }: EmptyStateProps
     </div>
   );
 }
-

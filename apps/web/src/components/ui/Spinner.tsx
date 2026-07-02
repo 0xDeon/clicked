@@ -1,6 +1,6 @@
-import React from "react";
+import React from 'react';
 
-export type SpinnerSize = "sm" | "md" | "lg";
+export type SpinnerSize = 'sm' | 'md' | 'lg';
 
 export interface SpinnerProps {
   size?: SpinnerSize;
@@ -18,16 +18,16 @@ const SIZE_MAP: Record<SpinnerSize, { px: number; borderPx: number }> = {
   lg: { px: 32, borderPx: 4 },
 };
 
-export function Spinner({ size = "md", label, className }: SpinnerProps) {
+export function Spinner({ size = 'md', label, className }: SpinnerProps) {
   const { px, borderPx } = SIZE_MAP[size];
 
   return (
     <>
       <span
-        role={label ? "status" : undefined}
+        role={label ? 'status' : undefined}
         aria-label={label}
         aria-hidden={label ? undefined : true}
-        className={`clicked-spinner inline-block align-middle ${className ?? ""}`}
+        className={`clicked-spinner inline-block align-middle ${className ?? ''}`}
         style={{
           width: px,
           height: px,
@@ -63,4 +63,3 @@ export function Spinner({ size = "md", label, className }: SpinnerProps) {
     </>
   );
 }
-

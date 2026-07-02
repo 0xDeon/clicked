@@ -1,7 +1,7 @@
-"use client";
+'use client';
 
-import { PropsWithChildren, useCallback, useMemo, useState } from "react";
-import { ToastContext, type ToastOptions, type ToastVariant } from "@/lib/useToast";
+import { PropsWithChildren, useCallback, useMemo, useState } from 'react';
+import { ToastContext, type ToastOptions, type ToastVariant } from '@/lib/useToast';
 
 type ToastItem = {
   id: string;
@@ -11,18 +11,24 @@ type ToastItem = {
 };
 
 const variantStyles: Record<ToastVariant, string> = {
-  success: "border-emerald-500 bg-emerald-950 text-emerald-100 shadow-emerald-500/20",
-  error: "border-rose-500 bg-rose-950 text-rose-100 shadow-rose-500/20",
-  info: "border-sky-500 bg-sky-950 text-sky-100 shadow-sky-500/20",
+  success: 'border-emerald-500 bg-emerald-950 text-emerald-100 shadow-emerald-500/20',
+  error: 'border-rose-500 bg-rose-950 text-rose-100 shadow-rose-500/20',
+  info: 'border-sky-500 bg-sky-950 text-sky-100 shadow-sky-500/20',
 };
 
 const variantIcons: Record<ToastVariant, string> = {
-  success: "✓",
-  error: "⚠",
-  info: "ℹ",
+  success: '✓',
+  error: '⚠',
+  info: 'ℹ',
 };
 
-function ToastContainer({ toasts, onDismiss }: { toasts: ToastItem[]; onDismiss: (id: string) => void }) {
+function ToastContainer({
+  toasts,
+  onDismiss,
+}: {
+  toasts: ToastItem[];
+  onDismiss: (id: string) => void;
+}) {
   return (
     <div className="fixed bottom-6 right-6 z-50 flex w-full max-w-sm flex-col gap-3 px-4 sm:px-0">
       {toasts.map((toast) => (
@@ -59,12 +65,15 @@ export function ToastProvider({ children }: PropsWithChildren) {
   }, []);
 
   const notify = useCallback((options: ToastOptions) => {
-    const id = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}`;
+    const id =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}`;
     const toast: ToastItem = {
       id,
       title: options.title,
       message: options.message,
-      variant: options.variant ?? "info",
+      variant: options.variant ?? 'info',
     };
 
     setToasts((current) => [...current, toast]);
@@ -78,11 +87,11 @@ export function ToastProvider({ children }: PropsWithChildren) {
     () => ({
       notify,
       dismiss,
-      success: (message: string, title?: string) => notify({ message, title, variant: "success" }),
-      error: (message: string, title?: string) => notify({ message, title, variant: "error" }),
-      info: (message: string, title?: string) => notify({ message, title, variant: "info" }),
+      success: (message: string, title?: string) => notify({ message, title, variant: 'success' }),
+      error: (message: string, title?: string) => notify({ message, title, variant: 'error' }),
+      info: (message: string, title?: string) => notify({ message, title, variant: 'info' }),
     }),
-    [notify, dismiss]
+    [notify, dismiss],
   );
 
   return (

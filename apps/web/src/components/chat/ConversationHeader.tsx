@@ -1,7 +1,7 @@
-"use client";
+'use client';
 
-import { useRef, useState } from "react";
-import { Avatar } from "@/components/ui/Avatar";
+import { useRef, useState } from 'react';
+import { Avatar } from '@/components/ui/Avatar';
 
 interface Member {
   user?: {
@@ -14,7 +14,7 @@ interface Member {
 
 interface ConversationHeaderProps {
   conversationId: string;
-  type: "dm" | "group";
+  type: 'dm' | 'group';
   name?: string | null;
   members?: Member[];
   /** Current user's wallet address — used to find the DM peer */
@@ -30,7 +30,7 @@ function peerLabel(members: Member[], currentWalletAddress?: string): string {
   const peer = members
     .flatMap((m) => m.user?.wallets ?? [])
     .find((w) => w.address && w.address !== currentWalletAddress);
-  return peer?.address ?? "Direct message";
+  return peer?.address ?? 'Direct message';
 }
 
 function peerAvatarUrl(members: Member[], currentWalletAddress?: string): string | null {
@@ -57,11 +57,9 @@ export function ConversationHeader({
   const menuRef = useRef<HTMLDivElement>(null);
 
   const title =
-    type === "group"
-      ? (name ?? "Group conversation")
-      : peerLabel(members, currentWalletAddress);
+    type === 'group' ? (name ?? 'Group conversation') : peerLabel(members, currentWalletAddress);
 
-  const avatarUrl = type === "dm" ? peerAvatarUrl(members, currentWalletAddress) : null;
+  const avatarUrl = type === 'dm' ? peerAvatarUrl(members, currentWalletAddress) : null;
 
   // Derive online status: not tracked server-side yet, placeholder false
   const isOnline = false;
@@ -83,14 +81,14 @@ export function ConversationHeader({
     <header className="flex items-center justify-between border-b border-[var(--border)] bg-[var(--card)]/60 px-4 py-3">
       <div className="flex items-center gap-3">
         {/* Avatar (DM only) */}
-        {type === "dm" && (
+        {type === 'dm' && (
           <div className="relative shrink-0">
             <Avatar src={avatarUrl ?? undefined} fallback={title} size="md" />
             {/* Online status dot */}
             <span
-              aria-label={isOnline ? "Online" : "Offline"}
+              aria-label={isOnline ? 'Online' : 'Offline'}
               className={`absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-white ${
-                isOnline ? "bg-green-500" : "bg-gray-400"
+                isOnline ? 'bg-green-500' : 'bg-gray-400'
               }`}
             />
           </div>
@@ -98,9 +96,9 @@ export function ConversationHeader({
 
         <div>
           <h1 className="text-sm font-semibold leading-tight">{title}</h1>
-          {type === "group" && (
+          {type === 'group' && (
             <p className="text-xs text-[var(--foreground)]/45">
-              {members.length} member{members.length !== 1 ? "s" : ""}
+              {members.length} member{members.length !== 1 ? 's' : ''}
             </p>
           )}
         </div>
@@ -126,7 +124,10 @@ export function ConversationHeader({
           <div className="absolute right-0 top-full z-20 mt-1 w-44 rounded-xl border border-[var(--border)] bg-[var(--card)] py-1 shadow-lg">
             <button
               type="button"
-              onClick={() => { setMenuOpen(false); onViewMembers(); }}
+              onClick={() => {
+                setMenuOpen(false);
+                onViewMembers();
+              }}
               className="w-full px-4 py-2 text-left text-sm hover:bg-[var(--background)]/60"
             >
               View members
@@ -136,11 +137,14 @@ export function ConversationHeader({
               onClick={() => void handleMuteToggle()}
               className="w-full px-4 py-2 text-left text-sm hover:bg-[var(--background)]/60"
             >
-              {muted ? "Unmute" : "Mute"}
+              {muted ? 'Unmute' : 'Mute'}
             </button>
             <button
               type="button"
-              onClick={() => { setMenuOpen(false); setConfirmLeave(true); }}
+              onClick={() => {
+                setMenuOpen(false);
+                setConfirmLeave(true);
+              }}
               className="w-full px-4 py-2 text-left text-sm text-red-500 hover:bg-[var(--background)]/60"
             >
               Leave conversation

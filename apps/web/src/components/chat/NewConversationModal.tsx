@@ -1,9 +1,9 @@
-"use client";
+'use client';
 
-import { useEffect, useState } from "react";
-import { EmptyState } from "@/components/ui/EmptyState";
+import { useEffect, useState } from 'react';
+import { EmptyState } from '@/components/ui/EmptyState';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 const MAX_QUERY_LENGTH = 120;
 
 type SearchUser = {
@@ -27,14 +27,14 @@ export function NewConversationModal({
   onClose,
   onSelectUser,
 }: NewConversationModalProps) {
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchUser[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) {
-      setQuery("");
+      setQuery('');
       setResults([]);
       setError(null);
       setLoading(false);
@@ -57,18 +57,18 @@ export function NewConversationModal({
     const timeout = window.setTimeout(async () => {
       try {
         const response = await fetch(`${API_URL}/users/search?q=${encodeURIComponent(safeQuery)}`, {
-          headers: { Authorization: "Bearer " + token },
+          headers: { Authorization: 'Bearer ' + token },
         });
 
         if (!response.ok) {
-          throw new Error("Failed to search users");
+          throw new Error('Failed to search users');
         }
 
         const payload = (await response.json()) as SearchUser[];
         setResults(payload);
       } catch (searchError) {
         setResults([]);
-        setError(searchError instanceof Error ? searchError.message : "Failed to search users");
+        setError(searchError instanceof Error ? searchError.message : 'Failed to search users');
       } finally {
         setLoading(false);
       }

@@ -18,9 +18,8 @@ export const WalletAddress: React.FC<WalletAddressProps> = ({
   };
 
   const getStellarExpertUrl = (addr: string, net: 'testnet' | 'mainnet'): string => {
-    const baseUrl = net === 'testnet' 
-      ? 'https://testnet.expert.stellar.org'
-      : 'https://expert.stellar.org';
+    const baseUrl =
+      net === 'testnet' ? 'https://testnet.expert.stellar.org' : 'https://expert.stellar.org';
     return `${baseUrl}/accounts/${addr}`;
   };
 

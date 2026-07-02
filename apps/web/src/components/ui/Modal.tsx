@@ -1,16 +1,16 @@
-"use client";
+'use client';
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 
 const FOCUSABLE = [
-  "a[href]",
-  "button:not([disabled])",
-  "input:not([disabled])",
-  "textarea:not([disabled])",
-  "select:not([disabled])",
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'textarea:not([disabled])',
+  'select:not([disabled])',
   '[tabindex]:not([tabindex="-1"])',
-].join(", ");
+].join(', ');
 
 interface ModalProps {
   isOpen: boolean;
@@ -20,15 +20,15 @@ interface ModalProps {
 }
 
 export function Modal({ isOpen, onClose, title, children }: ModalProps) {
-  const [visible, setVisible] = useState<"closed" | "open" | "closing">("closed");
+  const [visible, setVisible] = useState<'closed' | 'open' | 'closing'>('closed');
   const contentRef = useRef<HTMLDivElement>(null);
   const prevFocus = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!isOpen) {
-      if (visible === "open") {
+      if (visible === 'open') {
         const frame = window.requestAnimationFrame(() => {
-          setVisible("closing");
+          setVisible('closing');
         });
         return () => window.cancelAnimationFrame(frame);
       }
@@ -38,16 +38,16 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
 
     prevFocus.current = document.activeElement as HTMLElement;
     const frame = window.requestAnimationFrame(() => {
-      setVisible("open");
+      setVisible('open');
     });
 
     return () => window.cancelAnimationFrame(frame);
   }, [isOpen, visible]);
 
   useEffect(() => {
-    if (visible !== "closing") return;
+    if (visible !== 'closing') return;
     const timer = setTimeout(() => {
-      setVisible("closed");
+      setVisible('closed');
       prevFocus.current?.focus();
     }, 150);
     return () => clearTimeout(timer);
@@ -55,12 +55,12 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
+      if (e.key === 'Escape') {
         onClose();
         return;
       }
 
-      if (e.key === "Tab" && contentRef.current) {
+      if (e.key === 'Tab' && contentRef.current) {
         const focusable = contentRef.current.querySelectorAll<HTMLElement>(FOCUSABLE);
         if (focusable.length === 0) return;
 
@@ -80,7 +80,7 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
   );
 
   useEffect(() => {
-    if (visible !== "open") return;
+    if (visible !== 'open') return;
 
     const content = contentRef.current;
     if (content) {
@@ -88,20 +88,20 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
       first?.focus();
     }
 
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
   }, [visible, handleKeyDown]);
 
   useEffect(() => {
-    if (visible === "open") {
-      document.body.style.overflow = "hidden";
+    if (visible === 'open') {
+      document.body.style.overflow = 'hidden';
     }
     return () => {
-      document.body.style.overflow = "";
+      document.body.style.overflow = '';
     };
   }, [visible]);
 
-  if (visible === "closed") return null;
+  if (visible === 'closed') return null;
 
   return createPortal(
     <div
@@ -112,7 +112,7 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
     >
       <div
         className={`absolute inset-0 bg-[#020617]/70 transition-opacity duration-150 ${
-          visible === "open" ? "opacity-100" : "opacity-0"
+          visible === 'open' ? 'opacity-100' : 'opacity-0'
         }`}
         onClick={onClose}
       />
@@ -120,7 +120,7 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
         ref={contentRef}
         tabIndex={-1}
         className={`relative w-full max-w-lg rounded-2xl border border-white/15 bg-[#0F172A] p-5 text-white shadow-2xl outline-none transition-all duration-150 ${
-          visible === "open" ? "scale-100 opacity-100" : "scale-95 opacity-0"
+          visible === 'open' ? 'scale-100 opacity-100' : 'scale-95 opacity-0'
         }`}
       >
         <div className="mb-4 flex items-center justify-between">

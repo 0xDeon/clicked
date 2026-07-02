@@ -173,42 +173,27 @@ async function defaultPersistTreasuryEvent(event: TreasuryProposalEvent): Promis
   const newStatus = statusMap[event.eventType];
 
   const [row] = await db
-    .insert(treasuryProposals)
-    .values({
-      contractId: event.contractId,
-      proposalId: event.proposalId,
+    .update(treasuryProposals)
+    .set({
       status: newStatus,
-      approvalsCount: event.approvalsCount ?? 0,
-      rejectionsCount: event.rejectionsCount ?? 0,
+      approvalsCount: event.approvalsCount !== undefined ? event.approvalsCount : undefined,
+      rejectionsCount: event.rejectionsCount !== undefined ? event.rejectionsCount : undefined,
+      updatedAt: sql`now()`,
     })
-    .onConflictDoUpdate({
-      target: [treasuryProposals.contractId, treasuryProposals.proposalId],
-      set: {
-        status: newStatus,
-        approvalsCount:
-          event.approvalsCount !== undefined
-            ? event.approvalsCount
-            : sql`${treasuryProposals.approvalsCount}`,
-        rejectionsCount:
-          event.rejectionsCount !== undefined
-            ? event.rejectionsCount
-            : sql`${treasuryProposals.rejectionsCount}`,
-        updatedAt: sql`now()`,
-      },
-    })
+    .where(eq(treasuryProposals.onChainId, Number(event.proposalId)))
     .returning();
 
   if (!row) return;
 
   const payload = {
-    proposalId: row.proposalId,
+    proposalId: row.onChainId,
     status: row.status,
     approvalsCount: row.approvalsCount,
     rejectionsCount: row.rejectionsCount,
   };
 
-  // Emit to the linked conversation room if known; fall back to a contract-scoped room.
-  const room = row.conversationId ?? `treasury:${row.contractId}`;
+  // Emit to the linked conversation room if known.
+  const room = row.conversationId;
   getSocketServer()?.to(room).emit('treasury_proposal_updated', payload);
 }
 

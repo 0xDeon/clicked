@@ -1,6 +1,6 @@
-import React from "react";
+import React from 'react';
 
-export type SkeletonVariant = "text" | "avatar" | "card";
+export type SkeletonVariant = 'text' | 'avatar' | 'card';
 
 export interface SkeletonLoaderProps {
   variant: SkeletonVariant;
@@ -12,7 +12,7 @@ export interface SkeletonLoaderProps {
 }
 
 function clampCount(value: number | undefined) {
-  const n = typeof value === "number" ? value : 2;
+  const n = typeof value === 'number' ? value : 2;
   return Math.max(1, Math.min(3, n));
 }
 
@@ -21,7 +21,7 @@ export function SkeletonLoader({ variant, count }: SkeletonLoaderProps) {
 
   return (
     <>
-      {variant === "text" ? (
+      {variant === 'text' ? (
         <div className="flex w-full flex-col gap-2">
           {Array.from({ length: safeCount }).map((_, idx) => {
             const widths = [100, 85, 70] as const;
@@ -37,14 +37,14 @@ export function SkeletonLoader({ variant, count }: SkeletonLoaderProps) {
         </div>
       ) : null}
 
-      {variant === "avatar" ? (
+      {variant === 'avatar' ? (
         <div
           className="clicked-skeleton-pulse h-10 w-10 rounded-full bg-[var(--muted)]/60"
           aria-hidden="true"
         />
       ) : null}
 
-      {variant === "card" ? (
+      {variant === 'card' ? (
         <div className="clicked-skeleton-pulse flex flex-col gap-3 rounded-2xl border border-[var(--border)] bg-[var(--card)]/30 p-4">
           <div className="flex items-center gap-3">
             <div className="h-9 w-9 rounded-full bg-[var(--muted)]/60" />
@@ -85,4 +85,3 @@ export function SkeletonLoader({ variant, count }: SkeletonLoaderProps) {
     </>
   );
 }
-

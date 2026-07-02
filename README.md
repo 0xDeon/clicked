@@ -10,12 +10,12 @@ Built on blockchain infrastructure and modern messaging protocols, the platform 
 
 ## ✨ Core Capabilities
 
-* 💬 Real-time wallet-to-wallet messaging
-* 💸 Send and receive tokens directly in chat
-* 👥 Group treasuries for shared funds
-* 🧾 Proposal creation and community funding
-* 🗳️ Lightweight DAO-style voting
-* 🤖 AI-powered insights (fraud detection, proposal analysis, smart assistants)
+- 💬 Real-time wallet-to-wallet messaging
+- 💸 Send and receive tokens directly in chat
+- 👥 Group treasuries for shared funds
+- 🧾 Proposal creation and community funding
+- 🗳️ Lightweight DAO-style voting
+- 🤖 AI-powered insights (fraud detection, proposal analysis, smart assistants)
 
 ---
 
@@ -29,50 +29,49 @@ To create a **financial coordination layer for communities**, where communicatio
 
 ## 🖥️ Frontend
 
-* Next.js (React + TypeScript)
-* TailwindCSS
-
+- Next.js (React + TypeScript)
+- TailwindCSS
 
 ---
 
 ## ⚙️ Backend
 
-* Node.js (Express)
-* WebSockets (Socket.IO)
-* PostgreSQL (persistent storage)
-* Redis (pub/sub, caching)
+- Node.js (Express)
+- WebSockets (Socket.IO)
+- PostgreSQL (persistent storage)
+- Redis (pub/sub, caching)
 
 ---
 
 ## 🔗 Blockchain
 
-* Smart Contracts (Soroban)
-* stellar-sdk (interaction layer)
-* Event listeners for syncing on-chain activity
+- Smart Contracts (Soroban)
+- stellar-sdk (interaction layer)
+- Event listeners for syncing on-chain activity
 
 ---
 
 ## 🤖 AI Layer
 
-* Python (FastAPI)
-* LLM APIs 
-* Vector DB (Weaviate)
+- Python (FastAPI)
+- LLM APIs
+- Vector DB (Weaviate)
 
 ---
 
 ## 💬 Messaging Infrastructure
 
-* XMTP (or similar Web3 messaging protocol)
-* Optional WebRTC for peer-to-peer communication
+- XMTP (or similar Web3 messaging protocol)
+- Optional WebRTC for peer-to-peer communication
 
 ---
 
 ## 🧰 Dev Tools
 
-* Turborepo (monorepo management)
-* Docker (containerization)
-* ESLint + Prettier (code quality)
-* Jest / Vitest (testing)
+- Turborepo (monorepo management)
+- Docker (containerization)
+- ESLint + Prettier (code quality)
+- Jest / Vitest (testing)
 
 ---
 
@@ -82,12 +81,11 @@ To create a **financial coordination layer for communities**, where communicatio
 
 Make sure you have installed:
 
-* Node.js (>= 18)
-* pnpm
-* uv (Python Package Manager)
-* Stellar CLI (for Soroban Smart Contracts)
-* Docker (optional but recommended)
-
+- Node.js (>= 18)
+- pnpm
+- uv (Python Package Manager)
+- Stellar CLI (for Soroban Smart Contracts)
+- Docker (optional but recommended)
 
 ---
 
@@ -116,11 +114,13 @@ cp .env.example .env
 ### Start all services
 
 First, start the local database and redis container:
+
 ```bash
 docker compose -f infra/docker-compose.yml up -d
 ```
 
 Then, run the node apps (Web and Backend):
+
 ```bash
 pnpm run dev
 ```
@@ -164,41 +164,44 @@ We welcome contributions from developers, designers, and researchers.
    ```bash
    git checkout -b feature/your-feature-name
    ```
+
 3. Make your changes
 4. Commit your changes
 
    ```bash
    git commit -m "feat: add new feature"
    ```
+
 5. Push to your fork
 
    ```bash
    git push origin feature/your-feature-name
    ```
+
 6. Open a Pull Request
 
 ---
 
 ## 🧭 Contribution Guidelines
 
-* Follow existing code style and structure
-* Write clear and concise commit messages
-* Add tests where necessary
-* Keep PRs small and focused
-* Document new features or changes
+- Follow existing code style and structure
+- Write clear and concise commit messages
+- Add tests where necessary
+- Keep PRs small and focused
+- Document new features or changes
 
 ---
-
 
 ## 💡 Areas to Contribute
 
-* Smart contract development
-* Frontend UX improvements
-* AI agent development
-* Security enhancements
-* Performance optimization
+- Smart contract development
+- Frontend UX improvements
+- AI agent development
+- Security enhancements
+- Performance optimization
 
 ---
+
 # 📜 License
 
 MIT License

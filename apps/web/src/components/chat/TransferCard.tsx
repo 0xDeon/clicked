@@ -1,6 +1,6 @@
-"use client";
+'use client';
 
-import React from "react";
+import React from 'react';
 
 type Props = {
   amount: number;
@@ -8,8 +8,8 @@ type Props = {
   txHash: string;
 };
 
-export default function TransferCard({ amount, token = "TOKEN", txHash }: Props) {
-  const network = process.env.NEXT_PUBLIC_NETWORK || "test";
+export default function TransferCard({ amount, token = 'TOKEN', txHash }: Props) {
+  const network = process.env.NEXT_PUBLIC_NETWORK || 'test';
   const explorer = `https://explorer.stellar.org/tx/${txHash}?network=${network}`;
   return (
     <div className="border rounded-md p-3 bg-yellow-50">

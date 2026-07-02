@@ -1,6 +1,6 @@
-"use client";
+'use client';
 
-import React, { createContext, useContext, useState } from "react";
+import React, { createContext, useContext, useState } from 'react';
 
 type AuthContextType = {
   token: string | null;
@@ -16,20 +16,20 @@ const AuthContext = createContext<AuthContextType>({
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(() => {
-    if (typeof window === "undefined") {
+    if (typeof window === 'undefined') {
       return null;
     }
 
-    const stored = window.localStorage.getItem("auth_token");
+    const stored = window.localStorage.getItem('auth_token');
     return stored || process.env.NEXT_PUBLIC_AUTH_TOKEN || null;
   });
   const [isLoading] = useState(false);
 
   const updateToken = (newToken: string | null) => {
     if (newToken) {
-      window.localStorage.setItem("auth_token", newToken);
+      window.localStorage.setItem('auth_token', newToken);
     } else {
-      window.localStorage.removeItem("auth_token");
+      window.localStorage.removeItem('auth_token');
     }
     setToken(newToken);
   };
@@ -44,7 +44,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 export function useAuth() {
   const context = useContext(AuthContext);
   if (!context) {
-    throw new Error("useAuth must be used within AuthProvider");
+    throw new Error('useAuth must be used within AuthProvider');
   }
   return context;
 }

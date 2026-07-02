@@ -1,19 +1,19 @@
-"use client";
+'use client';
 
-import { useState, type FormEvent } from "react";
-import { Modal } from "@/components/ui/Modal";
-import { apiFetch } from "@/lib/api";
-import { useToast } from "@/lib/useToast";
+import { useState, type FormEvent } from 'react';
+import { Modal } from '@/components/ui/Modal';
+import { apiFetch } from '@/lib/api';
+import { useToast } from '@/lib/useToast';
 
 const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
 
 const TTL_OPTIONS = [
-  { label: "24 hours", value: "24h" },
-  { label: "72 hours", value: "72h" },
-  { label: "7 days", value: "7d" },
+  { label: '24 hours', value: '24h' },
+  { label: '72 hours', value: '72h' },
+  { label: '7 days', value: '7d' },
 ] as const;
 
-type TTL = (typeof TTL_OPTIONS)[number]["value"];
+type TTL = (typeof TTL_OPTIONS)[number]['value'];
 
 interface Props {
   isOpen: boolean;
@@ -24,17 +24,17 @@ interface Props {
 export function ProposeWithdrawalModal({ isOpen, onClose, onSuccess }: Props) {
   const { success, error: toastError } = useToast();
 
-  const [amount, setAmount] = useState("");
-  const [token, setToken] = useState("XLM");
-  const [recipient, setRecipient] = useState("");
-  const [ttl, setTtl] = useState<TTL>("24h");
-  const [recipientError, setRecipientError] = useState("");
+  const [amount, setAmount] = useState('');
+  const [token, setToken] = useState('XLM');
+  const [recipient, setRecipient] = useState('');
+  const [ttl, setTtl] = useState<TTL>('24h');
+  const [recipientError, setRecipientError] = useState('');
   const [loading, setLoading] = useState(false);
 
   function validateRecipient(value: string): string {
-    if (!value) return "Recipient address is required";
-    if (!STELLAR_ADDRESS_RE.test(value)) return "Must be a valid Stellar address (G...)";
-    return "";
+    if (!value) return 'Recipient address is required';
+    if (!STELLAR_ADDRESS_RE.test(value)) return 'Must be a valid Stellar address (G...)';
+    return '';
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -51,29 +51,30 @@ export function ProposeWithdrawalModal({ isOpen, onClose, onSuccess }: Props) {
 
     setLoading(true);
     try {
-      const token_stored = typeof window !== "undefined" ? window.localStorage.getItem("clicked.jwt") : null;
-      const res = await apiFetch("/treasury/propose", {
-        method: "POST",
+      const token_stored =
+        typeof window !== 'undefined' ? window.localStorage.getItem('clicked.jwt') : null;
+      const res = await apiFetch('/treasury/propose', {
+        method: 'POST',
         body: JSON.stringify({ amount: parsedAmount, token, recipient, ttl }),
         headers: token_stored ? { Authorization: `Bearer ${token_stored}` } : {},
       });
 
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
-        toastError(body.error ?? "Failed to submit proposal");
+        toastError(body.error ?? 'Failed to submit proposal');
         return;
       }
 
-      success("Withdrawal proposal submitted successfully");
+      success('Withdrawal proposal submitted successfully');
       onSuccess();
       onClose();
       // Reset
-      setAmount("");
-      setToken("XLM");
-      setRecipient("");
-      setTtl("24h");
+      setAmount('');
+      setToken('XLM');
+      setRecipient('');
+      setTtl('24h');
     } catch {
-      toastError("Network error — please try again");
+      toastError('Network error — please try again');
     } finally {
       setLoading(false);
     }
@@ -134,12 +135,10 @@ export function ProposeWithdrawalModal({ isOpen, onClose, onSuccess }: Props) {
             onBlur={() => setRecipientError(validateRecipient(recipient))}
             placeholder="G..."
             className={`w-full rounded-lg bg-white/5 border px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-accent ${
-              recipientError ? "border-rose-500" : "border-white/10"
+              recipientError ? 'border-rose-500' : 'border-white/10'
             }`}
           />
-          {recipientError && (
-            <p className="mt-1 text-xs text-rose-400">{recipientError}</p>
-          )}
+          {recipientError && <p className="mt-1 text-xs text-rose-400">{recipientError}</p>}
         </div>
 
         {/* TTL */}
@@ -166,7 +165,7 @@ export function ProposeWithdrawalModal({ isOpen, onClose, onSuccess }: Props) {
           disabled={loading}
           className="w-full rounded-xl bg-accent py-2.5 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {loading ? "Submitting…" : "Submit Proposal"}
+          {loading ? 'Submitting…' : 'Submit Proposal'}
         </button>
       </form>
     </Modal>

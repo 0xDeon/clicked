@@ -1,10 +1,10 @@
 """Unit tests for POST /proposals/summarise (issue #147)."""
 
 import json
-import pytest
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
+
 from main import app
 
 client = TestClient(app)
