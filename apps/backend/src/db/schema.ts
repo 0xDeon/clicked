@@ -7,6 +7,7 @@ import {
   pgEnum,
   index,
   integer,
+  bigint,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
@@ -230,6 +231,29 @@ export const treasuryProposals = pgTable(
 export type TreasuryProposal = typeof treasuryProposals.$inferSelect;
 export type NewTreasuryProposal = typeof treasuryProposals.$inferInsert;
 
+// ─── Files (#225) ─────────────────────────────────────────────────────────────
+//
+// Encrypted blob metadata. The actual ciphertext is stored at `storagePath`;
+// the key material lives *only* inside the E2EE message envelope and is never
+// persisted in the database. `sha256` is over the ciphertext (not plaintext)
+// so the server can verify integrity without knowing the contents.
+
+export const fileContentTypeEnum = pgEnum('file_content_type', ['file', 'image', 'video', 'audio']);
+
+export const files = pgTable('files', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  ownerId: uuid('owner_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  storagePath: text('storage_path').notNull(),
+  size: bigint('size', { mode: 'bigint' }).notNull(),
+  mimeType: text('mime_type').notNull(),
+  sha256: text('sha256').notNull(),
+  contentType: fileContentTypeEnum('content_type').notNull().default('file'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  deletedAt: timestamp('deleted_at'),
+});
+
 // ─── Relations ────────────────────────────────────────────────────────────────
 
 export const usersRelations = relations(users, ({ many }) => ({
@@ -238,6 +262,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   messages: many(messages),
   transfers: many(tokenTransfers),
   devices: many(devices),
+  files: many(files),
 }));
 
 export const walletsRelations = relations(wallets, ({ one }) => ({
@@ -292,6 +317,10 @@ export const oneTimePreKeysRelations = relations(oneTimePreKeys, ({ one }) => ({
   device: one(devices, { fields: [oneTimePreKeys.deviceId], references: [devices.id] }),
 }));
 
+export const filesRelations = relations(files, ({ one }) => ({
+  owner: one(users, { fields: [files.ownerId], references: [users.id] }),
+}));
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type User = typeof users.$inferSelect;
@@ -311,3 +340,5 @@ export type SignedPreKey = typeof signedPreKeys.$inferSelect;
 export type NewSignedPreKey = typeof signedPreKeys.$inferInsert;
 export type OneTimePreKey = typeof oneTimePreKeys.$inferSelect;
 export type NewOneTimePreKey = typeof oneTimePreKeys.$inferInsert;
+export type File = typeof files.$inferSelect;
+export type NewFile = typeof files.$inferInsert;
