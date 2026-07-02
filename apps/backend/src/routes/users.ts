@@ -7,6 +7,7 @@ import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { redis } from '../lib/redis.js';
 import { isOnline, deriveDevicePresence } from '../services/presence.js';
 import { getSocketServer } from '../lib/socket.js';
+import { conversationRoom } from '../services/roomManager.js';
 
 export const usersRouter: RouterType = Router();
 
@@ -350,9 +351,15 @@ usersRouter.patch('/me', async (req: AuthRequest, res) => {
         if (online) {
           for (const m of memberships) {
             if (presenceVisible) {
+              io.to(conversationRoom(m.conversationId)).emit('user_online', { userId });
+              io.to(conversationRoom(m.conversationId)).emit('presence_update', { userId, online: true });
+              // Also emit to direct conversation room for backward compatibility
               io.to(m.conversationId).emit('user_online', { userId });
               io.to(m.conversationId).emit('presence_update', { userId, online: true });
             } else {
+              io.to(conversationRoom(m.conversationId)).emit('user_offline', { userId });
+              io.to(conversationRoom(m.conversationId)).emit('presence_update', { userId, online: false });
+              // Also emit to direct conversation room for backward compatibility
               io.to(m.conversationId).emit('user_offline', { userId });
               io.to(m.conversationId).emit('presence_update', { userId, online: false });
             }

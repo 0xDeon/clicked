@@ -3,19 +3,15 @@ import { Server } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { createClient } from 'redis';
 import dotenv from 'dotenv';
-import { eq, isNull, and } from 'drizzle-orm';
+import { eq, isNull, and, inArray } from 'drizzle-orm';
 import { db } from './db/index.js';
 import { conversationMembers, users, userDevices } from './db/schema.js';
-import { eq, inArray } from 'drizzle-orm';
-import { db } from './db/index.js';
-import { conversationMembers, users } from './db/schema.js';
 import { publishEphemeral } from './services/resumeStream.js';
 import { socketAuthMiddleware, type AuthSocket } from './middleware/socketAuth.js';
 import { registerMessagingHandlers } from './socket/messaging.js';
 import { app } from './app.js';
 import { redis as appRedis } from './lib/redis.js';
 import { setSocketServer } from './lib/socket.js';
-import { setOnline, setOffline, refreshPresence, isOnline, deriveDevicePresence } from './services/presence.js';
 import {
   cleanupStaleSockets,
   reconcileBoot,
@@ -24,6 +20,7 @@ import {
   setOffline,
   setOnline,
   unregisterPresenceSocket,
+  deriveDevicePresence,
 } from './services/presence.js';
 import { startHeartbeatTimer, clearHeartbeatTimer } from './services/heartbeat.js';
 import {
@@ -48,6 +45,8 @@ import {
 import { startFileCleanupJob } from './services/fileCleanup.js';
 import { loadEnv } from './config.js';
 import { createObjectStore } from './lib/objectStore.js';
+import { conversationRoom, userRoom, joinConversationRoom, joinUserRoom, rebuildRoomsAfterRestart } from './services/roomManager.js';
+import { handleDeviceDeliveryReceipt } from './services/deliveryAggregation.js';
 
 dotenv.config();
 
@@ -188,6 +187,9 @@ io.on('connection', async (socket: AuthSocket) => {
   // Redis adapter.
   await socket.join(`device:${deviceId}`);
 
+  // Join user room for cross-device synchronization
+  joinUserRoom(socket);
+
   // Auto-join all conversation rooms so the socket receives new_message events
   // for every conversation the user belongs to (needed for unread badge tracking).
   const memberships = await db.query.conversationMembers.findMany({
@@ -195,6 +197,9 @@ io.on('connection', async (socket: AuthSocket) => {
     columns: { conversationId: true },
   });
   for (const m of memberships) {
+    // Join the conversation room for optimized fan-out
+    await socket.join(conversationRoom(m.conversationId));
+    // Also join the direct conversation room for backward compatibility
     await socket.join(m.conversationId);
   }
 
@@ -205,6 +210,14 @@ io.on('connection', async (socket: AuthSocket) => {
     const becameOnline = await setOnline(appRedis, userId, deviceId);
     if (becameOnline && presenceVisible) {
       for (const m of memberships) {
+        io.to(conversationRoom(m.conversationId)).emit('user_online', { userId });
+        io.to(conversationRoom(m.conversationId)).emit('presence_update', {
+          userId,
+          online: true,
+          status: 'online',
+          lastSeen: Date.now(),
+        });
+        // Also emit to direct conversation room for backward compatibility
         io.to(m.conversationId).emit('user_online', { userId });
         io.to(m.conversationId).emit('presence_update', {
           userId,
@@ -317,6 +330,13 @@ io.on('connection', async (socket: AuthSocket) => {
           const { lastSeen } = await deriveDevicePresence(userId);
 
           for (const m of memberships) {
+            io.to(conversationRoom(m.conversationId)).emit('user_offline', { userId });
+            io.to(conversationRoom(m.conversationId)).emit('presence_update', {
+              userId,
+              online: false,
+              ...(lastSeen ? { lastSeen } : {}),
+            });
+            // Also emit to direct conversation room for backward compatibility
             io.to(m.conversationId).emit('user_offline', { userId });
             io.to(m.conversationId).emit('presence_update', {
               userId,
@@ -369,6 +389,10 @@ async function attachRedisAdapter(): Promise<void> {
       try {
         await reconcileBoot(io, appRedis);
         console.log('[presence] Boot reconciliation complete');
+        
+        // Rebuild rooms after restart for optimized fan-out
+        await rebuildRoomsAfterRestart(io);
+        console.log('[roomManager] Rooms rebuilt after restart');
       } catch (err) {
         console.warn('[presence] Boot reconciliation failed:', err);
       }

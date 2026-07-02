@@ -21,6 +21,8 @@ import { dispatchOfflinePush, FILE_CONTENT_TYPES } from '../services/pushNotific
 import { deliverMessage } from '../services/deliveryPipeline.js';
 import { publishEphemeral, readMissedEvents } from '../services/resumeStream.js';
 import { publishToDevice } from '../services/deviceDelivery.js';
+import { handleDeviceDeliveryReceipt } from '../services/deliveryAggregation.js';
+import { conversationRoom } from '../services/roomManager.js';
 import { EventDispatcher } from './dispatcher.js';
 
 const PAGE_SIZE = 30;
@@ -60,6 +62,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       };
       if (did) rp.deviceId = did;
       socket.to(cid).emit('typing_stop', rp);
+      socket.to(conversationRoom(cid)).emit('typing_stop', rp);
     }
     typingTimers.clear();
   });
@@ -451,6 +454,10 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       originalMessageId: rootMessageId,
       newMessageId: messageId,
     });
+    io.to(conversationRoom(conversationId)).emit('message_edited', {
+      originalMessageId: rootMessageId,
+      newMessageId: messageId,
+    });
 
     const members = await db.query.conversationMembers.findMany({
       where: eq(conversationMembers.conversationId, conversationId),
@@ -592,6 +599,11 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
           conversationId,
           fileId: messageId,
         });
+        io.to(conversationRoom(conversationId)).emit('file_message', {
+          messageId,
+          conversationId,
+          fileId: messageId,
+        });
       }
 
       const members = await db.query.conversationMembers.findMany({
@@ -688,6 +700,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     }
 
     io.to(message.conversationId).emit('message_deleted', { messageId });
+    io.to(conversationRoom(message.conversationId)).emit('message_deleted', { messageId });
   });
 
   // ── message_read ───────────────────────────────────────────────────────────
@@ -775,16 +788,17 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       return;
     }
 
-    await db
-      .update(messageEnvelopes)
-      .set({ deliveredAt: new Date() })
-      .where(
-        and(
-          eq(messageEnvelopes.messageId, messageId),
-          eq(messageEnvelopes.recipientDeviceId, socket.auth!.deviceId),
-        ),
-      );
+    // Use the new aggregation service for per-device delivery tracking
+    await handleDeviceDeliveryReceipt(
+      io,
+      redis,
+      messageId,
+      socket.auth!.deviceId,
+      userId,
+      conversationId,
+    );
 
+    // Also emit to conversation room for backward compatibility
     io.to(conversationId).volatile.emit('delivery_receipt', {
       conversationId,
       messageId,
@@ -795,20 +809,16 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       deliveredAt: new Date().toISOString(),
     });
 
-    if (redis) {
-      const members = await db.query.conversationMembers.findMany({
-        where: eq(conversationMembers.conversationId, conversationId),
-        columns: { userId: true },
-      });
-      await publishEphemeral(
-        redis,
-        members.map((member) => member.userId),
-        {
-          type: 'delivery_receipt',
-          data: { conversationId, messageId, envelopeId, userId, deviceId: socket.auth!.deviceId, sequenceNumber },
-        },
-      );
-    }
+    // Emit to conversation room for optimized fan-out
+    io.to(conversationRoom(conversationId)).volatile.emit('device_delivery_receipt', {
+      conversationId,
+      messageId,
+      envelopeId,
+      recipientUserId: userId,
+      recipientDeviceId: socket.auth!.deviceId,
+      sequenceNumber,
+      deliveredAt: new Date().toISOString(),
+    });
   });
 
   // ── resume ─────────────────────────────────────────────────────────────────
@@ -914,10 +924,12 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     const timer = setTimeout(() => {
       typingTimers.delete(timerKey);
       socket.to(conversationId).emit('typing_stop', relayPayload);
+      socket.to(conversationRoom(conversationId)).emit('typing_stop', relayPayload);
     }, 5000);
 
     typingTimers.set(timerKey, timer);
     socket.to(conversationId).emit('typing_start', relayPayload);
+    socket.to(conversationRoom(conversationId)).emit('typing_start', relayPayload);
   });
 
   // ── typing_stop ────────────────────────────────────────────────────────────
@@ -969,6 +981,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     }
 
     socket.to(conversationId).emit('typing_stop', relayPayload);
+    socket.to(conversationRoom(conversationId)).emit('typing_stop', relayPayload);
   });
 
   // ── ask_assistant ──────────────────────────────────────────────────────────
