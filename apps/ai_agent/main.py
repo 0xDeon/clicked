@@ -9,6 +9,11 @@ from pydantic import BaseModel
 import weaviate
 from weaviate.classes.query import Filter
 
+try:
+    from openai import OpenAI
+except ImportError:  # pragma: no cover - exercised when the dependency is absent
+    OpenAI = None
+
 app = FastAPI(title="AI Agent API")
 
 _SYSTEM_PROMPT = (
@@ -73,7 +78,8 @@ def _openai_client():
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured")
-    from openai import OpenAI  # imported lazily so missing package gives a clear error
+    if OpenAI is None:
+        raise HTTPException(status_code=500, detail="OpenAI client is unavailable")
     return OpenAI(api_key=api_key)
 
 
