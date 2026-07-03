@@ -17,6 +17,7 @@ import { userDevices, conversationMembers, messages, conversations } from '../db
 import { getSocketServer } from '../lib/socket.js';
 import { invalidateConversationCaches } from '../lib/conversationCache.js';
 import { SignedPreKeyEntrySchema, PreKeyEntrySchema, verifyEd25519Signature } from '../lib/keys.js';
+import { conversationRoom } from '../services/roomManager.js';
 
 export const devicesRouter: RouterType = Router();
 
@@ -411,6 +412,8 @@ async function emitDeviceChangeEvent(userId: string, change: 'device_added' | 'd
 
       const io = getSocketServer();
       if (io) {
+        io.to(conversationRoom(m.conversationId)).emit('new_message', msg);
+        // Also emit to direct conversation room for backward compatibility
         io.to(m.conversationId).emit('new_message', msg);
       }
 

@@ -3,6 +3,7 @@ import type { Server } from 'socket.io';
 import { db } from '../db/index.js';
 import { conversationMembers, messageEnvelopes, userDevices } from '../db/schema.js';
 import type { Message } from '../db/schema.js';
+import { conversationRoom } from './roomManager.js';
 
 /**
  * Room name for per-device targeting. Each socket joins this room on connect
@@ -46,6 +47,7 @@ export async function deliverMessage(
 
   if (activeDevices.length === 0) {
     io.to(conversationId).emit('new_message', message);
+    io.to(conversationRoom(conversationId)).emit('new_message', message);
     return;
   }
 
@@ -88,7 +90,7 @@ export async function deliverMessage(
 
   // Step 5: room-level notification so clients can update unread counts / UI.
   // Ciphertext is intentionally omitted here; each device received it above.
-  io.to(conversationId).emit('new_message', {
+  const newMessageEvent = {
     id: message.id,
     conversationId,
     senderId: message.senderId,
@@ -98,5 +100,9 @@ export async function deliverMessage(
     createdAt: message.createdAt,
     deletedAt: message.deletedAt,
     ciphertext: null,
-  });
+  };
+  
+  // Emit to both direct conversation room (backward compatibility) and conversation room (optimized)
+  io.to(conversationId).emit('new_message', newMessageEvent);
+  io.to(conversationRoom(conversationId)).emit('new_message', newMessageEvent);
 }
