@@ -10,6 +10,7 @@ import {
   serial,
   uniqueIndex,
   type AnyPgColumn,
+  bigint,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 
@@ -43,6 +44,7 @@ export const conversations = pgTable('conversations', {
   type: conversationTypeEnum('type').notNull().default('dm'),
   name: text('name'),
   avatarUrl: text('avatar_url'),
+  lastSequenceNumber: bigint('last_sequence_number', { mode: 'bigint' }).notNull().default(0n),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
@@ -131,7 +133,7 @@ export const messages = pgTable('messages', {
     onDelete: 'set null',
   }),
   contentType: text('content_type').notNull().default('text/plain'),
-  sequenceNumber: serial('sequence_number'),
+  sequenceNumber: bigint('sequence_number', { mode: 'bigint' }),
   ciphertext: text('ciphertext'),
   fileId: uuid('file_id').references(() => files.id, { onDelete: 'set null' }),
   editsMessageId: uuid('edits_message_id').references((): AnyPgColumn => messages.id, {

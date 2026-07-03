@@ -1,8 +1,15 @@
 import { Router } from 'express';
 import type { IRouter } from 'express';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { conversationMembers, messages, messageEnvelopes, userDevices, files } from '../db/schema.js';
+import {
+  conversationMembers,
+  messages,
+  messageEnvelopes,
+  userDevices,
+  files,
+  conversations,
+} from '../db/schema.js';
 import { softDeleteFile } from '../services/fileCleanup.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
@@ -70,6 +77,18 @@ messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, r
   let message;
   try {
     message = await db.transaction(async (tx) => {
+      const [updatedConv] = await tx
+        .update(conversations)
+        .set({
+          lastSequenceNumber: sql`${conversations.lastSequenceNumber} + 1`,
+        })
+        .where(eq(conversations.id, conversationId))
+        .returning({ newSeq: conversations.lastSequenceNumber });
+
+      if (!updatedConv) {
+        throw new Error('Conversation not found');
+      }
+
       const [insertedMessage] = await tx
         .insert(messages)
         .values({
@@ -80,6 +99,7 @@ messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, r
           contentType: contentType?.trim().toLowerCase() || 'text',
           ciphertext: ciphertext || null,
           fileId: fileId ?? null,
+          sequenceNumber: updatedConv.newSeq,
         })
         .returning();
 

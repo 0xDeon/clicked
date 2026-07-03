@@ -13,7 +13,7 @@ import { db } from '../db/index.js';
 import { devices, signedPreKeys, oneTimePreKeys } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
-import { userDevices, conversationMembers, messages } from '../db/schema.js';
+import { userDevices, conversationMembers, messages, conversations } from '../db/schema.js';
 import { getSocketServer } from '../lib/socket.js';
 import { invalidateConversationCaches } from '../lib/conversationCache.js';
 import { SignedPreKeyEntrySchema, PreKeyEntrySchema, verifyEd25519Signature } from '../lib/keys.js';
@@ -383,15 +383,31 @@ async function emitDeviceChangeEvent(userId: string, change: 'device_added' | 'd
     if (memberships.length === 0) return;
 
     for (const m of memberships) {
-      const [msg] = await db
-        .insert(messages)
-        .values({
-          conversationId: m.conversationId,
-          senderId: userId,
-          contentType: 'system',
-          ciphertext: JSON.stringify({ userId, change }),
-        })
-        .returning();
+      const [msg] = await db.transaction(async (tx) => {
+        const [updatedConv] = await tx
+          .update(conversations)
+          .set({
+            lastSequenceNumber: sql`${conversations.lastSequenceNumber} + 1`,
+          })
+          .where(eq(conversations.id, m.conversationId))
+          .returning({ newSeq: conversations.lastSequenceNumber });
+
+        if (!updatedConv) {
+          throw new Error('Conversation not found');
+        }
+
+        const [insertedMessage] = await tx
+          .insert(messages)
+          .values({
+            conversationId: m.conversationId,
+            senderId: userId,
+            contentType: 'system',
+            ciphertext: JSON.stringify({ userId, change }),
+            sequenceNumber: updatedConv.newSeq,
+          })
+          .returning();
+        return insertedMessage;
+      });
 
       const io = getSocketServer();
       if (io) {
