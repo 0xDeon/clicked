@@ -14,6 +14,7 @@ import { devices, signedPreKeys, oneTimePreKeys } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { userDevices, conversationMembers, messages, conversations } from '../db/schema.js';
+import { DeviceSchema } from '../schemas/auth.schemas.js';
 import { getSocketServer } from '../lib/socket.js';
 import { invalidateConversationCaches } from '../lib/conversationCache.js';
 import { SignedPreKeyEntrySchema, PreKeyEntrySchema, verifyEd25519Signature } from '../lib/keys.js';
@@ -32,13 +33,7 @@ const UploadPreKeysSchema = z.object({
   oneTimePreKeys: z.array(PreKeyEntrySchema).min(1, 'At least one one-time prekey is required'),
 });
 
-const RegisterDeviceSchema = z.object({
-  deviceId: z.string().min(1, 'deviceId is required'),
-  deviceName: z.string().min(1, 'deviceName is required'),
-  platform: z.enum(['web', 'ios', 'android']),
-  identityPublicKey: z.string().min(1, 'identityPublicKey is required'),
-  registrationId: z.number().int().nonnegative().optional(),
-});
+const RegisterDeviceSchema = DeviceSchema;
 
 /** Maximum number of stored one-time prekeys per device. */
 const OTP_CAP = 200;
@@ -292,17 +287,7 @@ devicesRouter.post('/', validate(RegisterDeviceSchema), async (req: AuthRequest,
   const body = req.body as z.infer<typeof RegisterDeviceSchema>;
   const userId = req.auth!.userId;
 
-  // Validate identityPublicKey is base64 and 32 bytes when decoded (X25519)
-  try {
-    const key = Buffer.from(body.identityPublicKey, 'base64');
-    if (key.length !== 32) {
-      res.status(400).json({ error: 'identityPublicKey must be 32 bytes (base64-encoded)' });
-      return;
-    }
-  } catch {
-    res.status(400).json({ error: 'identityPublicKey must be valid base64' });
-    return;
-  }
+  // Device payload validation is handled by the shared DeviceSchema.
 
   // Reject duplicate (userId, deviceId)
   const existing = await db.query.userDevices.findFirst({

@@ -57,19 +57,11 @@ authRouter.post(
   verifyLimiter,
   validate(VerifySchema),
   async (req: Request, res: Response) => {
-
-    const { walletAddress, signature, nonce, identityPublicKey, deviceId: clientDeviceId, deviceName, platform, registrationId } = req.body as VerifyBody;
-
-    const {
-      walletAddress,
-      signature,
-      nonce,
-      identityPublicKey,
-      deviceName,
-      platform,
-      registrationId,
-    } = req.body as VerifyBody;
-
+    const { walletAddress, signature, nonce, identityPublicKey, device } = req.body as VerifyBody;
+    const clientDeviceId = device?.deviceId;
+    const deviceName = device?.deviceName;
+    const platform = device?.platform;
+    const registrationId = device?.registrationId;
 
     // Validate and consume nonce
     const valid = consumeNonce(walletAddress, nonce);
