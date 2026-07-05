@@ -8,6 +8,11 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from weaviate.classes.query import Filter
 
+try:
+    from openai import OpenAI
+except ImportError:  # pragma: no cover - exercised when the dependency is absent
+    OpenAI = None
+
 app = FastAPI(title="AI Agent API")
 
 _SYSTEM_PROMPT = (
