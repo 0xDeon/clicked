@@ -98,7 +98,11 @@ function displayName(member: Member) {
 }
 
 function primaryWallet(member: Member) {
-  return member.user?.wallets?.find((wallet) => wallet.isPrimary)?.address ?? member.user?.wallets?.[0]?.address ?? null;
+  return (
+    member.user?.wallets?.find((wallet) => wallet.isPrimary)?.address ??
+    member.user?.wallets?.[0]?.address ??
+    null
+  );
 }
 
 function verificationStorageKey(userId: string) {
@@ -129,7 +133,8 @@ function writeVerification(userId: string, fingerprint: string) {
 
 function messageBody(message: Message) {
   if (message.unavailable) return 'Encrypted message unavailable on this device';
-  if (message.contentType === 'system') return message.content ?? message.ciphertext ?? 'System event';
+  if (message.contentType === 'system')
+    return message.content ?? message.ciphertext ?? 'System event';
   return message.content ?? message.ciphertext ?? 'Encrypted message';
 }
 
@@ -395,11 +400,7 @@ export default function ConversationPage() {
       <section className="flex min-w-0 flex-1 flex-col">
         <header className="flex shrink-0 items-center justify-between gap-4 border-b border-border bg-card/60 px-5 py-4">
           <div className="flex min-w-0 items-center gap-3">
-            <Avatar
-              src={contacts[0]?.user?.avatarUrl ?? undefined}
-              fallback={title}
-              size="md"
-            />
+            <Avatar src={contacts[0]?.user?.avatarUrl ?? undefined} fallback={title} size="md" />
             <div className="min-w-0">
               <h1 className="truncate text-sm font-semibold text-foreground">{title}</h1>
               <p className="truncate text-xs text-foreground/45">
@@ -519,9 +520,15 @@ export default function ConversationPage() {
                       <p className="truncate text-xs text-foreground/40">{primaryWallet(member)}</p>
                     </div>
                     {isVerified ? (
-                      <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-400" aria-hidden="true" />
+                      <CheckCircle2
+                        className="h-5 w-5 shrink-0 text-emerald-400"
+                        aria-hidden="true"
+                      />
                     ) : state.changed ? (
-                      <AlertTriangle className="h-5 w-5 shrink-0 text-amber-300" aria-hidden="true" />
+                      <AlertTriangle
+                        className="h-5 w-5 shrink-0 text-amber-300"
+                        aria-hidden="true"
+                      />
                     ) : null}
                   </div>
 

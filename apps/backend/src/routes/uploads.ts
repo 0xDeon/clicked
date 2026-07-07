@@ -104,49 +104,22 @@ uploadsRouter.post('/:fileId/confirm', async (req: AuthRequest, res) => {
     return;
   }
 
-  if (file.status === 'ready') {
-    res.status(200).json({ message: 'File is already ready' });
+  if (file.uploaderId !== userId) {
+    res.status(403).json({ error: 'Not authorized to confirm this upload' });
     return;
   }
 
-  try {
-    const headCommand = new HeadObjectCommand({
-      Bucket: bucketName,
-      Key: file.storageKey,
-    });
-    const headOutput = await s3.send(headCommand);
-
-    if (headOutput.ContentLength !== size) {
-      res.status(400).json({ error: 'Size mismatch' });
-      return;
-    }
-
-    if (sha256) {
-      if (headOutput.ChecksumSHA256 && headOutput.ChecksumSHA256 !== sha256) {
-        res.status(400).json({ error: 'Hash mismatch' });
-        return;
-      }
-      if (
-        headOutput.Metadata &&
-        headOutput.Metadata['sha256'] &&
-        headOutput.Metadata['sha256'] !== sha256
-      ) {
-        res.status(400).json({ error: 'Hash mismatch' });
-        return;
-      }
-    }
-
-    await db
-      .update(files)
-      .set({ status: 'ready', size, sha256: sha256 || null })
-      .where(eq(files.id, fileId));
-
-    res.status(200).json({ message: 'File confirmed' });
-  } catch (error: any) {
-    if (error.name === 'NotFound' || error.$metadata?.httpStatusCode === 404) {
-      res.status(400).json({ error: 'File not found in storage. Ensure upload completed.' });
-      return;
-    }
-    res.status(500).json({ error: 'Failed to confirm upload' });
+  if (file.status === 'ready') {
+    res.status(409).json({ error: 'File is already ready' });
+    return;
   }
+
+  if (file.status === 'deleted') {
+    res.status(409).json({ error: 'File has been deleted' });
+    return;
+  }
+
+  await db.update(files).set({ status: 'ready' }).where(eq(files.id, fileId));
+
+  res.status(200).json({ fileId, status: 'ready' });
 });

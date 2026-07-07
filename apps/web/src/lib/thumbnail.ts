@@ -62,10 +62,7 @@ export interface ThumbnailReference {
  * Scale dimensions down so neither edge exceeds THUMBNAIL_MAX_EDGE,
  * preserving aspect ratio.
  */
-function scaleDimensions(
-  width: number,
-  height: number,
-): { width: number; height: number } {
+function scaleDimensions(width: number, height: number): { width: number; height: number } {
   if (width <= THUMBNAIL_MAX_EDGE && height <= THUMBNAIL_MAX_EDGE) {
     return { width, height };
   }

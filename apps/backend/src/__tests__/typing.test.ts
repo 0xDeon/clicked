@@ -8,8 +8,8 @@ const mockFindMany = vi.fn();
 const mockInsert = vi.fn();
 const mockUpdate = vi.fn();
 
-vi.mock('../db/index.js', () => ({
-  db: {
+vi.mock('../db/index.js', () => {
+  const db: Record<string, unknown> = {
     query: {
       conversationMembers: {
         findFirst: mockFindFirst,
@@ -18,8 +18,10 @@ vi.mock('../db/index.js', () => ({
     },
     insert: mockInsert,
     update: mockUpdate,
-  },
-}));
+    transaction: vi.fn((cb: (tx: unknown) => unknown) => cb(db)),
+  };
+  return { db };
+});
 
 vi.mock('../db/schema.js', () => ({
   conversationMembers: {},
@@ -186,21 +188,25 @@ describe('Typing indicator Socket events (typing_start / typing_stop)', () => {
     ) => Promise<void>;
     await startHandler({ conversationId });
 
-    expect(socket.roomEmitted).toHaveLength(1);
+    // Relayed to both the direct room and the conversationRoom()-prefixed
+    // room (backward-compat dual broadcast used throughout messaging.ts).
+    expect(socket.roomEmitted).toHaveLength(2);
     expect(socket.roomEmitted[0]?.event).toBe('typing_start');
+    expect(socket.roomEmitted[1]?.event).toBe('typing_start');
 
     // Advance time by 4.9 seconds - should not clear yet
     vi.advanceTimersByTime(4900);
-    expect(socket.roomEmitted).toHaveLength(1);
+    expect(socket.roomEmitted).toHaveLength(2);
 
     // Advance time past 5 seconds
     vi.advanceTimersByTime(100);
-    expect(socket.roomEmitted).toHaveLength(2);
-    expect(socket.roomEmitted[1]).toEqual({
+    expect(socket.roomEmitted).toHaveLength(4);
+    expect(socket.roomEmitted[2]).toEqual({
       room: conversationId,
       event: 'typing_stop',
       data: { conversationId, userId },
     });
+    expect(socket.roomEmitted[3]?.event).toBe('typing_stop');
   });
 
   it('manual typing_stop clears auto-expire timeout and relays typing_stop', async () => {
@@ -222,12 +228,13 @@ describe('Typing indicator Socket events (typing_start / typing_stop)', () => {
     await startHandler({ conversationId });
     await stopHandler({ conversationId });
 
-    expect(socket.roomEmitted).toHaveLength(2);
-    expect(socket.roomEmitted[1]?.event).toBe('typing_stop');
+    expect(socket.roomEmitted).toHaveLength(4);
+    expect(socket.roomEmitted[2]?.event).toBe('typing_stop');
+    expect(socket.roomEmitted[3]?.event).toBe('typing_stop');
 
     // Advance time by 10 seconds - timer should have been cancelled, no duplicate typing_stop
     vi.advanceTimersByTime(10000);
-    expect(socket.roomEmitted).toHaveLength(2);
+    expect(socket.roomEmitted).toHaveLength(4);
   });
 
   it('guards non-members when socket not in room and DB membership check fails', async () => {
@@ -271,7 +278,7 @@ describe('Typing indicator Socket events (typing_start / typing_stop)', () => {
     ) => Promise<void>;
     await startHandler({ conversationId, deviceId });
 
-    expect(socket.roomEmitted).toHaveLength(1);
+    expect(socket.roomEmitted).toHaveLength(2);
 
     // Trigger disconnect
     const dcHandlers = (socket as EventEmitter).listeners('disconnect');
@@ -279,12 +286,13 @@ describe('Typing indicator Socket events (typing_start / typing_stop)', () => {
       h();
     }
 
-    expect(socket.roomEmitted).toHaveLength(2);
-    expect(socket.roomEmitted[1]).toEqual({
+    expect(socket.roomEmitted).toHaveLength(4);
+    expect(socket.roomEmitted[2]).toEqual({
       room: conversationId,
       event: 'typing_stop',
       data: { conversationId, userId, deviceId },
     });
+    expect(socket.roomEmitted[3]?.event).toBe('typing_stop');
   });
 
   it('clears active typing state on send_message', async () => {
@@ -298,6 +306,11 @@ describe('Typing indicator Socket events (typing_start / typing_stop)', () => {
     const returnFn = vi.fn().mockResolvedValue([{ id: 'msg-1', content: 'hello' }]);
     const valFn = vi.fn().mockReturnValue({ returning: returnFn });
     mockInsert.mockReturnValue({ values: valFn });
+    mockUpdate.mockReturnValue({
+      set: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      returning: vi.fn().mockResolvedValue([{ newSeq: 1 }]),
+    });
 
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
@@ -310,7 +323,7 @@ describe('Typing indicator Socket events (typing_start / typing_stop)', () => {
     ) => Promise<void>;
 
     await startHandler({ conversationId });
-    expect(socket.roomEmitted).toHaveLength(1);
+    expect(socket.roomEmitted).toHaveLength(2);
 
     await sendHandler({ conversationId, content: 'Done typing!' });
 

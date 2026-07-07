@@ -24,8 +24,8 @@ const mockInsert = vi.fn();
 const mockFindMany = vi.fn();
 const mockUpdate = vi.fn();
 
-vi.mock('../db/index.js', () => ({
-  db: {
+vi.mock('../db/index.js', () => {
+  const db: Record<string, unknown> = {
     query: {
       conversationMembers: { findFirst: mockMemberFindFirst, findMany: mockFindMany },
       messages: { findFirst: vi.fn() },
@@ -33,8 +33,10 @@ vi.mock('../db/index.js', () => ({
     },
     insert: mockInsert,
     update: mockUpdate,
-  },
-}));
+    transaction: vi.fn((cb: (tx: unknown) => unknown) => cb(db)),
+  };
+  return { db };
+});
 
 vi.mock('../db/schema.js', () => ({
   conversationMembers: {},
@@ -124,6 +126,13 @@ function readyFile(
 
 beforeEach(() => {
   vi.clearAllMocks();
+
+  // Default: the per-conversation sequence-number bump succeeds.
+  mockUpdate.mockReturnValue({
+    set: vi.fn().mockReturnThis(),
+    where: vi.fn().mockReturnThis(),
+    returning: vi.fn().mockResolvedValue([{ newSeq: 1 }]),
+  });
 });
 
 describe('send_file_message socket event', () => {
@@ -509,8 +518,8 @@ describe('send_file_message socket event', () => {
     const insertedValues = (valuesFn.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
     expect(insertedValues).not.toHaveProperty('fileKey');
 
-    // The `content` field is stored as-is (opaque encrypted blob)
-    expect(insertedValues.content).toBe(ENVELOPE_CIPHERTEXT);
+    // The `ciphertext` field is stored as-is (opaque encrypted blob)
+    expect(insertedValues.ciphertext).toBe(ENVELOPE_CIPHERTEXT);
   });
 
   it('supports all valid file content types: file, image, video, audio', async () => {

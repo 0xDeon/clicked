@@ -38,8 +38,17 @@ const mockSelectWhere = vi.fn();
 const mockSelectFrom = vi.fn(() => ({ where: mockSelectWhere }));
 const mockSelect = vi.fn(() => ({ from: mockSelectFrom }));
 
-vi.mock('../db/index.js', () => ({
-  db: {
+// db.update chain used inside db.transaction() to bump the conversation's
+// monotonic sequence number before inserting the message row.
+const mockUpdateReturning = vi.fn();
+const mockUpdate = vi.fn(() => ({
+  set: vi.fn().mockReturnThis(),
+  where: vi.fn().mockReturnThis(),
+  returning: mockUpdateReturning,
+}));
+
+vi.mock('../db/index.js', () => {
+  const db: Record<string, unknown> = {
     query: {
       conversationMembers: {
         findFirst: mockMemberFindFirst,
@@ -49,11 +58,13 @@ vi.mock('../db/index.js', () => ({
       userDevices: { findMany: mockUserDevicesFindMany },
     },
     insert: mockInsert,
-    update: vi.fn(),
+    update: mockUpdate,
     delete: vi.fn(),
     select: mockSelect,
-  },
-}));
+    transaction: vi.fn((cb: (tx: unknown) => unknown) => cb(db)),
+  };
+  return { db };
+});
 
 vi.mock('../db/schema.js', () => ({
   conversations: {},
@@ -159,11 +170,13 @@ beforeEach(() => {
   mockReturning
     .mockReset()
     .mockResolvedValue([{ ...BASE_MESSAGE, id: 'new-msg', sequenceNumber: 2 }]);
+  mockUpdateReturning.mockReset().mockResolvedValue([{ newSeq: 2 }]);
 
   // Only clear call history for structural vi.fn(impl) mocks — mockReset would
   // wipe their implementations and break the insert().values().returning() chain.
   mockInsert.mockClear();
   mockValues.mockClear();
+  mockUpdate.mockClear();
   mockSelect.mockClear();
   mockSelectFrom.mockClear();
   // deliverMessage (deliveryPipeline.ts) calls db.select twice:

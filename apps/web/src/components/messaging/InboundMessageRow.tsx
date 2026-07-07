@@ -31,12 +31,12 @@ export function InboundMessageRow({ message, isSelf, senderName }: InboundMessag
       ) : message.status === 'unavailable' && message.unavailableReason ? (
         <UnavailableMessagePlaceholder reason={message.unavailableReason} />
       ) : (
-        <div className="px-3 py-2 rounded-2xl text-xs text-[var(--muted)] italic">
-          Decrypting…
-        </div>
+        <div className="px-3 py-2 rounded-2xl text-xs text-[var(--muted)] italic">Decrypting…</div>
       )}
 
-      <span className="text-[10px] text-[var(--muted)] mt-1 px-1">{formatTime(message.createdAt)}</span>
+      <span className="text-[10px] text-[var(--muted)] mt-1 px-1">
+        {formatTime(message.createdAt)}
+      </span>
     </div>
   );
 }

@@ -123,8 +123,9 @@ export function replaySocketEvent(socket: Socket, event: string, payload: unknow
     return;
   }
 
-  const callbacks = (socket as unknown as { _callbacks?: Record<string, Array<(p: unknown) => void>> })
-    ._callbacks?.[`$${event}`];
+  const callbacks = (
+    socket as unknown as { _callbacks?: Record<string, Array<(p: unknown) => void>> }
+  )._callbacks?.[`$${event}`];
   callbacks?.slice().forEach((callback) => callback(payload));
 }
 

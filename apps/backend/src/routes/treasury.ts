@@ -34,8 +34,9 @@ const voteSchema = z.object({
  * Body: { amount, token, recipient, ttl, conversationId?, threshold? }
  */
 treasuryRouter.post('/propose', validate(proposeSchema), async (req, res) => {
-  const { amount, token, recipient, ttl, conversationId, threshold } =
-    req.body as z.infer<typeof proposeSchema>;
+  const { amount, token, recipient, ttl, conversationId, threshold } = req.body as z.infer<
+    typeof proposeSchema
+  >;
 
   const [proposal] = await db
     .insert(treasuryProposals)
@@ -78,7 +79,9 @@ treasuryRouter.get('/proposals', async (req, res) => {
   const votes = await db
     .select({ treasuryProposalId: proposalVotes.treasuryProposalId, vote: proposalVotes.vote })
     .from(proposalVotes)
-    .where(and(eq(proposalVotes.userId, auth.userId), inArray(proposalVotes.treasuryProposalId, ids)));
+    .where(
+      and(eq(proposalVotes.userId, auth.userId), inArray(proposalVotes.treasuryProposalId, ids)),
+    );
 
   const votedMap = new Map(votes.map((v) => [v.treasuryProposalId, v.vote]));
 
@@ -91,7 +94,11 @@ treasuryRouter.get('/proposals', async (req, res) => {
   );
 });
 
-async function handleVote(req: AuthRequest, res: Response, vote: 'approve' | 'reject'): Promise<void> {
+async function handleVote(
+  req: AuthRequest,
+  res: Response,
+  vote: 'approve' | 'reject',
+): Promise<void> {
   const auth = req.auth!;
   const { id } = req.params as { id: string };
   const { signature } = req.body as z.infer<typeof voteSchema>;

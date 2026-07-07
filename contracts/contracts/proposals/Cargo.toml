@@ -13,6 +13,7 @@ soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+group_treasury = { path = "../group_treasury" }
 
 [lints]
 workspace = true

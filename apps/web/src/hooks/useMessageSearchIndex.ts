@@ -51,6 +51,8 @@ export function useMessageSearchIndex(messages: IndexableMessage[]) {
         }
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [messages]);
 }

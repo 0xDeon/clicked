@@ -34,7 +34,7 @@ export interface MessageEnvelope {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function b64ToBytes(b64: string): Uint8Array {
+function b64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
@@ -43,7 +43,7 @@ function b64ToBytes(b64: string): Uint8Array {
   return bytes;
 }
 
-function bytesToB64(bytes: Uint8Array): string {
+function bytesToB64(bytes: Uint8Array<ArrayBuffer>): string {
   let binary = '';
   for (const b of bytes) {
     binary += String.fromCharCode(b);
@@ -51,7 +51,7 @@ function bytesToB64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-function concatBytes(...arrays: Uint8Array[]): Uint8Array {
+function concatBytes(...arrays: Uint8Array<ArrayBuffer>[]): Uint8Array<ArrayBuffer> {
   const total = arrays.reduce((n, a) => n + a.length, 0);
   const out = new Uint8Array(total);
   let offset = 0;
@@ -83,13 +83,7 @@ async function importRecipientPublicKey(identityPublicKeyB64: string): Promise<C
 
   // 91-byte SPKI DER wrapping a P-256 key → spki import
   if (raw.length === 91) {
-    return crypto.subtle.importKey(
-      'spki',
-      raw,
-      { name: 'ECDH', namedCurve: 'P-256' },
-      false,
-      [],
-    );
+    return crypto.subtle.importKey('spki', raw, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
   }
 
   // Fallback: treat as raw P-256 compressed point — import via SubtleCrypto HKDF
@@ -109,7 +103,7 @@ async function importRecipientPublicKey(identityPublicKeyB64: string): Promise<C
 async function deriveAesKey(
   ecdhKey: CryptoKey,
   ephemeralKeyPair: CryptoKeyPair,
-  info: Uint8Array,
+  info: Uint8Array<ArrayBuffer>,
 ): Promise<CryptoKey> {
   if (ecdhKey.algorithm.name === 'HKDF') {
     // Fallback path: derive AES key directly from HKDF material
@@ -149,7 +143,7 @@ export async function sealedBoxEncrypt(
 
   // Generate ephemeral key pair for this message
   let ephemeralKeyPair: CryptoKeyPair;
-  let ephemeralPubBytes: Uint8Array;
+  let ephemeralPubBytes: Uint8Array<ArrayBuffer>;
 
   if (recipientKey.algorithm.name === 'HKDF') {
     // Fallback: generate a random ephemeral P-256 pair for the wire format
@@ -175,7 +169,11 @@ export async function sealedBoxEncrypt(
 
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const plaintextBytes = new TextEncoder().encode(plaintext);
-  const ciphertextBuf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, plaintextBytes);
+  const ciphertextBuf = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    aesKey,
+    plaintextBytes,
+  );
 
   // Pack: ephemeralPub | iv | ciphertext+tag
   const packed = concatBytes(ephemeralPubBytes, iv, new Uint8Array(ciphertextBuf));

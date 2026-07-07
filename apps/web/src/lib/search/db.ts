@@ -15,7 +15,9 @@ function getDB() {
           const store = db.createObjectStore(STORE_MESSAGES, { keyPath: 'id' });
           store.createIndex('conversationId', 'conversationId', { unique: false });
           store.createIndex('createdAt', 'createdAt', { unique: false });
-          store.createIndex('conversation_created', ['conversationId', 'createdAt'], { unique: false });
+          store.createIndex('conversation_created', ['conversationId', 'createdAt'], {
+            unique: false,
+          });
         }
       },
     });
@@ -27,14 +29,14 @@ export async function putMessages(messages: DecryptedMessage[]): Promise<void> {
   if (messages.length === 0) return;
   const db = await getDB();
   const tx = db.transaction(STORE_MESSAGES, 'readwrite');
-  await Promise.all(messages.map(m => tx.store.put(m)));
+  await Promise.all(messages.map((m) => tx.store.put(m)));
   await tx.done;
 }
 
 export async function deleteMessages(ids: string[]): Promise<void> {
   const db = await getDB();
   const tx = db.transaction(STORE_MESSAGES, 'readwrite');
-  await Promise.all(ids.map(id => tx.store.delete(id)));
+  await Promise.all(ids.map((id) => tx.store.delete(id)));
   await tx.done;
 }
 
@@ -43,7 +45,9 @@ export async function getAllMessages(): Promise<DecryptedMessage[]> {
   return db.getAll(STORE_MESSAGES);
 }
 
-export async function getMessagesByConversation(conversationId: string): Promise<DecryptedMessage[]> {
+export async function getMessagesByConversation(
+  conversationId: string,
+): Promise<DecryptedMessage[]> {
   const db = await getDB();
   return db.getAllFromIndex(STORE_MESSAGES, 'conversationId', conversationId);
 }

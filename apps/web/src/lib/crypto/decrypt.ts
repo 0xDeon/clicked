@@ -6,7 +6,7 @@ import {
 } from './types';
 import { getSessionKey } from './sessionStore';
 
-function base64ToBytes(b64: string): Uint8Array {
+function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
@@ -15,7 +15,7 @@ function base64ToBytes(b64: string): Uint8Array {
   return bytes;
 }
 
-function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
+function concatBytes(a: Uint8Array<ArrayBuffer>, b: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(a.length + b.length);
   out.set(a, 0);
   out.set(b, a.length);
@@ -40,13 +40,9 @@ function parseEnvelopePayload(ciphertext: string): EncryptedEnvelopePayload {
 }
 
 async function importIdentityPublicKey(spkiB64: string): Promise<CryptoKey> {
-  return crypto.subtle.importKey(
-    'spki',
-    base64ToBytes(spkiB64),
-    { name: 'Ed25519' },
-    false,
-    ['verify'],
-  );
+  return crypto.subtle.importKey('spki', base64ToBytes(spkiB64), { name: 'Ed25519' }, false, [
+    'verify',
+  ]);
 }
 
 async function verifyEnvelopeSignature(

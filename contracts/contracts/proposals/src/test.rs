@@ -75,10 +75,13 @@ fn setup(
     Address, // treasury_member
     Address, // token_id
 ) {
-    env.mock_all_auths();
+    // `execute_withdraw` calls treasury.withdraw() as a nested (non-root) call,
+    // which itself calls `admin.require_auth()` — an address not present in the
+    // root invocation's argument list, so the non-root variant is required.
+    env.mock_all_auths_allowing_non_root_auth();
 
     // Register proposals contract.
-    let proposals_id = env.register_contract(None, ProposalsContract);
+    let proposals_id = env.register(ProposalsContract, ());
     let proposals = ProposalsContractClient::new(env, &proposals_id);
 
     let proposals_admin = Address::generate(env);
@@ -98,11 +101,11 @@ fn setup(
 
     let treasury_addr = env.register(group_treasury::GroupTreasuryContract, ());
     let treasury = group_treasury::GroupTreasuryContractClient::new(env, &treasury_addr);
-    treasury.initialize(&treasury_admin, &token_id);
+    treasury.initialize(&treasury_admin, &token_id, &1);
     treasury.add_member(&treasury_member);
 
     // Deposit into treasury so `execute_withdraw` has something to withdraw.
-    token.transfer(env.clone(), &treasury_member, &treasury_addr, &0);
+    token.transfer(&treasury_member, &treasury_addr, &0);
 
     // easier: call deposit, which also calls TokenClient::transfer from `from` to treasury
     treasury.deposit(&treasury_member, &token_id, &500);
@@ -134,12 +137,12 @@ fn create_proposal_in(
     let desc = String::from_str(env, "fund a community art mural");
 
     client.create_proposal(
-        proposer.clone(),
+        proposer,
         &desc,
         &(now + expires_in_secs),
-        treasury.clone(),
-        token.clone(),
-        to.clone(),
+        treasury,
+        token,
+        to,
         &amount,
     )
 }
@@ -298,12 +301,12 @@ fn create_with_past_expiry_panics() {
 
     let desc = String::from_str(&env, "x");
     client.create_proposal(
-        alice,
+        &alice,
         &desc,
         &env.ledger().timestamp(),
-        m,
-        token_id,
-        alice,
+        &m,
+        &token_id,
+        &alice,
         &1,
     );
 }
@@ -356,7 +359,7 @@ fn execute_withdraw_pending_panics() {
         setup(&env);
 
     // Create an Active (i.e. not Approved) proposal.
-    let treasury_addr = _treasury.address();
+    let treasury_addr = _treasury.address.clone();
     let to = alice.clone();
     let id = create_proposal_in(
         &env,
@@ -382,7 +385,7 @@ fn execute_withdraw_already_executed_panics() {
     let (client, _padmin, alice, _bob, _carol, treasury, _tadmin, treasury_member, token_id) =
         setup(&env);
 
-    let treasury_addr = treasury.address();
+    let treasury_addr = treasury.address.clone();
     let to = alice.clone();
     let id = create_proposal_in(
         &env,
@@ -395,8 +398,8 @@ fn execute_withdraw_already_executed_panics() {
         10,
     );
 
-    advance_time(&env, 1_001);
     client.vote(&alice, &id, &true);
+    advance_time(&env, 1_001);
     client.finalize_proposal(&id);
 
     client.execute_withdraw(&treasury_member, &id);
@@ -409,7 +412,7 @@ fn execute_withdraw_reduces_balance() {
     let (client, _padmin, alice, _bob, _carol, treasury, _tadmin, treasury_member, token_id) =
         setup(&env);
 
-    let treasury_addr = treasury.address();
+    let treasury_addr = treasury.address.clone();
     let to = alice.clone();
     let amount: i128 = 100;
 
@@ -429,9 +432,9 @@ fn execute_withdraw_reduces_balance() {
     // after votes so that contract logic sets Passed/Rejected. Then we treat Passed as Approved in execute_withdraw.
     // This repo currently uses ProposalStatus::Passed/Rejected for finalize; Approved is separate.
 
-    advance_time(&env, 1_001);
     // No votes -> Rejected; we need Passed -> make it Passed.
     client.vote(&treasury_member, &id, &true);
+    advance_time(&env, 1_001);
     client.finalize_proposal(&id);
 
     // Execute withdraw.
@@ -448,7 +451,7 @@ fn execute_withdraw_non_member_panics() {
     let env = Env::default();
     let (client, _padmin, alice, _bob, _carol, treasury, _tadmin, _member, token_id) = setup(&env);
 
-    let treasury_addr = treasury.address();
+    let treasury_addr = treasury.address.clone();
     let to = alice.clone();
     let id = create_proposal_in(
         &env,
@@ -461,8 +464,8 @@ fn execute_withdraw_non_member_panics() {
         10,
     );
 
-    advance_time(&env, 1_001);
     client.vote(&alice, &id, &true);
+    advance_time(&env, 1_001);
     client.finalize_proposal(&id);
 
     // alice is not a treasury member

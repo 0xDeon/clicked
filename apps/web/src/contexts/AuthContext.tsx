@@ -87,7 +87,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (!verifyResponse.ok) throw new Error('Unable to verify signed challenge');
 
-      const { token: nextToken, deviceId } = (await verifyResponse.json()) as { token: string; deviceId?: string };
+      const { token: nextToken, deviceId } = (await verifyResponse.json()) as {
+        token: string;
+        deviceId?: string;
+      };
       if (deviceId) rememberRealtimeDeviceId(deviceId);
       persistToken(nextToken);
       setToken(nextToken);

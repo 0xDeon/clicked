@@ -24,7 +24,7 @@ export async function joinConversationRoom(
   conversationId: string,
 ): Promise<void> {
   const userId = socket.auth!.userId;
-  
+
   // Always validate membership from source of truth before joining
   const membership = await db.query.conversationMembers.findFirst({
     where: and(
@@ -53,36 +53,34 @@ export function joinUserRoom(socket: AuthSocket): void {
  * This should be called during startup to ensure all active sockets
  * are in the appropriate rooms based on PostgreSQL data.
  */
-export async function rebuildRoomsAfterRestart(
-  io: Server,
-): Promise<void> {
+export async function rebuildRoomsAfterRestart(io: Server): Promise<void> {
   console.log('[roomManager] Rebuilding rooms after restart');
-  
+
   const sockets = await io.fetchSockets();
-  
+
   for (const socket of sockets) {
     const authSocket = socket as AuthSocket;
     const userId = authSocket.auth?.userId;
     const deviceId = authSocket.auth?.deviceId;
-    
+
     if (!userId || !deviceId) {
       continue;
     }
-    
+
     // Join user room for cross-device events
     await authSocket.join(userRoom(userId));
-    
+
     // Join all conversation rooms user belongs to
     const memberships = await db.query.conversationMembers.findMany({
       where: eq(conversationMembers.userId, userId),
       columns: { conversationId: true },
     });
-    
+
     for (const membership of memberships) {
       await authSocket.join(conversationRoom(membership.conversationId));
     }
   }
-  
+
   console.log(`[roomManager] Rebuilt rooms for ${sockets.length} sockets`);
 }
 
@@ -168,6 +166,6 @@ export async function validateConversationMembership(
       eq(conversationMembers.userId, userId),
     ),
   });
-  
+
   return membership !== null;
 }

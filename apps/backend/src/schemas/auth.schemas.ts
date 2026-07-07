@@ -7,7 +7,10 @@ export const ChallengeSchema = z.object({
 
 export const DeviceSchema = z.object({
   deviceId: z.string().uuid('deviceId must be a valid UUID'),
-  deviceName: z.string().min(1, 'deviceName is required').max(100, 'deviceName must be at most 100 characters'),
+  deviceName: z
+    .string()
+    .min(1, 'deviceName is required')
+    .max(100, 'deviceName must be at most 100 characters'),
   platform: z.enum(['web', 'ios', 'android']),
   identityPublicKey: IdentityPublicKeySchema,
   registrationId: z.number().int().nonnegative().optional(),

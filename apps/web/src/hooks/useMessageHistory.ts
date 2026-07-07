@@ -141,7 +141,16 @@ export function useMessageHistory({
   // Listen for live new_message events and append them.
   useEffect(() => {
     if (!socket) return;
-    function onNewMessage(raw: any) {
+    function onNewMessage(raw: {
+      id: string;
+      conversationId: string;
+      senderId: string;
+      content?: string;
+      createdAt?: string;
+      ciphertext?: string | null;
+      contentType?: string;
+      sequenceNumber?: number | null;
+    }) {
       if (!raw || raw.conversationId !== conversationId) return;
       const msg: ChatMessage = {
         id: raw.id,
@@ -154,12 +163,14 @@ export function useMessageHistory({
         sequenceNumber: raw.sequenceNumber ?? null,
       };
       setMessages((current) => {
-        if (current.some(m => m.id === msg.id)) return current;
+        if (current.some((m) => m.id === msg.id)) return current;
         return [...current, msg];
       });
     }
     socket.on('new_message', onNewMessage);
-    return () => { socket.off('new_message', onNewMessage); };
+    return () => {
+      socket.off('new_message', onNewMessage);
+    };
   }, [socket, conversationId, setMessages]);
 
   const loadOlder = useCallback(() => {

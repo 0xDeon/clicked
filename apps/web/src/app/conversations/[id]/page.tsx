@@ -7,8 +7,6 @@ import { useAuth } from '@/components/auth/useAuth';
 import { useSocket } from '@/hooks/useSocket';
 import { emitSocketEnvelope, parseJwtClaims, setSyncCursor } from '@/lib/realtime';
 import { useInboundPipeline } from '@/hooks/useInboundPipeline';
-import { InboundMessageRow } from '@/components/messaging/InboundMessageRow';
-import { parseJwtPayload } from '@/lib/jwt';
 
 interface Sender {
   id: string;
@@ -53,10 +51,20 @@ function dayKey(iso: string) {
 function Avatar({ src, name }: { src: string | null; name: string }) {
   if (src) {
     return (
-      <Image src={src} alt={name} width={32} height={32} className="h-8 w-8 rounded-full object-cover flex-shrink-0" />
+      <Image
+        src={src}
+        alt={name}
+        width={32}
+        height={32}
+        className="h-8 w-8 rounded-full object-cover flex-shrink-0"
+      />
     );
   }
-  return <div className="h-8 w-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-semibold bg-[var(--accent)] text-white">{name.charAt(0).toUpperCase()}</div>;
+  return (
+    <div className="h-8 w-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-semibold bg-[var(--accent)] text-white">
+      {name.charAt(0).toUpperCase()}
+    </div>
+  );
 }
 
 function normaliseMessage(msg: Partial<Message>): Message | null {
@@ -84,6 +92,7 @@ export default function ConversationPage() {
   const { token } = useAuth();
   const currentUserId = parseJwtClaims(token).userId ?? null;
   const socket = useSocket(token);
+  const { syncing } = useInboundPipeline({ socket, token, conversationId: id });
   const [messages, setMessages] = useState<Message[]>([]);
   const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
   const [input, setInput] = useState('');
@@ -98,20 +107,27 @@ export default function ConversationPage() {
     if (force || atBottom) bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, []);
 
-  const upsertMessage = useCallback((incoming: Partial<Message>) => {
-    const msg = normaliseMessage(incoming);
-    if (!msg || msg.conversationId !== id) return;
-    setMessages((prev) => {
-      const index = prev.findIndex((m) => m.id === msg.id);
-      if (index !== -1) {
-        const next = [...prev];
-        next[index] = { ...next[index], ...msg, pending: msg.pending ?? next[index].pending };
-        return next;
-      }
-      const next = [...prev, msg];
-      return next.sort((a, b) => (a.sequenceNumber ?? Number.MAX_SAFE_INTEGER) - (b.sequenceNumber ?? Number.MAX_SAFE_INTEGER));
-    });
-  }, [id]);
+  const upsertMessage = useCallback(
+    (incoming: Partial<Message>) => {
+      const msg = normaliseMessage(incoming);
+      if (!msg || msg.conversationId !== id) return;
+      setMessages((prev) => {
+        const index = prev.findIndex((m) => m.id === msg.id);
+        if (index !== -1) {
+          const next = [...prev];
+          next[index] = { ...next[index], ...msg, pending: msg.pending ?? next[index].pending };
+          return next;
+        }
+        const next = [...prev, msg];
+        return next.sort(
+          (a, b) =>
+            (a.sequenceNumber ?? Number.MAX_SAFE_INTEGER) -
+            (b.sequenceNumber ?? Number.MAX_SAFE_INTEGER),
+        );
+      });
+    },
+    [id],
+  );
 
   useEffect(() => {
     if (!socket) return;
@@ -130,7 +146,11 @@ export default function ConversationPage() {
       if (msg.conversationId !== id) return;
       upsertMessage(msg);
       scrollToBottom();
-      if (msg.id) emitSocketEnvelope(socket, 'message_read', { conversationId: id, lastReadMessageId: msg.id });
+      if (msg.id)
+        emitSocketEnvelope(socket, 'message_read', {
+          conversationId: id,
+          lastReadMessageId: msg.id,
+        });
     }
 
     function onMessageEnvelope(msg: Message & { messageId?: string }) {
@@ -139,21 +159,33 @@ export default function ConversationPage() {
     }
 
     function onAck(ack: { messageId: string; sequenceNumber: number }) {
-      setMessages((prev) => prev.map((m) => m.id === ack.messageId ? { ...m, pending: false, sequenceNumber: ack.sequenceNumber } : m));
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === ack.messageId ? { ...m, pending: false, sequenceNumber: ack.sequenceNumber } : m,
+        ),
+      );
       setSyncCursor(token, ack.sequenceNumber);
     }
 
     function onDeliveryReceipt(receipt: { conversationId: string; messageId: string }) {
       if (receipt.conversationId !== id) return;
-      setMessages((prev) => prev.map((m) => m.id === receipt.messageId ? { ...m, delivered: true } : m));
+      setMessages((prev) =>
+        prev.map((m) => (m.id === receipt.messageId ? { ...m, delivered: true } : m)),
+      );
     }
 
-    function onReadReceipt(receipt: { conversationId: string; userId: string; lastReadMessageId: string }) {
+    function onReadReceipt(receipt: {
+      conversationId: string;
+      userId: string;
+      lastReadMessageId: string;
+    }) {
       if (receipt.conversationId !== id) return;
-      setMessages((prev) => prev.map((m) => {
-        if (m.id !== receipt.lastReadMessageId) return m;
-        return { ...m, readBy: Array.from(new Set([...(m.readBy ?? []), receipt.userId])) };
-      }));
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== receipt.lastReadMessageId) return m;
+          return { ...m, readBy: Array.from(new Set([...(m.readBy ?? []), receipt.userId])) };
+        }),
+      );
     }
 
     function onTypingStart(payload: { conversationId: string; userId: string }) {
@@ -266,15 +298,31 @@ export default function ConversationPage() {
                 const isSelf = msg.senderId === currentUserId;
                 const name = msg.sender?.username ?? (isSelf ? 'You' : 'Unknown');
                 return (
-                  <div key={msg.id} className={`flex items-end gap-2 ${isSelf ? 'flex-row-reverse' : 'flex-row'}`}>
+                  <div
+                    key={msg.id}
+                    className={`flex items-end gap-2 ${isSelf ? 'flex-row-reverse' : 'flex-row'}`}
+                  >
                     {!isSelf && <Avatar src={msg.sender?.avatarUrl ?? null} name={name} />}
-                    <div className={`flex flex-col max-w-[70%] ${isSelf ? 'items-end' : 'items-start'}`}>
-                      {!isSelf && <span className="text-xs text-[var(--muted)] mb-1 px-1">{name}</span>}
-                      <div className={`px-3 py-2 rounded-2xl text-sm leading-relaxed break-words ${isSelf ? 'bg-[var(--accent)] text-white rounded-br-sm' : 'bg-[var(--card)] text-[var(--foreground)] border border-[var(--border)] rounded-bl-sm'}`}>
+                    <div
+                      className={`flex flex-col max-w-[70%] ${isSelf ? 'items-end' : 'items-start'}`}
+                    >
+                      {!isSelf && (
+                        <span className="text-xs text-[var(--muted)] mb-1 px-1">{name}</span>
+                      )}
+                      <div
+                        className={`px-3 py-2 rounded-2xl text-sm leading-relaxed break-words ${isSelf ? 'bg-[var(--accent)] text-white rounded-br-sm' : 'bg-[var(--card)] text-[var(--foreground)] border border-[var(--border)] rounded-bl-sm'}`}
+                      >
                         {msg.content ?? msg.ciphertext}
                       </div>
                       <span className="text-[10px] text-[var(--muted)] mt-1 px-1">
-                        {formatTime(msg.createdAt)} {msg.pending ? '• sending…' : msg.readBy?.length ? '• read' : msg.delivered ? '• delivered' : ''}
+                        {formatTime(msg.createdAt)}{' '}
+                        {msg.pending
+                          ? '• sending…'
+                          : msg.readBy?.length
+                            ? '• read'
+                            : msg.delivered
+                              ? '• delivered'
+                              : ''}
                       </span>
                     </div>
                     {isSelf && <Avatar src={msg.sender?.avatarUrl ?? null} name={name} />}
@@ -284,13 +332,32 @@ export default function ConversationPage() {
             </div>
           </div>
         ))}
-        {typingUsers.size > 0 && <div className="text-xs text-[var(--muted)] italic">Someone is typing…</div>}
+        {typingUsers.size > 0 && (
+          <div className="text-xs text-[var(--muted)] italic">Someone is typing…</div>
+        )}
         <div ref={bottomRef} />
       </div>
 
-      <form className="flex gap-2 border-t border-[var(--border)] bg-[var(--card)] p-3" onSubmit={(e) => { e.preventDefault(); sendMessage(); }}>
-        <input value={input} onChange={(e) => handleTyping(e.target.value)} placeholder="Type a secure message…" className="flex-1 rounded-xl border border-[var(--border)] bg-[var(--background)] px-4 py-3 text-sm outline-none focus:border-[var(--accent)]" />
-        <button type="submit" className="rounded-xl bg-[var(--accent)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50" disabled={!input.trim()}>Send</button>
+      <form
+        className="flex gap-2 border-t border-[var(--border)] bg-[var(--card)] p-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          sendMessage();
+        }}
+      >
+        <input
+          value={input}
+          onChange={(e) => handleTyping(e.target.value)}
+          placeholder="Type a secure message…"
+          className="flex-1 rounded-xl border border-[var(--border)] bg-[var(--background)] px-4 py-3 text-sm outline-none focus:border-[var(--accent)]"
+        />
+        <button
+          type="submit"
+          className="rounded-xl bg-[var(--accent)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
+          disabled={!input.trim()}
+        >
+          Send
+        </button>
       </form>
     </div>
   );

@@ -2,11 +2,17 @@
 // Local E2EE search worker – runs off the main thread
 // Inverted index over plaintext messages cached in IndexedDB
 
-import type { DecryptedMessage, SearchHit, SearchQuery, WorkerIndexMessage, WorkerResponseMessage } from './types';
+import type {
+  DecryptedMessage,
+  SearchHit,
+  SearchQuery,
+  WorkerIndexMessage,
+  WorkerResponseMessage,
+} from './types';
 import { tokenize } from './tokenize';
 import { getAllMessages } from './db';
 
-const post = (msg: WorkerResponseMessage) => (self as any).postMessage(msg);
+const post = (msg: WorkerResponseMessage) => self.postMessage(msg);
 
 type Doc = DecryptedMessage & { tokens: Map<string, number> };
 
@@ -74,8 +80,8 @@ function scoreDoc(doc: Doc, queryTokens: string[]): number {
     const df = dfSet ? dfSet.size : 0;
     const idf = Math.log(1 + (N - df + 0.5) / (df + 0.5));
     const numerator = tf * (k1 + 1);
-    const denominator = tf + k1 * (1 - b + b * dl / avgdl);
-    score += idf * numerator / denominator;
+    const denominator = tf + k1 * (1 - b + (b * dl) / avgdl);
+    score += (idf * numerator) / denominator;
   }
   // recency boost: newer messages slightly higher
   const ageDays = (Date.now() - new Date(doc.createdAt).getTime()) / 86400000;
@@ -115,7 +121,10 @@ function search(query: SearchQuery) {
   let candidateIds: Set<string> | null = null;
   for (const tok of qTokens) {
     const posting = inverted.get(tok);
-    if (!posting) { candidateIds = new Set<string>(); break; }
+    if (!posting) {
+      candidateIds = new Set<string>();
+      break;
+    }
     if (candidateIds === null) {
       candidateIds = new Set<string>(posting);
     } else {
@@ -131,7 +140,7 @@ function search(query: SearchQuery) {
     candidateIds = new Set<string>();
     for (const tok of qTokens) {
       const posting = inverted.get(tok);
-      if (posting) posting.forEach(id => candidateIds!.add(id));
+      if (posting) posting.forEach((id) => candidateIds!.add(id));
     }
   }
 
@@ -152,7 +161,10 @@ function search(query: SearchQuery) {
     });
   }
 
-  results.sort((a, b) => b.score - a.score || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  results.sort(
+    (a, b) =>
+      b.score - a.score || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  );
   const limit = query.limit ?? 50;
   const total = results.length;
   results = results.slice(0, limit);
@@ -187,7 +199,9 @@ self.addEventListener('message', async (ev: MessageEvent<WorkerIndexMessage>) =>
     }
     if (msg.type === 'clear') {
       if (msg.conversationId) {
-        const toDelete = [...docs.values()].filter(d => d.conversationId === msg.conversationId).map(d => d.id);
+        const toDelete = [...docs.values()]
+          .filter((d) => d.conversationId === msg.conversationId)
+          .map((d) => d.id);
         toDelete.forEach(removeDoc);
       } else {
         docs.clear();
@@ -203,8 +217,8 @@ self.addEventListener('message', async (ev: MessageEvent<WorkerIndexMessage>) =>
       post({ type: 'search_result', id: msg.id, response });
       return;
     }
-  } catch (e: any) {
-    post({ type: 'error', message: e?.message || String(e) });
+  } catch (e) {
+    post({ type: 'error', message: e instanceof Error ? e.message : String(e) });
   }
 });
 

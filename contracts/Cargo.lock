@@ -917,6 +917,7 @@ dependencies = [
 name = "proposals"
 version = "0.1.0"
 dependencies = [
+ "group_treasury",
  "soroban-sdk",
 ]
 

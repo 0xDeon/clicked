@@ -101,7 +101,7 @@ export async function deliverMessage(
     deletedAt: message.deletedAt,
     ciphertext: null,
   };
-  
+
   // Emit to both direct conversation room (backward compatibility) and conversation room (optimized)
   io.to(conversationId).emit('new_message', newMessageEvent);
   io.to(conversationRoom(conversationId)).emit('new_message', newMessageEvent);

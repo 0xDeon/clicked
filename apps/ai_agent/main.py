@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Literal
+from typing import Literal, cast
 
 import uvicorn
 import weaviate
@@ -11,7 +11,7 @@ from weaviate.classes.query import Filter
 try:
     from openai import OpenAI
 except ImportError:  # pragma: no cover - exercised when the dependency is absent
-    OpenAI = None
+    OpenAI = None  # type: ignore[assignment, misc]
 
 app = FastAPI(title="AI Agent API")
 
@@ -79,7 +79,8 @@ def _openai_client():
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured")
-    from openai import OpenAI  # imported lazily so missing package gives a clear error
+    if OpenAI is None:
+        raise HTTPException(status_code=500, detail="openai package is not installed")
 
     return OpenAI(api_key=api_key)
 
@@ -172,7 +173,9 @@ def summarise_proposal(request: ProposalSummariseRequest):
         risk = "medium"
 
     # Pydantic re-validates via response_model before the response is sent.
-    return ProposalSummariseResponse(summary=summary, risk=risk)
+    return ProposalSummariseResponse(
+        summary=summary, risk=cast(Literal["low", "medium", "high"], risk)
+    )
 
 
 @app.post("/index/message")

@@ -5,14 +5,32 @@ export function normalize(text: string): string {
 }
 
 const STOPWORDS = new Set([
-  'the','a','an','and','or','but','is','are','was','were','in','on','at','to','for','of','with','by','it','this','that'
+  'the',
+  'a',
+  'an',
+  'and',
+  'or',
+  'but',
+  'is',
+  'are',
+  'was',
+  'were',
+  'in',
+  'on',
+  'at',
+  'to',
+  'for',
+  'of',
+  'with',
+  'by',
+  'it',
+  'this',
+  'that',
 ]);
 
 export function tokenize(text: string): string[] {
   const norm = normalize(text);
-  return norm
-    .split(/[^a-z0-9\u00c0-\u024f]+/i)
-    .filter(t => t.length >= 2 && !STOPWORDS.has(t));
+  return norm.split(/[^a-z0-9\u00c0-\u024f]+/i).filter((t) => t.length >= 2 && !STOPWORDS.has(t));
 }
 
 export function uniqueTokens(text: string): string[] {

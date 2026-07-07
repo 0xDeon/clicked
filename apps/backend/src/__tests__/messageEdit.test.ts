@@ -16,19 +16,27 @@ const mockValues = vi.fn(() => ({
   then: (resolve: (value: unknown) => void) => resolve(undefined),
 }));
 const mockInsert = vi.fn(() => ({ values: mockValues }));
+const mockUpdateReturning = vi.fn();
+const mockUpdate = vi.fn(() => ({
+  set: vi.fn().mockReturnThis(),
+  where: vi.fn().mockReturnThis(),
+  returning: mockUpdateReturning,
+}));
 
-vi.mock('../db/index.js', () => ({
-  db: {
+vi.mock('../db/index.js', () => {
+  const db: Record<string, unknown> = {
     query: {
       conversationMembers: { findFirst: vi.fn(), findMany: mockMembersFindMany },
       messages: { findFirst: mockMessagesFindFirst },
       userDevices: { findMany: mockUserDevicesFindMany },
     },
     insert: mockInsert,
-    update: vi.fn(),
+    update: mockUpdate,
     delete: vi.fn(),
-  },
-}));
+    transaction: vi.fn((cb: (tx: unknown) => unknown) => cb(db)),
+  };
+  return { db };
+});
 
 vi.mock('../db/schema.js', () => ({
   conversations: {},
@@ -117,6 +125,7 @@ beforeEach(() => {
   mockMembersFindMany.mockResolvedValue([]);
   mockUserDevicesFindMany.mockResolvedValue([]);
   mockReturning.mockResolvedValue([{ id: 'new-msg', sequenceNumber: 5 }]);
+  mockUpdateReturning.mockResolvedValue([{ newSeq: 5 }]);
 });
 
 describe('edit_message socket event', () => {

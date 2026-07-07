@@ -1,5 +1,4 @@
 import type { Server } from 'socket.io';
-import { createHash } from 'node:crypto';
 import { and, eq, lt, desc, sql, inArray, isNull, ne } from 'drizzle-orm';
 
 import { db } from '../db/index.js';
@@ -20,7 +19,6 @@ import { validateMessagePayload } from '../lib/validateMessagePayload.js';
 import { dispatchOfflinePush, FILE_CONTENT_TYPES } from '../services/pushNotification.js';
 import { deliverMessage } from '../services/deliveryPipeline.js';
 import { publishEphemeral, readMissedEvents } from '../services/resumeStream.js';
-import { publishToDevice } from '../services/deviceDelivery.js';
 import { handleDeviceDeliveryReceipt } from '../services/deliveryAggregation.js';
 import { conversationRoom } from '../services/roomManager.js';
 import { EventDispatcher } from './dispatcher.js';
@@ -294,6 +292,14 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       return;
     }
 
+    if (!ciphertext?.trim()) {
+      socket.emit('error', {
+        event: 'edit_message',
+        message: 'Content (envelope ciphertext) must not be empty',
+      });
+      return;
+    }
+
     const original = await db.query.messages.findFirst({
       where: eq(messages.id, originalMessageId),
     });
@@ -319,6 +325,21 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     if (existing) {
       socket.emit('message_ack', { messageId, sequenceNumber: existing.sequenceNumber });
       return;
+    }
+
+    // Enforce full sibling-device coverage (#188).
+    const siblingIds = await fetchSiblingDeviceIds(userId, deviceId);
+    if (siblingIds.length > 0) {
+      const providedIds = new Set(envelopes?.map((e) => e.recipientDeviceId) ?? []);
+      const missing = siblingIds.filter((id) => !providedIds.has(id));
+      if (missing.length > 0) {
+        socket.emit('error', {
+          event: 'device_set_mismatch',
+          message: `Missing envelopes for ${missing.length} sibling device(s)`,
+          missingDeviceIds: missing,
+        });
+        return;
+      }
     }
 
     const rootMessageId = original.editsMessageId ?? original.id;
@@ -385,22 +406,6 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
 
     if (message) {
       socket.emit('message_ack', { messageId, sequenceNumber: message.sequenceNumber });
-      io.to(conversationId).emit('new_message', message);
-    }
-
-    io.to(conversationId).emit('message_edited', {
-      originalMessageId: rootMessageId,
-      newMessageId: messageId,
-    });
-    io.to(conversationRoom(conversationId)).emit('message_edited', {
-      originalMessageId: rootMessageId,
-      newMessageId: messageId,
-    });
-
-    const members = await db.query.conversationMembers.findMany({
-      where: eq(conversationMembers.conversationId, conversationId),
-      columns: { userId: true },
-    });
       await deliverMessage(io, message, conversationId);
 
       const members = await db.query.conversationMembers.findMany({
@@ -409,7 +414,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       });
       await invalidateConversationCaches(members.map((m) => m.userId));
 
-      io.to(conversationId).emit('message_edited', {
+      io.to(conversationRoom(conversationId)).emit('message_edited', {
         originalMessageId: rootMessageId,
         newMessageId: messageId,
       });
@@ -537,13 +542,6 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
           where: eq(conversationMembers.conversationId, conversationId),
           columns: { userId: true },
         });
-        io.to(conversationRoom(conversationId)).emit('file_message', {
-          messageId,
-          conversationId,
-          fileId: messageId,
-        });
-      }
-
         await invalidateConversationCaches(members.map((member) => member.userId));
 
         sendPushForMessage({

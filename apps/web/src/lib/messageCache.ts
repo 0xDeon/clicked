@@ -77,7 +77,9 @@ class MessageCache {
     return cacheKey;
   }
 
-  private async encryptMessage(message: Omit<CachedMessage, 'iv' | 'encryptedContent'>): Promise<{ iv: string; encryptedContent: string }> {
+  private async encryptMessage(
+    message: Omit<CachedMessage, 'iv' | 'encryptedContent'>,
+  ): Promise<{ iv: string; encryptedContent: string }> {
     const cacheKey = await this.getCacheEncryptionKey();
     const iv = window.crypto.getRandomValues(new Uint8Array(12));
     const messageData = JSON.stringify({
@@ -92,18 +94,24 @@ class MessageCache {
     );
 
     return {
-      iv: Array.from(iv).map(b => b.toString(16).padStart(2, '0')).join(''),
-      encryptedContent: Array.from(new Uint8Array(encrypted)).map(b => b.toString(16).padStart(2, '0')).join(''),
+      iv: Array.from(iv)
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join(''),
+      encryptedContent: Array.from(new Uint8Array(encrypted))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join(''),
     };
   }
 
-  private async decryptMessage(encryptedMessage: CachedMessage): Promise<{ content: string; senderId: string }> {
+  private async decryptMessage(
+    encryptedMessage: CachedMessage,
+  ): Promise<{ content: string; senderId: string }> {
     const cacheKey = await this.getCacheEncryptionKey();
     const iv = new Uint8Array(
-      encryptedMessage.iv.match(/.{1,2}/g)?.map(byte => parseInt(byte, 16)) || []
+      encryptedMessage.iv.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) || [],
     );
     const encryptedContent = new Uint8Array(
-      encryptedMessage.encryptedContent.match(/.{1,2}/g)?.map(byte => parseInt(byte, 16)) || []
+      encryptedMessage.encryptedContent.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) || [],
     );
 
     const decrypted = await window.crypto.subtle.decrypt(
@@ -190,7 +198,15 @@ class MessageCache {
     await this.dbPut('messages', cachedMessage);
   }
 
-  async getMessage(id: string): Promise<{ id: string; conversationId: string; content: string; senderId: string; timestamp: number } | null> {
+  async getMessage(
+    id: string,
+  ): Promise<{
+    id: string;
+    conversationId: string;
+    content: string;
+    senderId: string;
+    timestamp: number;
+  } | null> {
     const cached = await this.dbGet<CachedMessage>('messages', id);
     if (!cached) return null;
 
@@ -204,8 +220,22 @@ class MessageCache {
     };
   }
 
-  async getConversationMessages(conversationId: string): Promise<Array<{ id: string; conversationId: string; content: string; senderId: string; timestamp: number }>> {
-    const cached = await this.dbGetByIndex<CachedMessage>('messages', 'conversationId', conversationId);
+  async getConversationMessages(
+    conversationId: string,
+  ): Promise<
+    Array<{
+      id: string;
+      conversationId: string;
+      content: string;
+      senderId: string;
+      timestamp: number;
+    }>
+  > {
+    const cached = await this.dbGetByIndex<CachedMessage>(
+      'messages',
+      'conversationId',
+      conversationId,
+    );
 
     const decrypted = await Promise.all(
       cached.map(async (msg) => {
@@ -217,7 +247,7 @@ class MessageCache {
           senderId,
           timestamp: msg.timestamp,
         };
-      })
+      }),
     );
 
     return decrypted.sort((a, b) => a.timestamp - b.timestamp);

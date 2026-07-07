@@ -4,7 +4,12 @@ import type { AuthSocket } from '../middleware/socketAuth.js';
 import { db } from '../db/index.js';
 import { devices, userDevices } from '../db/schema.js';
 import { eq, and, isNull } from 'drizzle-orm';
-import { refreshPresence, markDeviceOffline, refreshPresenceSocket, unregisterPresenceSocket } from './presence.js';
+import {
+  refreshPresence,
+  markDeviceOffline,
+  refreshPresenceSocket,
+  unregisterPresenceSocket,
+} from './presence.js';
 
 const HEARTBEAT_TIMEOUT_MS = 90_000;
 const LAST_SEEN_THROTTLE_MS = 30_000;

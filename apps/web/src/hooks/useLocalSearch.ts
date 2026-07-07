@@ -19,33 +19,38 @@ export function useLocalSearch(opts: UseLocalSearchOptions = {}) {
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef(0);
 
-  const runSearch = useCallback(async (q: string) => {
-    const runId = ++abortRef.current;
-    if (q.trim().length < minQueryLength) {
-      setHits([]);
-      setTotal(0);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const res: SearchResponse = await doSearch({ q, conversationId, limit: 50 });
-      if (runId !== abortRef.current) return;
-      setHits(res.hits);
-      setTotal(res.total);
-    } catch (e: any) {
-      if (runId !== abortRef.current) return;
-      setError(e?.message || 'Search failed');
-      setHits([]);
-      setTotal(0);
-    } finally {
-      if (runId === abortRef.current) setLoading(false);
-    }
-  }, [conversationId, minQueryLength]);
+  const runSearch = useCallback(
+    async (q: string) => {
+      const runId = ++abortRef.current;
+      if (q.trim().length < minQueryLength) {
+        setHits([]);
+        setTotal(0);
+        setLoading(false);
+        return;
+      }
+      setLoading(true);
+      setError(null);
+      try {
+        const res: SearchResponse = await doSearch({ q, conversationId, limit: 50 });
+        if (runId !== abortRef.current) return;
+        setHits(res.hits);
+        setTotal(res.total);
+      } catch (e) {
+        if (runId !== abortRef.current) return;
+        setError(e instanceof Error ? e.message : 'Search failed');
+        setHits([]);
+        setTotal(0);
+      } finally {
+        if (runId === abortRef.current) setLoading(false);
+      }
+    },
+    [conversationId, minQueryLength],
+  );
 
   useEffect(() => {
-    const t = setTimeout(() => { runSearch(query); }, debounceMs);
+    const t = setTimeout(() => {
+      runSearch(query);
+    }, debounceMs);
     return () => clearTimeout(t);
   }, [query, runSearch, debounceMs]);
 

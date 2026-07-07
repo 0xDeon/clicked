@@ -4,7 +4,8 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { API_BASE_URL } from '@/lib/api';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuth } from '@/components/auth/useAuth';
+import { parseJwtClaims } from '@/lib/realtime';
 import { useSocket } from '@/hooks/useSocket';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { SkeletonLoader } from '@/components/ui/SkeletonLoader';
@@ -92,7 +93,8 @@ function UnreadBadge({ count }: { count: number }) {
 
 export function ConversationListSidebar() {
   const params = useParams<{ id?: string }>();
-  const { token, user } = useAuth();
+  const { token } = useAuth();
+  const walletAddress = parseJwtClaims(token).walletAddress;
   const socket = useSocket(token);
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -170,7 +172,7 @@ export function ConversationListSidebar() {
 
     const dmConversations = conversations.filter((c) => c.type === 'dm');
     dmConversations.forEach(async (conv) => {
-      const peer = getPeerUser(conv, user?.walletAddress);
+      const peer = getPeerUser(conv, walletAddress);
       const peerUserId = peer?.id;
       if (!peerUserId) return;
 
@@ -190,7 +192,7 @@ export function ConversationListSidebar() {
         console.error('Failed to fetch presence for', peerUserId, err);
       }
     });
-  }, [conversations, token, user?.walletAddress]);
+  }, [conversations, token, walletAddress]);
 
   // Clean up all offline timers when component unmounts
   useEffect(() => {
@@ -241,7 +243,12 @@ export function ConversationListSidebar() {
       handleOffline(data.userId);
     }
 
-    function onPresenceUpdate(data: { userId: string; online?: boolean; status?: 'online' | 'offline'; lastSeen?: number }) {
+    function onPresenceUpdate(data: {
+      userId: string;
+      online?: boolean;
+      status?: 'online' | 'offline';
+      lastSeen?: number;
+    }) {
       const isOnline = data.status ? data.status === 'online' : !!data.online;
       if (isOnline) {
         handleOnline(data.userId);
@@ -332,8 +339,8 @@ export function ConversationListSidebar() {
             const isSelected = selectedId === conversation.id;
             const unread = unreadCounts.get(conversation.id) ?? 0;
 
-            const title = conversationTitle(conversation, user?.walletAddress);
-            const peer = getPeerUser(conversation, user?.walletAddress);
+            const title = conversationTitle(conversation, walletAddress);
+            const peer = getPeerUser(conversation, walletAddress);
             const avatarUrl = peer?.avatarUrl ?? null;
             const isOnline = peer?.id ? (onlineUsers.get(peer.id) ?? false) : false;
             const memberCount = conversation.members?.length ?? 0;

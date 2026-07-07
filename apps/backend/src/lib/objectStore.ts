@@ -45,7 +45,11 @@ export class ObjectStore {
     await this.client.send(new HeadBucketCommand({ Bucket: this.bucket }));
   }
 
-  async putObject(key: string, body: NonNullable<PutObjectCommandInput['Body']>, contentType?: string) {
+  async putObject(
+    key: string,
+    body: NonNullable<PutObjectCommandInput['Body']>,
+    contentType?: string,
+  ) {
     await this.client.send(
       new PutObjectCommand({
         Bucket: this.bucket,

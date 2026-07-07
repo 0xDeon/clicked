@@ -204,7 +204,7 @@ describe('GET /conversations/:id/search', () => {
     expect(res.status).toBe(410);
     expect(res.body).toEqual({
       error: 'Server-side search removed; search is now client-side over decrypted messages',
-      docs: 'https://github.com/DripWave/clicked/blob/main/docs/message-encryption-migration.md'
+      docs: 'https://github.com/DripWave/clicked/blob/main/docs/message-encryption-migration.md',
     });
   });
 });

@@ -153,8 +153,8 @@ impl ProposalsContract {
 
     /// Finalise a proposal after its `expires_at`. Callable by anyone.
     ///
-    /// Status mapping (required by execute_withdraw acceptance criteria):
-    /// - `yes_votes > no_votes` => `Approved`
+    /// Status mapping (consumed by both `execute_proposal` and `execute_withdraw`):
+    /// - `yes_votes > no_votes` => `Passed`
     /// - otherwise => `Rejected`
     pub fn finalize_proposal(env: Env, proposal_id: u64) -> ProposalStatus {
         let mut proposal = Self::load_proposal(&env, proposal_id);
@@ -250,7 +250,7 @@ impl ProposalsContract {
         if matches!(proposal.status, ProposalStatus::Executed) {
             panic!("proposal already executed");
         }
-        if !matches!(proposal.status, ProposalStatus::Approved) {
+        if !matches!(proposal.status, ProposalStatus::Passed) {
             panic!("proposal not approved");
         }
 

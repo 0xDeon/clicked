@@ -59,14 +59,16 @@ export default function MessagesPage() {
 
   // Seed the local E2EE search index with demo messages (#185)
   useEffect(() => {
-    indexMessages(messages.map(m => ({
-      id: m.id,
-      conversationId: DEMO_CONVERSATION_ID,
-      senderId: m.isSelf ? 'you' : 'jed',
-      plaintext: m.text,
-      contentType: 'text/plain',
-      createdAt: new Date().toISOString(),
-    }))).catch(() => {});
+    indexMessages(
+      messages.map((m) => ({
+        id: m.id,
+        conversationId: DEMO_CONVERSATION_ID,
+        senderId: m.isSelf ? 'you' : 'jed',
+        plaintext: m.text,
+        contentType: 'text/plain',
+        createdAt: new Date().toISOString(),
+      })),
+    ).catch(() => {});
   }, [messages]);
 
   const handleSendMessage = (e: React.FormEvent) => {
@@ -110,8 +112,18 @@ export default function MessagesPage() {
             >
               {showSearch ? 'Hide search' : 'Search'}
             </button>
-            <Link href="/app/search" className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 text-foreground/70 text-xs font-medium transition-all">
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            <Link
+              href="/app/search"
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 text-foreground/70 text-xs font-medium transition-all"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                />
+              </svg>
               Search
             </Link>
             {/* Quick Pay Action Button */}
@@ -131,7 +143,10 @@ export default function MessagesPage() {
 
         {showSearch && (
           <div className="px-4 py-3 border-b border-border bg-card/20 lg:hidden">
-            <MessageSearch conversationId={DEMO_CONVERSATION_ID} placeholder="Search this conversation…" />
+            <MessageSearch
+              conversationId={DEMO_CONVERSATION_ID}
+              placeholder="Search this conversation…"
+            />
           </div>
         )}
 
@@ -246,7 +261,10 @@ export default function MessagesPage() {
       {/* Search sidebar - desktop */}
       <div className="hidden lg:block bg-card/30 border border-border rounded-3xl p-5 overflow-y-auto">
         <h3 className="font-semibold text-sm mb-3">Search messages</h3>
-        <MessageSearch conversationId={DEMO_CONVERSATION_ID} placeholder="Search in conversation…" />
+        <MessageSearch
+          conversationId={DEMO_CONVERSATION_ID}
+          placeholder="Search in conversation…"
+        />
         <div className="mt-4 text-[11px] text-foreground/40 leading-relaxed">
           Local E2EE search. Try: <code>stellar</code>, <code>xlm</code>, <code>transactions</code>.
         </div>
