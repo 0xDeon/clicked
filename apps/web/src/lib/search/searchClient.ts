@@ -1,11 +1,20 @@
 'use client';
 
-import type { DecryptedMessage, SearchQuery, SearchResponse, WorkerIndexMessage, WorkerResponseMessage } from './types';
+import type {
+  DecryptedMessage,
+  SearchQuery,
+  SearchResponse,
+  WorkerIndexMessage,
+  WorkerResponseMessage,
+} from './types';
 import { putMessages as dbPutMessages, deleteMessages as dbDeleteMessages } from './db';
 
 let worker: Worker | null = null;
 let ready = false;
-const pending = new Map<number, { resolve: (r: SearchResponse)=>void; reject: (e: any)=>void }>();
+const pending = new Map<
+  number,
+  { resolve: (r: SearchResponse) => void; reject: (e: unknown) => void }
+>();
 let nextId = 1;
 const readyWaiters: Array<() => void> = [];
 
@@ -17,7 +26,7 @@ function ensureWorker(): Worker {
     const msg = ev.data;
     if (msg.type === 'ready') {
       ready = true;
-      readyWaiters.splice(0).forEach(fn => fn());
+      readyWaiters.splice(0).forEach((fn) => fn());
       return;
     }
     if (msg.type === 'search_result') {
@@ -45,7 +54,7 @@ function post(msg: WorkerIndexMessage) {
 export async function waitReady(): Promise<void> {
   ensureWorker();
   if (ready) return;
-  await new Promise<void>(resolve => readyWaiters.push(resolve));
+  await new Promise<void>((resolve) => readyWaiters.push(resolve));
 }
 
 export async function indexMessages(messages: DecryptedMessage[]): Promise<void> {

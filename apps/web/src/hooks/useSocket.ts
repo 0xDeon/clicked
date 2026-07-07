@@ -50,12 +50,21 @@ export function useSocket(token: string | null) {
       if (payload.syncRequired && socket) void runSocketSync(socket, authToken);
     }
 
-    function onEphemeralReplay(payload: { id?: string; type?: string; data?: Record<string, unknown> }) {
+    function onEphemeralReplay(payload: {
+      id?: string;
+      type?: string;
+      data?: Record<string, unknown>;
+    }) {
       if (payload.id) setResumeCursor(authToken, payload.id);
       if (payload.type && socket) replaySocketEvent(socket, payload.type, payload.data ?? {});
     }
 
-    function onMessageEnvelope(payload: { conversationId?: string; messageId?: string; envelopeId?: string; sequenceNumber?: number }) {
+    function onMessageEnvelope(payload: {
+      conversationId?: string;
+      messageId?: string;
+      envelopeId?: string;
+      sequenceNumber?: number;
+    }) {
       if (!payload.conversationId || !payload.messageId) return;
       emitSocketEnvelope(socket, 'message_delivered', {
         conversationId: payload.conversationId,

@@ -1,6 +1,5 @@
 """Unit tests for POST /chat (issue #144)."""
 
-import pytest
 from unittest.mock import MagicMock
 
 _BASE_BODY = {
@@ -27,9 +26,7 @@ def test_missing_api_key_returns_500(monkeypatch, client):
 
 def test_valid_request_returns_reply(mock_openai, client):
     mock_client = mock_openai.return_value
-    mock_client.chat.completions.create.return_value = _fake_chat_reply(
-        "Hello from Clicked AI!"
-    )
+    mock_client.chat.completions.create.return_value = _fake_chat_reply("Hello from Clicked AI!")
 
     response = client.post("/chat", json=_BASE_BODY)
     assert response.status_code == 200

@@ -31,7 +31,10 @@ interface CachedSession {
 
 interface SessionProtocol {
   deriveSharedSecret(publicKey1: JsonWebKey, publicKey2: JsonWebKey): Promise<CryptoKey>;
-  encryptMessage(message: string, sharedSecret: CryptoKey): Promise<{ ciphertext: string; iv: string }>;
+  encryptMessage(
+    message: string,
+    sharedSecret: CryptoKey,
+  ): Promise<{ ciphertext: string; iv: string }>;
   decryptMessage(ciphertext: string, iv: string, sharedSecret: CryptoKey): Promise<string>;
 }
 
@@ -76,7 +79,10 @@ class SealedBoxProtocol implements SessionProtocol {
     return sharedSecret;
   }
 
-  async encryptMessage(message: string, sharedSecret: CryptoKey): Promise<{ ciphertext: string; iv: string }> {
+  async encryptMessage(
+    message: string,
+    sharedSecret: CryptoKey,
+  ): Promise<{ ciphertext: string; iv: string }> {
     const iv = window.crypto.getRandomValues(new Uint8Array(12));
     const encoded = new TextEncoder().encode(message);
 
@@ -87,17 +93,19 @@ class SealedBoxProtocol implements SessionProtocol {
     );
 
     return {
-      iv: Array.from(iv).map(b => b.toString(16).padStart(2, '0')).join(''),
-      ciphertext: Array.from(new Uint8Array(encrypted)).map(b => b.toString(16).padStart(2, '0')).join(''),
+      iv: Array.from(iv)
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join(''),
+      ciphertext: Array.from(new Uint8Array(encrypted))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join(''),
     };
   }
 
   async decryptMessage(ciphertext: string, iv: string, sharedSecret: CryptoKey): Promise<string> {
-    const ivBytes = new Uint8Array(
-      iv.match(/.{1,2}/g)?.map(byte => parseInt(byte, 16)) || []
-    );
+    const ivBytes = new Uint8Array(iv.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) || []);
     const ciphertextBytes = new Uint8Array(
-      ciphertext.match(/.{1,2}/g)?.map(byte => parseInt(byte, 16)) || []
+      ciphertext.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) || [],
     );
 
     const decrypted = await window.crypto.subtle.decrypt(
@@ -150,7 +158,11 @@ class SessionStore {
     });
   }
 
-  private dbGetByIndex<T>(storeName: string, indexName: string, key: IDBValidKey): Promise<T | undefined> {
+  private dbGetByIndex<T>(
+    storeName: string,
+    indexName: string,
+    key: IDBValidKey,
+  ): Promise<T | undefined> {
     return new Promise(async (resolve, reject) => {
       const db = await this.getDb();
       const tx = db.transaction(storeName, 'readonly');
@@ -209,7 +221,7 @@ class SessionStore {
       const publicKeyData = JSON.stringify(publicKey);
       const data = new TextEncoder().encode(publicKeyData);
       const signatureBytes = new Uint8Array(
-        signature.match(/.{1,2}/g)?.map(byte => parseInt(byte, 16)) || []
+        signature.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) || [],
       );
 
       const isValid = await window.crypto.subtle.verify(
@@ -232,7 +244,11 @@ class SessionStore {
     return `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
   }
 
-  async fetchDeviceBundle(recipientId: string, deviceId: string, token: string): Promise<DeviceBundle> {
+  async fetchDeviceBundle(
+    recipientId: string,
+    deviceId: string,
+    token: string,
+  ): Promise<DeviceBundle> {
     const response = await apiFetch(`/crypto/bundles/${recipientId}/${deviceId}`, {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -264,9 +280,13 @@ class SessionStore {
       throw new Error('Invalid signed prekey signature');
     }
 
-    const selectedPrekeyPublicKey = bundle.oneTimePrekey?.publicKey || bundle.signedPrekey.publicKey;
+    const selectedPrekeyPublicKey =
+      bundle.oneTimePrekey?.publicKey || bundle.signedPrekey.publicKey;
 
-    const sharedSecret = await this.protocol.deriveSharedSecret(myPublicKey, selectedPrekeyPublicKey);
+    const sharedSecret = await this.protocol.deriveSharedSecret(
+      myPublicKey,
+      selectedPrekeyPublicKey,
+    );
 
     const sessionId = this.generateSessionId();
     const cachedSession: CachedSession = {
@@ -334,7 +354,10 @@ class SessionStore {
     this.protocol = protocol;
   }
 
-  async encryptForSession(sessionId: string, message: string): Promise<{ ciphertext: string; iv: string }> {
+  async encryptForSession(
+    sessionId: string,
+    message: string,
+  ): Promise<{ ciphertext: string; iv: string }> {
     const session = await this.getSession(sessionId);
     if (!session) {
       throw new Error('Session not found');

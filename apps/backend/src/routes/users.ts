@@ -352,13 +352,19 @@ usersRouter.patch('/me', async (req: AuthRequest, res) => {
           for (const m of memberships) {
             if (presenceVisible) {
               io.to(conversationRoom(m.conversationId)).emit('user_online', { userId });
-              io.to(conversationRoom(m.conversationId)).emit('presence_update', { userId, online: true });
+              io.to(conversationRoom(m.conversationId)).emit('presence_update', {
+                userId,
+                online: true,
+              });
               // Also emit to direct conversation room for backward compatibility
               io.to(m.conversationId).emit('user_online', { userId });
               io.to(m.conversationId).emit('presence_update', { userId, online: true });
             } else {
               io.to(conversationRoom(m.conversationId)).emit('user_offline', { userId });
-              io.to(conversationRoom(m.conversationId)).emit('presence_update', { userId, online: false });
+              io.to(conversationRoom(m.conversationId)).emit('presence_update', {
+                userId,
+                online: false,
+              });
               // Also emit to direct conversation room for backward compatibility
               io.to(m.conversationId).emit('user_offline', { userId });
               io.to(m.conversationId).emit('presence_update', { userId, online: false });

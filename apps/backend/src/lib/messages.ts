@@ -11,7 +11,7 @@ export type MessageLike = {
   [key: string]: any;
 };
 
-export function serializeMessage<T extends MessageWithEnvelopes>(
+export function serializeMessage<T extends MessageLike>(
   message: T,
 ): Omit<T, 'deletedAt' | 'envelopes' | 'ciphertext'> & {
   ciphertext: string | null;

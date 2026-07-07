@@ -6,7 +6,9 @@ interface StoredPrekey {
   privateKey: CryptoKey;
   publicKey: JsonWebKey;
   createdAt: number;
-  isOneTime: boolean;
+  // Stored as 0/1 rather than boolean: IndexedDB index keys must be a valid
+  // IDBValidKey, which excludes booleans.
+  isOneTime: 0 | 1;
 }
 
 interface SignedPrekey {
@@ -116,14 +118,14 @@ class PrekeyStore {
   }
 
   private async generatePrekey(): Promise<{ keyId: string; keyPair: CryptoKeyPair }> {
-    const keyPair = await window.crypto.subtle.generateKey(
+    const keyPair = (await window.crypto.subtle.generateKey(
       {
         name: 'ECDH',
         namedCurve: 'X25519',
       },
       false,
       ['deriveBits'],
-    ) as CryptoKeyPair;
+    )) as CryptoKeyPair;
 
     return {
       keyId: this.generateKeyId(),
@@ -131,10 +133,7 @@ class PrekeyStore {
     };
   }
 
-  private async signPrekey(
-    privateKey: CryptoKey,
-    publicKeyJwk: JsonWebKey,
-  ): Promise<string> {
+  private async signPrekey(privateKey: CryptoKey, publicKeyJwk: JsonWebKey): Promise<string> {
     const publicKeyData = JSON.stringify(publicKeyJwk);
     const data = new TextEncoder().encode(publicKeyData);
 
@@ -159,7 +158,7 @@ class PrekeyStore {
     );
 
     return Array.from(new Uint8Array(signature))
-      .map(b => b.toString(16).padStart(2, '0'))
+      .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
   }
 
@@ -178,7 +177,7 @@ class PrekeyStore {
       keyId,
       publicKey: publicKeyJwk,
       createdAt: Date.now(),
-      isOneTime: false,
+      isOneTime: 0,
       privateKeyJwk: await window.crypto.subtle.exportKey('jwk', keyPair.privateKey),
     };
 
@@ -191,7 +190,9 @@ class PrekeyStore {
     };
   }
 
-  async generateAndStoreOneTimePrekeys(count: number = this.oneTimeKeyBatch): Promise<Array<{ keyId: string; publicKey: JsonWebKey }>> {
+  async generateAndStoreOneTimePrekeys(
+    count: number = this.oneTimeKeyBatch,
+  ): Promise<Array<{ keyId: string; publicKey: JsonWebKey }>> {
     const prekeys: Array<{ keyId: string; publicKey: JsonWebKey }> = [];
 
     for (let i = 0; i < count; i++) {
@@ -202,7 +203,7 @@ class PrekeyStore {
         keyId,
         publicKey: publicKeyJwk,
         createdAt: Date.now(),
-        isOneTime: true,
+        isOneTime: 1,
         privateKeyJwk: await window.crypto.subtle.exportKey('jwk', keyPair.privateKey),
       };
 
@@ -214,11 +215,13 @@ class PrekeyStore {
   }
 
   async getSignedPrekey(): Promise<SignedPrekey | null> {
-    return this.dbGet<SignedPrekey>('signedPrekey', 'signed');
+    return (await this.dbGet<SignedPrekey>('signedPrekey', 'signed')) ?? null;
   }
 
   async getOneTimePrekey(keyId: string): Promise<CryptoKey | null> {
-    const prekey = await this.dbGet<Omit<StoredPrekey, 'privateKey'> & { privateKeyJwk: JsonWebKey }>('prekeys', keyId);
+    const prekey = await this.dbGet<
+      Omit<StoredPrekey, 'privateKey'> & { privateKeyJwk: JsonWebKey }
+    >('prekeys', keyId);
     if (!prekey) return null;
 
     const privateKey = await window.crypto.subtle.importKey(
@@ -240,7 +243,9 @@ class PrekeyStore {
   }
 
   async getAvailableOneTimeKeysCount(): Promise<number> {
-    const oneTimeKeys = await this.dbGetByIndex<Omit<StoredPrekey, 'privateKey'> & { privateKeyJwk: JsonWebKey }>('prekeys', 'isOneTime', true);
+    const oneTimeKeys = await this.dbGetByIndex<
+      Omit<StoredPrekey, 'privateKey'> & { privateKeyJwk: JsonWebKey }
+    >('prekeys', 'isOneTime', 1);
     return oneTimeKeys.length;
   }
 

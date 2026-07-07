@@ -7,7 +7,6 @@ import {
   messages,
   messageEnvelopes,
   userDevices,
-  files,
   conversations,
 } from '../db/schema.js';
 import { softDeleteFile } from '../services/fileCleanup.js';

@@ -1,4 +1,4 @@
-import { and, eq, isNull, inArray } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { Server } from 'socket.io';
 import { db } from '../db/index.js';
 import { messageEnvelopes, userDevices, conversationMembers, messages } from '../db/schema.js';
@@ -72,8 +72,21 @@ export async function handleDeviceDeliveryReceipt(
     return;
   }
 
+  // Duplicate receipt for a device already marked delivered — nothing to do.
+  const existingEnvelope = await db.query.messageEnvelopes.findFirst({
+    where: and(
+      eq(messageEnvelopes.messageId, messageId),
+      eq(messageEnvelopes.recipientDeviceId, recipientDeviceId),
+    ),
+    columns: { deliveredAt: true },
+  });
+
+  if (existingEnvelope?.deliveredAt) {
+    return;
+  }
+
   // Update deliveredAt for this specific device (idempotent)
-  const updateResult = await db
+  await db
     .update(messageEnvelopes)
     .set({ deliveredAt: new Date() })
     .where(
@@ -122,7 +135,7 @@ export async function handleDeviceDeliveryReceipt(
       where: eq(conversationMembers.conversationId, conversationId),
       columns: { userId: true },
     });
-    
+
     await publishEphemeral(
       redis,
       members.map((member) => member.userId),
@@ -146,13 +159,27 @@ export async function handleDeviceDeliveryReceipt(
 export async function getMessageDeliveryStatus(
   messageId: string,
   conversationId: string,
-): Promise<Record<string, { fullyDelivered: boolean; deviceDeliveries: Array<{ deviceId: string; deliveredAt: string | null }> }>> {
+): Promise<
+  Record<
+    string,
+    {
+      fullyDelivered: boolean;
+      deviceDeliveries: Array<{ deviceId: string; deliveredAt: string | null }>;
+    }
+  >
+> {
   const members = await db
     .select({ userId: conversationMembers.userId })
     .from(conversationMembers)
     .where(eq(conversationMembers.conversationId, conversationId));
 
-  const result: Record<string, { fullyDelivered: boolean; deviceDeliveries: Array<{ deviceId: string; deliveredAt: string | null }> }> = {};
+  const result: Record<
+    string,
+    {
+      fullyDelivered: boolean;
+      deviceDeliveries: Array<{ deviceId: string; deliveredAt: string | null }>;
+    }
+  > = {};
 
   for (const member of members) {
     // Get all envelopes for this user
@@ -170,7 +197,7 @@ export async function getMessageDeliveryStatus(
       );
 
     const fullyDelivered = await isMessageFullyDeliveredToUser(messageId, member.userId);
-    
+
     result[member.userId] = {
       fullyDelivered,
       deviceDeliveries: envelopes.map((e) => ({

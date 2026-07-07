@@ -37,11 +37,7 @@ export async function getOrCreateDeviceIdentity(): Promise<{
     };
   }
 
-  const keyPair = await crypto.subtle.generateKey(
-    { name: 'Ed25519' },
-    true,
-    ['sign', 'verify'],
-  );
+  const keyPair = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
   const identityPublicKey = await exportPublicKey(keyPair.publicKey);
   const deviceId = existingDeviceId ?? crypto.randomUUID();
 

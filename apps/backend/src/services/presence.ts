@@ -114,22 +114,6 @@ export async function refreshPresenceSocket(
   await registerPresenceSocket(redis, userId, deviceId, socketId);
 }
 
-export async function setOnline(redis: Redis, userId: string, socketId: string): Promise<boolean> {
-  const key = presenceKey(userId);
-  const debounceKey = `presence_debounce:${userId}`;
-
-  const count = await redis.scard(key);
-  await redis.sadd(key, socketId);
-  await redis.expire(key, PRESENCE_TTL);
-
-  if (count === 0) {
-    const debouncing = await redis.del(debounceKey);
-    if (debouncing === 1) {
-      return false; // Flap detected, don't broadcast online
-    }
-    return true; // First socket connected
-  }
-  return false;
 /**
  * Remove a socket mapping. Returns true when that device has no remaining
  * tracked sockets, so callers may safely remove the device-level presence entry.

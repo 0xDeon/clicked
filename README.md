@@ -2,8 +2,6 @@
 
 A decentralized, chat-first platform that combines **real-time messaging, token payments, and community-driven funding** into a single seamless experience.
 
-
-
 This project reimagines how people coordinate, transact, and build together online by embedding financial actions directly into conversations. Users can send tokens as easily as messages, contribute to shared group treasuries, and fund ideas through lightweight, on-chain proposals—all without leaving the chat interface.
 
 Built on blockchain infrastructure and modern messaging protocols, the platform bridges the gap between Web2 usability and Web3 ownership.

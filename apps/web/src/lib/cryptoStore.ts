@@ -81,14 +81,14 @@ class CryptoStore {
   }
 
   async generateIdentityKeyPair(): Promise<CryptoKeyPair> {
-    const keyPair = await window.crypto.subtle.generateKey(
+    const keyPair = (await window.crypto.subtle.generateKey(
       {
         name: 'ECDH',
         namedCurve: 'P-256',
       },
       false,
       ['deriveKey', 'deriveBits'],
-    ) as CryptoKeyPair;
+    )) as CryptoKeyPair;
 
     return keyPair;
   }
@@ -96,15 +96,22 @@ class CryptoStore {
   async storeIdentityKeyPair(keyPair: CryptoKeyPair): Promise<void> {
     const publicKeyJwk = await window.crypto.subtle.exportKey('jwk', keyPair.publicKey);
 
-    await this.dbPut('keys', {
-      id: 'identity_keypair',
-      publicKey: publicKeyJwk,
-      createdAt: Date.now(),
-    }, 'identity_keypair');
+    await this.dbPut(
+      'keys',
+      {
+        id: 'identity_keypair',
+        publicKey: publicKeyJwk,
+        createdAt: Date.now(),
+      },
+      'identity_keypair',
+    );
   }
 
   async getIdentityPrivateKey(): Promise<CryptoKey | null> {
-    const keyExists = await this.dbGet<{ id: string; publicKey: JsonWebKey; createdAt: number }>('keys', 'identity_keypair');
+    const keyExists = await this.dbGet<{ id: string; publicKey: JsonWebKey; createdAt: number }>(
+      'keys',
+      'identity_keypair',
+    );
     if (!keyExists) return null;
 
     const privateKey = await window.crypto.subtle.generateKey(
@@ -120,14 +127,19 @@ class CryptoStore {
   }
 
   async getIdentityPublicKey(): Promise<JsonWebKey | null> {
-    const keyData = await this.dbGet<{ id: string; publicKey: JsonWebKey; createdAt: number }>('keys', 'identity_keypair');
+    const keyData = await this.dbGet<{ id: string; publicKey: JsonWebKey; createdAt: number }>(
+      'keys',
+      'identity_keypair',
+    );
     if (!keyData) return null;
     return keyData.publicKey;
   }
 
   async initializeIdentityKey(): Promise<JsonWebKey> {
-    const db = await this.getDb();
-    const existing = await db.get('keys', 'identity_keypair');
+    const existing = await this.dbGet<{ id: string; publicKey: JsonWebKey; createdAt: number }>(
+      'keys',
+      'identity_keypair',
+    );
     if (existing) return existing.publicKey;
 
     const keyPair = await this.generateIdentityKeyPair();

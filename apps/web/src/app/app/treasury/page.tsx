@@ -1,11 +1,11 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from "react";
-import { ProposeWithdrawalModal } from "@/components/treasury/ProposeWithdrawalModal";
-import { ProposalCard, type Proposal } from "@/components/treasury/ProposalCard";
-import { apiFetch } from "@/lib/api";
-import { useAuth } from "@/contexts/AuthContext";
-import { useSocket } from "@/hooks/useSocket";
+import React, { useState, useEffect, useCallback } from 'react';
+import { ProposeWithdrawalModal } from '@/components/treasury/ProposeWithdrawalModal';
+import { ProposalCard, type Proposal } from '@/components/treasury/ProposalCard';
+import { apiFetch } from '@/lib/api';
+import { useAuth } from '@/components/auth/useAuth';
+import { useSocket } from '@/hooks/useSocket';
 
 export default function TreasuryPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -77,7 +77,7 @@ export default function TreasuryPage() {
       return;
     }
     try {
-      const res = await apiFetch("/treasury/proposals", {
+      const res = await apiFetch('/treasury/proposals', {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
@@ -101,26 +101,31 @@ export default function TreasuryPage() {
 
     function onProposalUpdated(data: {
       proposalId: string;
-      status: Proposal["status"];
+      status: Proposal['status'];
       approvalsCount: number;
       rejectionsCount: number;
     }) {
       setProposals((prev) =>
         prev.map((p) =>
           p.proposalId === data.proposalId
-            ? { ...p, status: data.status, approvalsCount: data.approvalsCount, rejectionsCount: data.rejectionsCount }
+            ? {
+                ...p,
+                status: data.status,
+                approvalsCount: data.approvalsCount,
+                rejectionsCount: data.rejectionsCount,
+              }
             : p,
         ),
       );
     }
 
-    socket.on("treasury_proposal_updated", onProposalUpdated);
+    socket.on('treasury_proposal_updated', onProposalUpdated);
     return () => {
-      socket.off("treasury_proposal_updated", onProposalUpdated);
+      socket.off('treasury_proposal_updated', onProposalUpdated);
     };
   }, [socket]);
 
-  const activeProposals = proposals.filter((p) => p.status === "active");
+  const activeProposals = proposals.filter((p) => p.status === 'active');
 
   return (
     <div className="space-y-6">
@@ -173,10 +178,16 @@ export default function TreasuryPage() {
 
         <div className="p-6 rounded-3xl bg-card/30 border border-border backdrop-blur-md relative overflow-hidden group">
           <div className="absolute top-0 right-0 w-24 h-24 bg-cyan-500/5 rounded-full blur-2xl group-hover:bg-cyan-500/10 transition-all duration-300" />
-          <p className="text-xs font-semibold text-foreground/40 uppercase tracking-wider">Pending Transactions</p>
-          <p className="text-3xl font-bold mt-2 font-sans tracking-tight">{loadingProposals ? "—" : activeProposals.length}</p>
+          <p className="text-xs font-semibold text-foreground/40 uppercase tracking-wider">
+            Pending Transactions
+          </p>
+          <p className="text-3xl font-bold mt-2 font-sans tracking-tight">
+            {loadingProposals ? '—' : activeProposals.length}
+          </p>
           <p className="text-xs text-foreground/30 mt-4">
-            {activeProposals.length === 0 ? "All sign-offs completed" : `${activeProposals.length} awaiting signatures`}
+            {activeProposals.length === 0
+              ? 'All sign-offs completed'
+              : `${activeProposals.length} awaiting signatures`}
           </p>
         </div>
       </div>
@@ -187,21 +198,22 @@ export default function TreasuryPage() {
         {loadingProposals ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {[1, 2, 3].map((i) => (
-              <div key={i} className="h-44 rounded-2xl bg-card/20 border border-border animate-pulse" />
+              <div
+                key={i}
+                className="h-44 rounded-2xl bg-card/20 border border-border animate-pulse"
+              />
             ))}
           </div>
         ) : proposals.length === 0 ? (
           <div className="p-8 rounded-2xl bg-card/20 border border-border text-center">
-            <p className="text-foreground/40 text-sm">No proposals yet. Use &quot;Propose Withdrawal&quot; to create one.</p>
+            <p className="text-foreground/40 text-sm">
+              No proposals yet. Use &quot;Propose Withdrawal&quot; to create one.
+            </p>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {proposals.map((p) => (
-              <ProposalCard
-                key={p.id}
-                proposal={p}
-                onVoted={() => fetchProposals()}
-              />
+              <ProposalCard key={p.id} proposal={p} onVoted={() => fetchProposals()} />
             ))}
           </div>
         )}

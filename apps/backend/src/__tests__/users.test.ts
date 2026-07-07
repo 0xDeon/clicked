@@ -26,6 +26,8 @@ vi.mock('../db/index.js', () => ({
   },
 }));
 
+vi.mock('../lib/redis.js', () => ({ redis: null }));
+
 const { usersRouter } = await import('../routes/users.js');
 const { db } = await import('../db/index.js');
 

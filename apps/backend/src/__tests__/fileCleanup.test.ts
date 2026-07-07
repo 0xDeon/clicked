@@ -73,8 +73,9 @@ describe('#231 – softDeleteFile', () => {
 
 describe('#231 – runHardDeletePass', () => {
   it('skips files that still have live message references', async () => {
-    mockFindMany.mockResolvedValueOnce([{ id: 'file-1', storageKey: 'key-1' }]) // first pass (candidates)
-                .mockResolvedValueOnce([]); // second pass (pendingCandidates)
+    mockFindMany
+      .mockResolvedValueOnce([{ id: 'file-1', storageKey: 'key-1' }]) // first pass (candidates)
+      .mockResolvedValueOnce([]); // second pass (pendingCandidates)
     mockExecute.mockResolvedValueOnce([{ '?column?': 1 }]); // live ref exists
 
     await runHardDeletePass();
@@ -84,8 +85,9 @@ describe('#231 – runHardDeletePass', () => {
   });
 
   it('hard-deletes from S3 and marks hardDeletedAt when no live refs', async () => {
-    mockFindMany.mockResolvedValueOnce([{ id: 'file-2', storageKey: 'key-2' }])
-                .mockResolvedValueOnce([]);
+    mockFindMany
+      .mockResolvedValueOnce([{ id: 'file-2', storageKey: 'key-2' }])
+      .mockResolvedValueOnce([]);
     mockExecute.mockResolvedValueOnce([]); // no live refs
 
     await runHardDeletePass();
@@ -95,8 +97,9 @@ describe('#231 – runHardDeletePass', () => {
   });
 
   it('does not mark hardDeletedAt when S3 delete throws (safe retry)', async () => {
-    mockFindMany.mockResolvedValueOnce([{ id: 'file-3', storageKey: 'key-3' }])
-                .mockResolvedValueOnce([]);
+    mockFindMany
+      .mockResolvedValueOnce([{ id: 'file-3', storageKey: 'key-3' }])
+      .mockResolvedValueOnce([]);
     mockExecute.mockResolvedValueOnce([]);
     mockS3Send.mockRejectedValueOnce(new Error('NoSuchKey'));
 
@@ -106,10 +109,12 @@ describe('#231 – runHardDeletePass', () => {
   });
 
   it('processes multiple files in one pass', async () => {
-    mockFindMany.mockResolvedValueOnce([
-      { id: 'file-a', storageKey: 'key-a' },
-      { id: 'file-b', storageKey: 'key-b' },
-    ]).mockResolvedValueOnce([]);
+    mockFindMany
+      .mockResolvedValueOnce([
+        { id: 'file-a', storageKey: 'key-a' },
+        { id: 'file-b', storageKey: 'key-b' },
+      ])
+      .mockResolvedValueOnce([]);
     mockExecute.mockResolvedValue([]); // no live refs for either
 
     await runHardDeletePass();
@@ -118,10 +123,9 @@ describe('#231 – runHardDeletePass', () => {
   });
 
   it('deletes pending files older than 24 hours', async () => {
-    mockFindMany.mockResolvedValueOnce([]) // no soft-deleted candidates
-                .mockResolvedValueOnce([
-                  { id: 'pending-1', storageKey: 'pending-key-1' },
-                ]);
+    mockFindMany
+      .mockResolvedValueOnce([]) // no soft-deleted candidates
+      .mockResolvedValueOnce([{ id: 'pending-1', storageKey: 'pending-key-1' }]);
 
     await runHardDeletePass();
 

@@ -69,7 +69,7 @@ export interface PresignedDownloadResponse {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function bytesToB64(bytes: Uint8Array): string {
+function bytesToB64(bytes: Uint8Array<ArrayBuffer>): string {
   let binary = '';
   for (const b of bytes) {
     binary += String.fromCharCode(b);
@@ -77,7 +77,7 @@ function bytesToB64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-function b64ToBytes(b64: string): Uint8Array {
+function b64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
@@ -106,9 +106,7 @@ export async function generateFileKey(): Promise<{ key: CryptoKey; keyB64: strin
  */
 export async function importFileKey(keyB64: string): Promise<CryptoKey> {
   const raw = b64ToBytes(keyB64);
-  return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM', length: 256 }, false, [
-    'decrypt',
-  ]);
+  return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
 }
 
 // ─── Encrypt ─────────────────────────────────────────────────────────────────
@@ -166,10 +164,7 @@ export async function requestPresignedUpload(
  * PUT the encrypted ciphertext to S3 via a presigned URL (#163).
  * Only ciphertext bytes are transmitted; the key is never part of this request.
  */
-export async function uploadCiphertextToS3(
-  presignedUrl: string,
-  cipherBlob: Blob,
-): Promise<void> {
+export async function uploadCiphertextToS3(presignedUrl: string, cipherBlob: Blob): Promise<void> {
   const resp = await fetch(presignedUrl, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/octet-stream' },
@@ -210,8 +205,15 @@ export interface SendFileResult {
  * The file key is ONLY transmitted inside the E2EE envelopes — never in plain.
  */
 export async function sendEncryptedFile(params: SendFileParams): Promise<SendFileResult> {
-  const { file, conversationId: _conversationId, messageId: _messageId, devices, thumbnail, authToken, apiBaseUrl } =
-    params;
+  const {
+    file,
+    conversationId: _conversationId,
+    messageId: _messageId,
+    devices,
+    thumbnail,
+    authToken,
+    apiBaseUrl,
+  } = params;
 
   // Step 1: Encrypt
   const { cipherBlob, fileKeyB64, ivB64 } = await encryptFile(file);

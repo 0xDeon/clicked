@@ -45,8 +45,11 @@ import {
 import { startFileCleanupJob } from './services/fileCleanup.js';
 import { loadEnv } from './config.js';
 import { createObjectStore } from './lib/objectStore.js';
-import { conversationRoom, userRoom, joinConversationRoom, joinUserRoom, rebuildRoomsAfterRestart } from './services/roomManager.js';
-import { handleDeviceDeliveryReceipt } from './services/deliveryAggregation.js';
+import {
+  conversationRoom,
+  joinUserRoom,
+  rebuildRoomsAfterRestart,
+} from './services/roomManager.js';
 
 dotenv.config();
 
@@ -208,6 +211,11 @@ io.on('connection', async (socket: AuthSocket) => {
     await cleanupStaleSockets(io, appRedis, userId, socket.id);
 
     const becameOnline = await setOnline(appRedis, userId, deviceId);
+    const connectUser = await db.query.users.findFirst({
+      where: eq(users.id, userId),
+      columns: { presenceVisible: true },
+    });
+    const presenceVisible = connectUser?.presenceVisible ?? true;
     if (becameOnline && presenceVisible) {
       for (const m of memberships) {
         io.to(conversationRoom(m.conversationId)).emit('user_online', { userId });
@@ -389,7 +397,7 @@ async function attachRedisAdapter(): Promise<void> {
       try {
         await reconcileBoot(io, appRedis);
         console.log('[presence] Boot reconciliation complete');
-        
+
         // Rebuild rooms after restart for optimized fan-out
         await rebuildRoomsAfterRestart(io);
         console.log('[roomManager] Rooms rebuilt after restart');

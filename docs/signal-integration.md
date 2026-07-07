@@ -13,11 +13,11 @@ Activation requires filling in the stub and changing `defaultSession` in `sessio
 
 ### Candidates considered
 
-| Library | Maintained by | WASM/native | Audit | Bundle size (gzipped) |
-|---|---|---|---|---|
-| **@signalapp/libsignal-client** | Signal Foundation | WASM + Node native | ✅ Audited by Cure53 (2016, 2019, 2022) | ~1.2 MB raw / ~380 KB gzip |
-| libsignal-protocol-javascript | Open Whisper Systems (archived) | Pure JS | ❌ Unmaintained (last commit 2021) | ~80 KB |
-| @privacyresearch/libsignal-protocol-typescript | Community | Pure JS | ❌ No independent audit | ~120 KB |
+| Library                                        | Maintained by                   | WASM/native        | Audit                                   | Bundle size (gzipped)      |
+| ---------------------------------------------- | ------------------------------- | ------------------ | --------------------------------------- | -------------------------- |
+| **@signalapp/libsignal-client**                | Signal Foundation               | WASM + Node native | ✅ Audited by Cure53 (2016, 2019, 2022) | ~1.2 MB raw / ~380 KB gzip |
+| libsignal-protocol-javascript                  | Open Whisper Systems (archived) | Pure JS            | ❌ Unmaintained (last commit 2021)      | ~80 KB                     |
+| @privacyresearch/libsignal-protocol-typescript | Community                       | Pure JS            | ❌ No independent audit                 | ~120 KB                    |
 
 ### Why `@signalapp/libsignal-client`
 
@@ -32,11 +32,11 @@ Activation requires filling in the stub and changing `defaultSession` in `sessio
 
 ### Risks & mitigations
 
-| Risk | Mitigation |
-|---|---|
-| WASM ~380 KB gzip adds to initial bundle | Loaded via dynamic import in `LibsignalSessionCrypto` — deferred until first send |
-| SSR incompatibility (Next.js) | Dynamic import with `'use client'` boundary; WASM init skipped on server |
-| Session state persistence (IndexedDB) | Phase-2 task — `InMemorySignalProtocolStore` stub ships now; IndexedDB store is next |
+| Risk                                     | Mitigation                                                                           |
+| ---------------------------------------- | ------------------------------------------------------------------------------------ |
+| WASM ~380 KB gzip adds to initial bundle | Loaded via dynamic import in `LibsignalSessionCrypto` — deferred until first send    |
+| SSR incompatibility (Next.js)            | Dynamic import with `'use client'` boundary; WASM init skipped on server             |
+| Session state persistence (IndexedDB)    | Phase-2 task — `InMemorySignalProtocolStore` stub ships now; IndexedDB store is next |
 
 ---
 
@@ -101,11 +101,11 @@ npm install @signalapp/libsignal-client
 
 ## Bundle-size impact
 
-| Asset | Size (gzip est.) | Notes |
-|---|---|---|
-| `@signalapp/libsignal-client` WASM | ~380 KB | Loaded lazily on first message send |
-| Phase-1 crypto.ts | ~4 KB | Always loaded |
-| session.ts + signalClient.ts | ~3 KB | Always loaded (stubs only until Phase-2) |
+| Asset                              | Size (gzip est.) | Notes                                    |
+| ---------------------------------- | ---------------- | ---------------------------------------- |
+| `@signalapp/libsignal-client` WASM | ~380 KB          | Loaded lazily on first message send      |
+| Phase-1 crypto.ts                  | ~4 KB            | Always loaded                            |
+| session.ts + signalClient.ts       | ~3 KB            | Always loaded (stubs only until Phase-2) |
 
 The WASM chunk is isolated behind a dynamic `import()` call in
 `LibsignalSessionCrypto.encryptToDevice`. It will not appear in the initial

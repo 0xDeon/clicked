@@ -10,6 +10,15 @@ export async function generatePresignedPut(storageKey: string, _mimeType: string
   return `${base}/${storageKey}?X-Expires=${expires}`;
 }
 
+export async function generatePresignedGet(
+  storageKey: string,
+  ttlSeconds: number = PRESIGNED_TTL_SECONDS,
+): Promise<string> {
+  const base = process.env['STORAGE_ENDPOINT'] ?? 'https://storage.example.com';
+  const expires = Math.floor(Date.now() / 1000) + ttlSeconds;
+  return `${base}/${storageKey}?X-Expires=${expires}`;
+}
+
 export function generateStorageKey(conversationId: string, sha256: string): string {
   // Deterministic per (conversation, content) so duplicate uploads share a key.
   const hash = createHash('sha256')
