@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { IRouter } from 'express';
-import { asc, and, count, desc, eq, inArray, lt, sql, ne } from 'drizzle-orm';
+import { asc, and, count, desc, eq, inArray, lt, or, sql, ne } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import {
   conversationMembers,
@@ -8,7 +8,7 @@ import {
   messages,
   tokenTransfers,
   messageEnvelopes,
-  userDevices,
+  devices,
 } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { redis, CONV_CACHE_TTL, convCacheKey } from '../lib/redis.js';
@@ -471,25 +471,34 @@ conversationsRouter.get('/:id/messages', async (req: AuthRequest, res) => {
     return;
   }
 
-  // Resolve cursor: look up the `createdAt` of the "before" message
-  let cursor: Date | undefined;
+  // Resolve cursor: look up the `(createdAt, id)` of the "before" message.
+  // `id` breaks ties for same-millisecond inserts — createdAt alone can
+  // silently skip or duplicate rows across pages under concurrent writes.
+  let cursor: { createdAt: Date; id: string } | undefined;
   if (before) {
     const ref = await db.query.messages.findFirst({
       where: eq(messages.id, before),
+      columns: { createdAt: true, id: true },
     });
     if (!ref) {
       res.status(400).json({ error: 'Invalid cursor' });
       return;
     }
-    cursor = ref.createdAt;
+    cursor = ref;
   }
 
   // Fetch one extra to determine whether there is a next page
   const rows = await db.query.messages.findMany({
     where: cursor
-      ? and(eq(messages.conversationId, conversationId), lt(messages.createdAt, cursor))
+      ? and(
+          eq(messages.conversationId, conversationId),
+          or(
+            lt(messages.createdAt, cursor.createdAt),
+            and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id)),
+          ),
+        )
       : eq(messages.conversationId, conversationId),
-    orderBy: desc(messages.createdAt),
+    orderBy: [desc(messages.createdAt), desc(messages.id)],
     limit: limit + 1,
     with: {
       sender: { columns: { id: true, username: true, avatarUrl: true } },
@@ -777,11 +786,11 @@ conversationsRouter.get('/:id/devices', async (req: AuthRequest, res) => {
   }
 
   // Fetch all active (non-revoked) devices for every member
-  const deviceRows = await db.query.userDevices.findMany({
+  const deviceRows = await db.query.devices.findMany({
     where: and(
-      inArray(userDevices.userId, userIds),
+      inArray(devices.userId, userIds),
       // revokedAt IS NULL → active devices only
-      sql`${userDevices.revokedAt} IS NULL`,
+      sql`${devices.revokedAt} IS NULL`,
     ),
     columns: {
       id: true,

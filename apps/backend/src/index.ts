@@ -5,7 +5,7 @@ import { createClient } from 'redis';
 import dotenv from 'dotenv';
 import { eq, isNull, and, inArray } from 'drizzle-orm';
 import { db } from './db/index.js';
-import { conversationMembers, users, userDevices } from './db/schema.js';
+import { conversationMembers, users, devices } from './db/schema.js';
 import { publishEphemeral } from './services/resumeStream.js';
 import { socketAuthMiddleware, type AuthSocket } from './middleware/socketAuth.js';
 import { registerMessagingHandlers } from './socket/messaging.js';
@@ -44,7 +44,7 @@ import {
 } from './services/stellarListener.js';
 import { startFileCleanupJob } from './services/fileCleanup.js';
 import { loadEnv } from './config.js';
-import { createObjectStore } from './lib/objectStore.js';
+import { getObjectStore } from './lib/objectStore.js';
 import {
   conversationRoom,
   joinUserRoom,
@@ -55,8 +55,8 @@ dotenv.config();
 
 // Validate required environment variables at boot. Exits with code 1 and
 // logs the offending vars if anything is missing or malformed.
-const env = loadEnv();
-export const objectStore = createObjectStore(env);
+loadEnv();
+export const objectStore = getObjectStore();
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -115,7 +115,6 @@ io.use(socketAuthMiddleware);
 io.on('connection', async (socket: AuthSocket) => {
   const userId = socket.auth!.userId;
   const deviceId = socket.auth!.deviceId;
-  const identityPublicKey = socket.identityPublicKey;
   console.log('User connected:', userId, socket.id);
 
   socket.data['userId'] = userId;
@@ -125,24 +124,16 @@ io.on('connection', async (socket: AuthSocket) => {
   registerDeviceSocket(deviceId, socket.id);
 
   // Start the server-side heartbeat watchdog (90 s timeout).
-  startHeartbeatTimer(socket, userId, deviceId, appRedis, io, identityPublicKey);
+  startHeartbeatTimer(socket, userId, deviceId, appRedis, io);
 
-  // Update user_devices.lastSeenAt for device-based presence derivation.
-  if (identityPublicKey) {
-    try {
-      await db
-        .update(userDevices)
-        .set({ lastSeenAt: new Date() })
-        .where(
-          and(
-            eq(userDevices.userId, userId),
-            eq(userDevices.identityPublicKey, identityPublicKey),
-            isNull(userDevices.revokedAt),
-          ),
-        );
-    } catch {
-      // Non-critical update; ignore errors.
-    }
+  // Update devices.lastSeenAt for device-based presence derivation.
+  try {
+    await db
+      .update(devices)
+      .set({ lastSeenAt: new Date() })
+      .where(and(eq(devices.id, deviceId), isNull(devices.revokedAt)));
+  } catch {
+    // Non-critical update; ignore errors.
   }
 
   // Per-socket middleware: intercept every incoming event before handlers.
@@ -282,22 +273,14 @@ io.on('connection', async (socket: AuthSocket) => {
     unregisterForBackpressure(socket);
     clearViolations(socket.id);
 
-    // Update user_devices.lastSeenAt on disconnect.
-    if (identityPublicKey) {
-      try {
-        await db
-          .update(userDevices)
-          .set({ lastSeenAt: new Date() })
-          .where(
-            and(
-              eq(userDevices.userId, userId),
-              eq(userDevices.identityPublicKey, identityPublicKey),
-              isNull(userDevices.revokedAt),
-            ),
-          );
-      } catch {
-        // Non-critical update; ignore errors.
-      }
+    // Update devices.lastSeenAt on disconnect.
+    try {
+      await db
+        .update(devices)
+        .set({ lastSeenAt: new Date() })
+        .where(and(eq(devices.id, deviceId), isNull(devices.revokedAt)));
+    } catch {
+      // Non-critical update; ignore errors.
     }
     // During a gateway restart we must NOT wipe presence — surviving devices
     // re-assert via heartbeat and Redis TTLs.

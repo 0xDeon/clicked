@@ -9,7 +9,7 @@
 import { Router, type Router as RouterType } from 'express';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { conversationMembers, userDevices } from '../db/schema.js';
+import { conversationMembers, devices } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 
 export const userDevicesRouter: RouterType = Router();
@@ -21,8 +21,8 @@ userDevicesRouter.get('/:id/public-key', async (req: AuthRequest, res) => {
   const requesterId = req.auth!.userId;
 
   try {
-    const device = await db.query.userDevices.findFirst({
-      where: and(eq(userDevices.id, senderDeviceId), isNull(userDevices.revokedAt)),
+    const device = await db.query.devices.findFirst({
+      where: and(eq(devices.id, senderDeviceId), isNull(devices.revokedAt)),
       columns: {
         id: true,
         userId: true,

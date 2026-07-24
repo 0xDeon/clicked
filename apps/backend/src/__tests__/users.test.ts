@@ -57,7 +57,7 @@ const MOCK_CREATED_AT = new Date('2026-05-31T12:00:00.000Z');
 beforeEach(() => {
   vi.clearAllMocks();
   // Default: device is active; individual tests that need 401 from device checks can override.
-  mockDeviceFindFirst.mockResolvedValue({ id: 'device-test-id', isRevoked: false });
+  mockDeviceFindFirst.mockResolvedValue({ id: 'device-test-id', revokedAt: null });
 });
 
 describe('GET /users/me', () => {
@@ -367,6 +367,14 @@ describe('GET /users/:id/presence', () => {
       id: 'user-uuid-123',
       presenceVisible: true,
     } as any);
+    // requireAuth's own device lookup succeeds; deriveDevicePresence's two
+    // subsequent lookups (active-device check, then most-recent fallback)
+    // both find nothing, since devices/deriveDevicePresence now share the
+    // same `devices` table/mock as requireAuth (#7 consolidation).
+    mockDeviceFindFirst
+      .mockReset()
+      .mockResolvedValueOnce({ id: 'device-test-id', revokedAt: null })
+      .mockResolvedValue(undefined);
 
     const res = await request(app)
       .get('/users/user-uuid-123/presence')

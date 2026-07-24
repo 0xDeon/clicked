@@ -1,24 +1,26 @@
 /**
- * Device routes — prekey management.
+ * Device routes — registration, listing, revocation, and prekey management.
  *
- * Issue #159: POST /devices/:id/prekeys
- * Uploads a signed prekey + batch of one-time prekeys for a device.
- * Only the device owner may call this endpoint.
+ * `devices` is the single canonical device registry (see #103/#107 — a
+ * previously-separate `user_devices` table was merged into this one so the
+ * realtime/messaging/push layers and the auth/prekey layer share one source
+ * of truth instead of two tables that could silently diverge).
  */
 
 import { Router, type Router as RouterType } from 'express';
-import { eq, and, ne, count, desc, sql } from 'drizzle-orm';
+import { eq, and, ne, count, desc, isNull, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/index.js';
-import { devices, signedPreKeys, oneTimePreKeys } from '../db/schema.js';
+import { devices, devicePrekeys, conversationMembers, messages } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
-import { userDevices, conversationMembers, messages, conversations } from '../db/schema.js';
 import { DeviceSchema } from '../schemas/auth.schemas.js';
 import { getSocketServer } from '../lib/socket.js';
 import { invalidateConversationCaches } from '../lib/conversationCache.js';
 import { SignedPreKeyEntrySchema, PreKeyEntrySchema, verifyEd25519Signature } from '../lib/keys.js';
 import { conversationRoom } from '../services/roomManager.js';
+import { redis } from '../lib/redis.js';
+import { markDeviceRevoked } from '../services/deviceRevocation.js';
 
 export const devicesRouter: RouterType = Router();
 
@@ -38,9 +40,6 @@ const RegisterDeviceSchema = DeviceSchema;
 /** Maximum number of stored one-time prekeys per device. */
 const OTP_CAP = 200;
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-// Signature verification delegated to shared verifyEd25519Signature in src/lib/keys.ts.
-
 // ─── GET /devices ─────────────────────────────────────────────────────────────
 
 devicesRouter.get('/', async (req: AuthRequest, res) => {
@@ -50,10 +49,29 @@ devicesRouter.get('/', async (req: AuthRequest, res) => {
     const rows = await db.query.devices.findMany({
       where: eq(devices.userId, userId),
       orderBy: [
-        sql`case when ${devices.isRevoked} = false then 0 else 1 end`,
+        sql`case when ${devices.revokedAt} is null then 0 else 1 end`,
         desc(devices.createdAt),
       ],
     });
+
+    const otpCounts =
+      rows.length === 0
+        ? []
+        : await db
+            .select({ deviceId: devicePrekeys.deviceId, remaining: count() })
+            .from(devicePrekeys)
+            .where(
+              and(
+                eq(devicePrekeys.keyType, 'one_time'),
+                eq(devicePrekeys.consumed, false),
+                inArray(
+                  devicePrekeys.deviceId,
+                  rows.map((d) => d.id),
+                ),
+              ),
+            )
+            .groupBy(devicePrekeys.deviceId);
+    const remainingByDevice = new Map(otpCounts.map((r) => [r.deviceId, r.remaining]));
 
     res.json(
       rows.map((device) => ({
@@ -62,7 +80,8 @@ devicesRouter.get('/', async (req: AuthRequest, res) => {
         deviceName: device.deviceName,
         platform: device.platform,
         lastSeenAt: device.lastSeenAt,
-        isRevoked: device.isRevoked,
+        revokedAt: device.revokedAt,
+        oneTimePreKeysRemaining: remainingByDevice.get(device.id) ?? 0,
         createdAt: device.createdAt,
         current: device.id === currentDeviceId,
       })),
@@ -72,10 +91,40 @@ devicesRouter.get('/', async (req: AuthRequest, res) => {
   }
 });
 
+// ─── Revocation helpers ─────────────────────────────────────────────────────
+// Shared by DELETE /:id and POST /logout-everywhere so both revocation paths
+// get identical side effects: prekeys cleared, live sockets disconnected via
+// the device_revoked:* pub/sub channel (#146), and a key-change system event.
+
+async function revokeDeviceRow(deviceId: string): Promise<Date> {
+  const revokedAt = new Date();
+
+  await db.update(devices).set({ revokedAt, updatedAt: revokedAt }).where(eq(devices.id, deviceId));
+  await db.delete(devicePrekeys).where(eq(devicePrekeys.deviceId, deviceId));
+
+  // Force-disconnect any live socket for this device, on this node or any
+  // other (cross-node via Redis pub/sub — see services/deviceRevocation.ts).
+  markDeviceRevoked(deviceId);
+  if (redis) {
+    await redis.publish(`device_revoked:${deviceId}`, '1').catch(() => {});
+  }
+
+  return revokedAt;
+}
+
+/** Count of the caller's currently-active (non-revoked) devices. */
+async function countActiveDevices(userId: string): Promise<number> {
+  const [row] = await db
+    .select({ total: count() })
+    .from(devices)
+    .where(and(eq(devices.userId, userId), isNull(devices.revokedAt)));
+  return row?.total ?? 0;
+}
+
 // ─── DELETE /devices/:id ────────────────────────────────────────────────────
-// Revoke a single device (issue #302). Idempotent — revoking an already
-// revoked device just confirms the current state instead of erroring, since
-// a client racing two revoke clicks shouldn't see a failure.
+// Revoke a single device. Idempotent — revoking an already revoked device
+// just confirms the current state instead of erroring. Refuses to revoke a
+// caller's last remaining active device (there would be no way back in).
 
 devicesRouter.delete('/:id', async (req: AuthRequest, res) => {
   const deviceId = req.params['id'] as string;
@@ -90,94 +139,49 @@ devicesRouter.delete('/:id', async (req: AuthRequest, res) => {
     return;
   }
 
-  await db
-    .update(devices)
-    .set({ isRevoked: true, updatedAt: new Date() })
-    .where(eq(devices.id, deviceId));
+  if (device.revokedAt) {
+    res.json({ id: deviceId, revokedAt: device.revokedAt.toISOString() });
+    return;
+  }
 
-  res.json({ id: deviceId, isRevoked: true });
+  const activeCount = await countActiveDevices(callerId);
+  if (activeCount <= 1) {
+    res.status(409).json({ error: 'Cannot revoke your only active device' });
+    return;
+  }
+
+  const revokedAt = await revokeDeviceRow(deviceId);
+  void emitDeviceChangeEvent(callerId, 'device_revoked');
+
+  res.json({ id: deviceId, revokedAt: revokedAt.toISOString() });
 });
 
 // ─── POST /devices/logout-everywhere ───────────────────────────────────────
-// Revokes every device on the account except the one making the request
-// (issue #302). Mirrors a "log out everywhere" security action.
+// Revokes every device on the account except the one making the request.
+// Mirrors a "log out everywhere" security action — same side effects as a
+// single DELETE, applied to every other active device.
 
 devicesRouter.post('/logout-everywhere', async (req: AuthRequest, res) => {
   const { userId, deviceId: currentDeviceId } = req.auth!;
 
-  const revoked = await db
-    .update(devices)
-    .set({ isRevoked: true, updatedAt: new Date() })
-    .where(
-      and(
-        eq(devices.userId, userId),
-        ne(devices.id, currentDeviceId),
-        eq(devices.isRevoked, false),
-      ),
-    )
-    .returning({ id: devices.id });
-
-  res.json({ revokedCount: revoked.length });
-});
-
-// ─── GET /devices/:id/bundle ────────────────────────────────────────────────
-// X3DH prekey bundle (issue #305): identity key + signed prekey + one
-// one-time prekey, atomically claimed so it is never handed out twice. Falls
-// back to a signed-prekey-only bundle once one-time prekeys are exhausted —
-// the initiator just runs 3-DH instead of 4-DH in that case.
-
-devicesRouter.get('/:id/bundle', async (req: AuthRequest, res) => {
-  const deviceId = req.params['id'] as string;
-
-  const device = await db.query.devices.findFirst({
-    where: eq(devices.id, deviceId),
+  const toRevoke = await db.query.devices.findMany({
+    where: and(
+      eq(devices.userId, userId),
+      ne(devices.id, currentDeviceId),
+      isNull(devices.revokedAt),
+    ),
+    columns: { id: true },
   });
 
-  if (!device || device.isRevoked) {
-    res.status(404).json({ error: 'Device not found or has been revoked' });
-    return;
+  for (const { id } of toRevoke) {
+    await revokeDeviceRow(id);
   }
 
-  const signedPreKey = await db.query.signedPreKeys.findFirst({
-    where: eq(signedPreKeys.deviceId, deviceId),
-  });
-
-  if (!signedPreKey) {
-    res.status(409).json({ error: 'Device has not uploaded a signed prekey yet' });
-    return;
+  if (toRevoke.length > 0) {
+    void emitDeviceChangeEvent(userId, 'device_revoked');
   }
 
-  const claimedOneTimePreKey = await db.transaction(async (tx) => {
-    const [candidate] = await tx
-      .select({
-        id: oneTimePreKeys.id,
-        keyId: oneTimePreKeys.keyId,
-        publicKey: oneTimePreKeys.publicKey,
-      })
-      .from(oneTimePreKeys)
-      .where(eq(oneTimePreKeys.deviceId, deviceId))
-      .orderBy(oneTimePreKeys.createdAt)
-      .limit(1)
-      .for('update', { skipLocked: true });
-
-    if (!candidate) return null;
-
-    await tx.delete(oneTimePreKeys).where(eq(oneTimePreKeys.id, candidate.id));
-
-    return { keyId: candidate.keyId, publicKey: candidate.publicKey };
-  });
-
-  res.json({
-    deviceId: device.id,
-    identityPublicKey: device.identityPublicKey,
-    registrationId: device.registrationId,
-    signedPreKey: {
-      keyId: signedPreKey.keyId,
-      publicKey: signedPreKey.publicKey,
-      signature: signedPreKey.signature,
-    },
-    oneTimePreKey: claimedOneTimePreKey,
-  });
+  res.json({ revokedCount: toRevoke.length });
 });
 
 // ─── POST /devices/:id/prekeys ─────────────────────────────────────────────────
@@ -201,7 +205,7 @@ devicesRouter.post('/:id/prekeys', validate(UploadPreKeysSchema), async (req: Au
     return;
   }
 
-  if (device.isRevoked) {
+  if (device.revokedAt) {
     res.status(403).json({ error: 'Device is revoked' });
     return;
   }
@@ -225,8 +229,14 @@ devicesRouter.post('/:id/prekeys', validate(UploadPreKeysSchema), async (req: Au
   // Enforce the one-time prekey cap before inserting.
   const [otpCountRow] = await db
     .select({ total: count() })
-    .from(oneTimePreKeys)
-    .where(eq(oneTimePreKeys.deviceId, deviceId));
+    .from(devicePrekeys)
+    .where(
+      and(
+        eq(devicePrekeys.deviceId, deviceId),
+        eq(devicePrekeys.keyType, 'one_time'),
+        eq(devicePrekeys.consumed, false),
+      ),
+    );
 
   const currentCount = otpCountRow?.total ?? 0;
   const available = OTP_CAP - currentCount;
@@ -243,15 +253,17 @@ devicesRouter.post('/:id/prekeys', validate(UploadPreKeysSchema), async (req: Au
 
   // Upsert the signed prekey (one per device — replace on keyId conflict).
   await db
-    .insert(signedPreKeys)
+    .insert(devicePrekeys)
     .values({
       deviceId,
+      keyType: 'signed',
       keyId: signedPreKey.keyId,
       publicKey: signedPreKey.publicKey,
       signature: signedPreKey.signature,
     })
     .onConflictDoUpdate({
-      target: [signedPreKeys.deviceId],
+      target: devicePrekeys.deviceId,
+      targetWhere: sql`${devicePrekeys.keyType} = 'signed'`,
       set: {
         keyId: signedPreKey.keyId,
         publicKey: signedPreKey.publicKey,
@@ -260,18 +272,21 @@ devicesRouter.post('/:id/prekeys', validate(UploadPreKeysSchema), async (req: Au
       },
     });
 
-  // Insert one-time prekeys, ignoring conflicts on (deviceId, keyId).
+  // Insert one-time prekeys, ignoring conflicts on (deviceId, keyType, keyId).
   if (trimmedBatch.length > 0) {
     await db
-      .insert(oneTimePreKeys)
+      .insert(devicePrekeys)
       .values(
         trimmedBatch.map((k) => ({
           deviceId,
+          keyType: 'one_time' as const,
           keyId: k.keyId,
           publicKey: k.publicKey,
         })),
       )
-      .onConflictDoNothing({ target: [oneTimePreKeys.deviceId, oneTimePreKeys.keyId] });
+      .onConflictDoNothing({
+        target: [devicePrekeys.deviceId, devicePrekeys.keyType, devicePrekeys.keyId],
+      });
   }
 
   res.status(200).json({
@@ -287,75 +302,56 @@ devicesRouter.post('/', validate(RegisterDeviceSchema), async (req: AuthRequest,
   const body = req.body as z.infer<typeof RegisterDeviceSchema>;
   const userId = req.auth!.userId;
 
-  // Device payload validation is handled by the shared DeviceSchema.
-
-  // Reject duplicate (userId, deviceId)
-  const existing = await db.query.userDevices.findFirst({
-    where: eq(userDevices.deviceId, body.deviceId),
+  const existing = await db.query.devices.findFirst({
+    where: and(eq(devices.userId, userId), eq(devices.identityPublicKey, body.identityPublicKey)),
   });
 
-  if (existing && existing.userId === userId) {
+  if (existing && !existing.revokedAt) {
     res.status(409).json({ error: 'Device already registered for this user' });
     return;
   }
 
   try {
-    const [row] = await db
-      .insert(userDevices)
-      .values({
-        userId,
-        deviceId: body.deviceId,
-        deviceName: body.deviceName,
-        platform: body.platform,
-        identityPublicKey: body.identityPublicKey,
-        registrationId: body.registrationId ?? undefined,
-      })
-      .returning({
-        id: userDevices.id,
-        deviceId: userDevices.deviceId,
-        createdAt: userDevices.createdAt,
-      });
+    let row: { id: string; createdAt: Date } | undefined;
 
-    // Emit system event to each conversation the user belongs to
+    if (existing) {
+      // Re-registering a previously-revoked identity key re-activates it
+      // rather than creating a duplicate row for the same crypto identity.
+      [row] = await db
+        .update(devices)
+        .set({
+          deviceName: body.deviceName,
+          platform: body.platform,
+          registrationId: body.registrationId ?? null,
+          revokedAt: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(devices.id, existing.id))
+        .returning({ id: devices.id, createdAt: devices.createdAt });
+    } else {
+      [row] = await db
+        .insert(devices)
+        .values({
+          userId,
+          identityPublicKey: body.identityPublicKey,
+          deviceName: body.deviceName,
+          platform: body.platform,
+          registrationId: body.registrationId ?? null,
+        })
+        .returning({ id: devices.id, createdAt: devices.createdAt });
+    }
+
+    if (!row) {
+      res.status(500).json({ error: 'Failed to register device' });
+      return;
+    }
+
     void emitDeviceChangeEvent(userId, 'device_added');
 
-    res.status(201).json({ id: row.id, deviceId: row.deviceId, createdAt: row.createdAt });
+    res.status(201).json({ id: row.id, createdAt: row.createdAt });
   } catch (err) {
     console.error('Failed to register device:', err);
     res.status(500).json({ error: 'Failed to register device' });
-  }
-});
-
-// ─── DELETE /devices/:id — revoke a device for the authenticated user --------
-devicesRouter.delete('/:id', async (req: AuthRequest, res) => {
-  const userId = req.auth!.userId;
-  const deviceId = req.params['id'] as string;
-
-  try {
-    const result = await db
-      .update(userDevices)
-      .set({ revokedAt: new Date() })
-      .where(eq(userDevices.deviceId, deviceId))
-      .returning();
-
-    if (!result || result.length === 0) {
-      res.status(404).json({ error: 'Device not found' });
-      return;
-    }
-
-    // Only emit if the device belonged to the user (safety: check last row)
-    if (result[0].userId !== userId) {
-      res.status(403).json({ error: 'Not allowed to revoke this device' });
-      return;
-    }
-
-    // Emit system event to each conversation the user belongs to
-    void emitDeviceChangeEvent(userId, 'device_revoked');
-
-    res.status(200).json({ revoked: true });
-  } catch (err) {
-    console.error('Failed to revoke device:', err);
-    res.status(500).json({ error: 'Failed to revoke device' });
   }
 });
 
@@ -369,19 +365,7 @@ async function emitDeviceChangeEvent(userId: string, change: 'device_added' | 'd
     if (memberships.length === 0) return;
 
     for (const m of memberships) {
-      const [msg] = await db.transaction(async (tx) => {
-        const [updatedConv] = await tx
-          .update(conversations)
-          .set({
-            lastSequenceNumber: sql`${conversations.lastSequenceNumber} + 1`,
-          })
-          .where(eq(conversations.id, m.conversationId))
-          .returning({ newSeq: conversations.lastSequenceNumber });
-
-        if (!updatedConv) {
-          throw new Error('Conversation not found');
-        }
-
+      const msg = await db.transaction(async (tx) => {
         const [insertedMessage] = await tx
           .insert(messages)
           .values({
@@ -389,7 +373,6 @@ async function emitDeviceChangeEvent(userId: string, change: 'device_added' | 'd
             senderId: userId,
             contentType: 'system',
             ciphertext: JSON.stringify({ userId, change }),
-            sequenceNumber: updatedConv.newSeq,
           })
           .returning();
         return insertedMessage;

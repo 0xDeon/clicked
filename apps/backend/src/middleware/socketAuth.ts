@@ -35,7 +35,7 @@ export async function socketAuthMiddleware(
     where: and(eq(devices.id, payload.deviceId), eq(devices.userId, payload.userId)),
   });
 
-  if (!device || device.isRevoked) {
+  if (!device || device.revokedAt) {
     next(new Error('Device not found or has been revoked'));
     return;
   }

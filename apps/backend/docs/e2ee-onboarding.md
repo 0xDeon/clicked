@@ -18,11 +18,11 @@ The currently implemented backend endpoints involved in onboarding are:
 - `POST /auth/verify`
 - `GET /devices`
 - `POST /devices/:id/prekeys`
+- `GET /users/:userId/devices/:deviceId/key-bundle` — fetches another user's device
+  bundle (identity key + signed prekey + one atomically-consumed one-time prekey)
 
 There is **currently no implemented backend endpoint in this repo** for:
 
-- fetching another user's E2EE device bundle
-- atomically consuming a recipient one-time prekey
 - server-side session creation
 - sending encrypted DM envelopes
 
@@ -363,7 +363,8 @@ Client                           Backend                          Recipient stat
   |     uploadedOneTimePreKeys,     |                                   |
   |     capped } -------------------|                                   |
   |                                 |                                   |
-  |-- fetch recipient bundle ------>|      not implemented in repo      |
+  |-- GET /users/:uid/devices/ ---->|      resolves via #133 fanout     |
+  |     :did/key-bundle             |      for the full device set      |
   |<- recipient bundle -------------|                                   |
   |                                 |                                   |
   |-- establish session locally ----|                                   |
@@ -374,32 +375,34 @@ Client                           Backend                          Recipient stat
 
 ### Recipient bundle shape required for first DM
 
-This bundle-fetch endpoint is **not implemented yet in this repo**, but the sender's first-DM flow requires at minimum the following data, because it is what the implemented schema stores today:
+`GET /users/:userId/devices/:deviceId/key-bundle` returns one device's bundle per
+call (callers loop over the recipient's active device list — see
+`GET /conversations/:id/devices` — to build an envelope per device):
 
 ```json
 {
-  "userId": "uuid",
-  "devices": [
-    {
-      "deviceId": "uuid",
-      "identityPublicKey": "base64-ed25519-spki-der",
-      "signedPreKey": {
-        "keyId": 1,
-        "publicKey": "base64",
-        "signature": "base64"
-      },
-      "oneTimePreKey": {
-        "keyId": 10,
-        "publicKey": "base64"
-      }
-    }
-  ]
+  "deviceId": "uuid",
+  "identityPublicKey": "base64-ed25519-spki-der",
+  "registrationId": 1234,
+  "signedPreKey": {
+    "keyId": 1,
+    "publicKey": "base64",
+    "signature": "base64"
+  },
+  "oneTimePreKey": {
+    "keyId": 10,
+    "publicKey": "base64"
+  }
 }
 ```
 
+`:userId` must match the target device's actual owner or the endpoint returns
+`404` — this route intentionally cannot be used to enumerate another user's
+devices without already knowing both ids.
+
 Client expectations for the happy path:
 
-1. fetch recipient bundle after sender has uploaded its own prekeys
+1. fetch each recipient device's bundle after sender has uploaded its own prekeys
 2. use recipient `identityPublicKey`
 3. verify recipient `signedPreKey.signature` against recipient `identityPublicKey`
 4. use a consumed recipient `oneTimePreKey` if present
@@ -434,7 +437,7 @@ Required guarantees for this path:
 How this maps to the implemented code today:
 
 - the preconditions for offline delivery already exist: device identity keys, one signed prekey per device, and a stock of one-time prekeys per device
-- the actual bundle-fetch and envelope-storage routes are not yet implemented in this repo
+- the bundle-fetch route (`GET /users/:userId/devices/:deviceId/key-bundle`) is implemented; envelope storage/queueing for offline recipients is handled by the message-send + sync path (`GET /sync`), documented separately
 
 ## Sequence: prekey-exhausted path
 
@@ -462,15 +465,17 @@ Client behavior:
 
 ### B) Recipient one-time prekeys exhausted
 
-This recipient-side fetch path is **not implemented yet in this repo**, but the expected behavior for first DM should be:
+This recipient-side fetch path is implemented — `GET /users/:userId/devices/:deviceId/key-bundle`
+returns `oneTimePreKey: null` (rather than erroring) once a device's one-time
+prekeys are exhausted, so the sender falls back to a 3-DH session:
 
 ```text
 Sender client                     Backend
   |                                 |
-  |-- fetch recipient bundle ------>|
+  |-- GET .../key-bundle ---------->|
   |<- bundle with identity key -----|
   |   + signed prekey only          |
-  |   + no oneTimePreKey            |
+  |   + oneTimePreKey: null         |
   |                                 |
   |-- establish fallback session ---|
   |   using signed prekey only      |
@@ -478,23 +483,19 @@ Sender client                     Backend
   |-- send prekey envelope -------->|
 ```
 
-Required JSON shape for prekey-exhausted bundle response:
+Actual JSON shape for the prekey-exhausted bundle response:
 
 ```json
 {
-  "userId": "uuid",
-  "devices": [
-    {
-      "deviceId": "uuid",
-      "identityPublicKey": "base64-ed25519-spki-der",
-      "signedPreKey": {
-        "keyId": 1,
-        "publicKey": "base64",
-        "signature": "base64"
-      },
-      "oneTimePreKey": null
-    }
-  ]
+  "deviceId": "uuid",
+  "identityPublicKey": "base64-ed25519-spki-der",
+  "registrationId": 1234,
+  "signedPreKey": {
+    "keyId": 1,
+    "publicKey": "base64",
+    "signature": "base64"
+  },
+  "oneTimePreKey": null
 }
 ```
 
@@ -514,7 +515,7 @@ For compatibility with the current implementation, clients should rely on this o
 4. call `POST /auth/verify` with `identityPublicKey`
 5. receive JWT containing backend `deviceId`
 6. call `POST /devices/:deviceId/prekeys`
-7. only after successful prekey upload, attempt first-DM recipient bundle fetch
+7. only after successful prekey upload, attempt first-DM recipient bundle fetch via `GET /users/:userId/devices/:deviceId/key-bundle`
 8. establish session locally from recipient bundle
 9. send encrypted envelope(s)
 
@@ -530,17 +531,21 @@ For compatibility with the current implementation, clients should rely on this o
 
 - auth challenge/verify: `apps/backend/src/routes/auth.ts`
 - auth request schema: `apps/backend/src/schemas/auth.schemas.ts`
-- device/prekey upload: `apps/backend/src/routes/devices.ts`
-- E2EE-related schema: `apps/backend/src/db/schema.ts`
+- device registration/listing/revocation/prekey upload: `apps/backend/src/routes/devices.ts`
+- recipient key-bundle fetch: `apps/backend/src/routes/users.ts` (`GET /users/:userId/devices/:deviceId/key-bundle`)
+- E2EE-related schema: `apps/backend/src/db/schema.ts` (`devices`, `devicePrekeys`)
 - prekey route tests: `apps/backend/src/__tests__/devices.prekeys.test.ts`
+- key-bundle route tests: `apps/backend/src/__tests__/users.bundle.test.ts`
 
 ## Gaps to close for full first-DM support
 
-To fully implement the flow described in the issue, backend work still needs routes for:
+Recipient bundle fetch and atomic one-time prekey consumption are implemented
+(see above). Backend work still needed for full first-DM support:
 
-- recipient bundle fetch
-- atomic one-time prekey reservation/consumption
-- encrypted envelope submit/store/deliver
+- encrypted envelope submit/store/deliver for the *first* contact between two
+  users specifically (the general send path exists — see `docs/` for the
+  message/envelope model — but hasn't been audited end-to-end against this
+  onboarding sequence)
 - explicit multi-device fanout semantics for first-contact DM
 
-This document is written so those routes can be added without changing the already implemented onboarding JSON and ordering contract.
+This document is written so that work can build on the already-implemented onboarding JSON and ordering contract without changing it.

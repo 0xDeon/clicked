@@ -21,7 +21,7 @@ import { EventEmitter } from 'events';
 
 const mockMemberFindFirst = vi.fn();
 const mockMessageFindFirst = vi.fn();
-const mockUserDevicesFindMany = vi.fn();
+const mockDevicesFindMany = vi.fn();
 const mockMemberFindMany = vi.fn();
 
 const mockReturning = vi.fn();
@@ -55,7 +55,7 @@ vi.mock('../db/index.js', () => {
         findMany: mockMemberFindMany,
       },
       messages: { findFirst: mockMessageFindFirst },
-      userDevices: { findMany: mockUserDevicesFindMany },
+      devices: { findMany: mockDevicesFindMany },
     },
     insert: mockInsert,
     update: mockUpdate,
@@ -71,7 +71,7 @@ vi.mock('../db/schema.js', () => ({
   conversationMembers: {},
   messages: {},
   messageEnvelopes: {},
-  userDevices: {},
+  devices: {},
 }));
 
 vi.mock('../lib/conversationCache.js', () => ({
@@ -156,7 +156,7 @@ const BASE_MESSAGE = {
   contentType: 'text/plain',
   editsMessageId: null,
   ciphertext: 'abc',
-  sequenceNumber: 1,
+  createdAt: new Date('2024-01-01T00:00:01.000Z'),
 };
 
 beforeEach(() => {
@@ -166,11 +166,12 @@ beforeEach(() => {
   mockMemberFindFirst.mockReset().mockResolvedValue(MEMBERSHIP);
   mockMessageFindFirst.mockReset().mockResolvedValue(undefined);
   mockMemberFindMany.mockReset().mockResolvedValue([]);
-  mockUserDevicesFindMany.mockReset().mockResolvedValue([]);
+  mockDevicesFindMany.mockReset().mockResolvedValue([]);
   mockReturning
     .mockReset()
-    .mockResolvedValue([{ ...BASE_MESSAGE, id: 'new-msg', sequenceNumber: 2 }]);
-  mockUpdateReturning.mockReset().mockResolvedValue([{ newSeq: 2 }]);
+    .mockResolvedValue([
+      { ...BASE_MESSAGE, id: 'new-msg', createdAt: new Date('2024-01-01T00:00:02.000Z') },
+    ]);
 
   // Only clear call history for structural vi.fn(impl) mocks — mockReset would
   // wipe their implementations and break the insert().values().returning() chain.
@@ -192,7 +193,7 @@ beforeEach(() => {
 
 describe('send_message — sibling device enforcement (#188)', () => {
   it('accepts a message when the sender has no sibling devices', async () => {
-    mockUserDevicesFindMany.mockResolvedValue([]);
+    mockDevicesFindMany.mockResolvedValue([]);
 
     const socket = makeSocket(USER_ID, SENDER_DEVICE);
     const io = makeIo();
@@ -206,7 +207,7 @@ describe('send_message — sibling device enforcement (#188)', () => {
   });
 
   it('accepts a message that includes envelopes for all active siblings', async () => {
-    mockUserDevicesFindMany
+    mockDevicesFindMany
       // fetchSiblingDeviceIds call → returns sibling B
       .mockResolvedValueOnce([{ id: SIBLING_B }])
       // envelope fan-out validation call → returns device info for both recipients
@@ -235,7 +236,7 @@ describe('send_message — sibling device enforcement (#188)', () => {
   });
 
   it('rejects with device_set_mismatch when a sibling device is omitted', async () => {
-    mockUserDevicesFindMany.mockResolvedValueOnce([{ id: SIBLING_B }, { id: SIBLING_C }]);
+    mockDevicesFindMany.mockResolvedValueOnce([{ id: SIBLING_B }, { id: SIBLING_C }]);
 
     const socket = makeSocket(USER_ID, SENDER_DEVICE);
     const io = makeIo();
@@ -260,7 +261,7 @@ describe('send_message — sibling device enforcement (#188)', () => {
   });
 
   it('rejects with device_set_mismatch when envelopes are absent but siblings exist', async () => {
-    mockUserDevicesFindMany.mockResolvedValueOnce([{ id: SIBLING_B }]);
+    mockDevicesFindMany.mockResolvedValueOnce([{ id: SIBLING_B }]);
 
     const socket = makeSocket(USER_ID, SENDER_DEVICE);
     const io = makeIo();
@@ -278,7 +279,7 @@ describe('send_message — sibling device enforcement (#188)', () => {
   it('does not require envelopes for revoked sibling devices', async () => {
     // fetchSiblingDeviceIds only returns non-revoked → empty because the
     // revokedAt filter excludes the revoked device at the DB level.
-    mockUserDevicesFindMany.mockResolvedValueOnce([]); // no active siblings
+    mockDevicesFindMany.mockResolvedValueOnce([]); // no active siblings
 
     const socket = makeSocket(USER_ID, SENDER_DEVICE);
     const io = makeIo();
@@ -293,10 +294,10 @@ describe('send_message — sibling device enforcement (#188)', () => {
   it('still passes through the idempotency ack without a device set check', async () => {
     // Idempotency fires BEFORE the sibling check — a duplicate messageId returns
     // ack immediately, no re-validation of envelopes needed.
-    mockMessageFindFirst.mockResolvedValue({ sequenceNumber: 7 });
+    mockMessageFindFirst.mockResolvedValue({ createdAt: new Date('2024-01-01T00:00:07.000Z') });
 
     // Even with a sibling that would normally require an envelope…
-    mockUserDevicesFindMany.mockResolvedValueOnce([{ id: SIBLING_B }]);
+    mockDevicesFindMany.mockResolvedValueOnce([{ id: SIBLING_B }]);
 
     const socket = makeSocket(USER_ID, SENDER_DEVICE);
     const io = makeIo();
@@ -306,7 +307,7 @@ describe('send_message — sibling device enforcement (#188)', () => {
 
     expect(socket.emit).toHaveBeenCalledWith('message_ack', {
       messageId: 'dup-msg',
-      sequenceNumber: 7,
+      createdAt: new Date('2024-01-01T00:00:07.000Z'),
     });
     // Sibling check never runs — insert should not be called.
     expect(mockInsert).not.toHaveBeenCalled();
@@ -314,7 +315,7 @@ describe('send_message — sibling device enforcement (#188)', () => {
 
   it('freshly linked sibling causes subsequent sends to fail without its envelope', async () => {
     // First send: no siblings → succeeds.
-    mockUserDevicesFindMany.mockResolvedValueOnce([]);
+    mockDevicesFindMany.mockResolvedValueOnce([]);
     const socket = makeSocket(USER_ID, SENDER_DEVICE);
     const io = makeIo();
     const { sendMessage } = await getHandlers(socket, io);
@@ -326,10 +327,12 @@ describe('send_message — sibling device enforcement (#188)', () => {
     mockMemberFindFirst.mockResolvedValue(MEMBERSHIP);
     mockMessageFindFirst.mockResolvedValue(undefined);
     mockMemberFindMany.mockResolvedValue([]);
-    mockReturning.mockResolvedValue([{ ...BASE_MESSAGE, id: 'msg-second', sequenceNumber: 3 }]);
+    mockReturning.mockResolvedValue([
+      { ...BASE_MESSAGE, id: 'msg-second', createdAt: new Date('2024-01-01T00:00:03.000Z') },
+    ]);
 
     // Second send: sibling-B just linked → now appears in DB query → must be included.
-    mockUserDevicesFindMany.mockResolvedValueOnce([{ id: SIBLING_B }]);
+    mockDevicesFindMany.mockResolvedValueOnce([{ id: SIBLING_B }]);
 
     await sendMessage({ conversationId: CONV_ID, messageId: 'msg-second', ciphertext: 'ok' });
 
@@ -358,7 +361,7 @@ describe('edit_message — sibling device enforcement (#188)', () => {
     mockMessageFindFirst
       .mockResolvedValueOnce(ORIGINAL) // original message lookup
       .mockResolvedValueOnce(undefined); // idempotency check
-    mockUserDevicesFindMany
+    mockDevicesFindMany
       .mockResolvedValueOnce([{ id: SIBLING_B }]) // fetchSiblingDeviceIds
       .mockResolvedValueOnce([{ id: SIBLING_B, userId: USER_ID }]); // envelope fanout
 
@@ -382,7 +385,7 @@ describe('edit_message — sibling device enforcement (#188)', () => {
 
   it('rejects an edit with device_set_mismatch when a sibling is missing', async () => {
     mockMessageFindFirst.mockResolvedValueOnce(ORIGINAL).mockResolvedValueOnce(undefined);
-    mockUserDevicesFindMany.mockResolvedValueOnce([{ id: SIBLING_B }, { id: SIBLING_C }]);
+    mockDevicesFindMany.mockResolvedValueOnce([{ id: SIBLING_B }, { id: SIBLING_C }]);
 
     const socket = makeSocket(USER_ID, SENDER_DEVICE);
     const io = makeIo();
@@ -407,7 +410,7 @@ describe('edit_message — sibling device enforcement (#188)', () => {
 
   it('accepts an edit when the sender has no sibling devices', async () => {
     mockMessageFindFirst.mockResolvedValueOnce(ORIGINAL).mockResolvedValueOnce(undefined);
-    mockUserDevicesFindMany.mockResolvedValueOnce([]); // no siblings
+    mockDevicesFindMany.mockResolvedValueOnce([]); // no siblings
 
     const socket = makeSocket(USER_ID, SENDER_DEVICE);
     const io = makeIo();

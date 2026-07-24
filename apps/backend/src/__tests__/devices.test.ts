@@ -11,8 +11,11 @@ vi.mock('../db/index.js', () => ({
         findMany: vi.fn(),
       },
     },
+    select: vi.fn(),
   },
 }));
+
+vi.mock('../lib/redis.js', () => ({ redis: null }));
 
 const { devicesRouter } = await import('../routes/devices.js');
 const { db } = await import('../db/index.js');
@@ -34,7 +37,10 @@ const ROWS = [
     id: CURRENT_DEVICE_ID,
     userId: USER_ID,
     identityPublicKey: 'key-active-1',
-    isRevoked: false,
+    deviceName: 'Phone',
+    platform: 'ios',
+    lastSeenAt: CREATED_AT,
+    revokedAt: null,
     createdAt: CREATED_AT,
     updatedAt: CREATED_AT,
   },
@@ -42,7 +48,10 @@ const ROWS = [
     id: 'device-row-2',
     userId: USER_ID,
     identityPublicKey: 'key-active-2',
-    isRevoked: false,
+    deviceName: 'Laptop',
+    platform: 'web',
+    lastSeenAt: CREATED_AT,
+    revokedAt: null,
     createdAt: CREATED_AT,
     updatedAt: CREATED_AT,
   },
@@ -50,11 +59,21 @@ const ROWS = [
     id: 'device-row-3',
     userId: USER_ID,
     identityPublicKey: 'key-revoked',
-    isRevoked: true,
+    deviceName: 'Old tablet',
+    platform: 'android',
+    lastSeenAt: CREATED_AT,
+    revokedAt: CREATED_AT,
     createdAt: CREATED_AT,
     updatedAt: CREATED_AT,
   },
 ];
+
+function mockOtpCounts(rows: Array<{ deviceId: string; remaining: number }>) {
+  const groupBy = vi.fn().mockResolvedValue(rows);
+  const where = vi.fn().mockReturnValue({ groupBy });
+  const from = vi.fn().mockReturnValue({ where });
+  vi.mocked(db.select).mockReturnValue({ from } as never);
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -63,10 +82,11 @@ beforeEach(() => {
     id: CURRENT_DEVICE_ID,
     userId: USER_ID,
     identityPublicKey: 'key-active-1',
-    isRevoked: false,
+    revokedAt: null,
     createdAt: CREATED_AT,
     updatedAt: CREATED_AT,
   } as never);
+  mockOtpCounts([]);
 });
 
 describe('GET /devices', () => {
@@ -104,8 +124,8 @@ describe('GET /devices', () => {
       'device-row-3',
     ]);
 
-    expect(res.body[2].isRevoked).toBe(true);
-    expect(res.body[0].isRevoked).toBe(false);
+    expect(res.body[2].revokedAt).toBe(CREATED_AT.toISOString());
+    expect(res.body[0].revokedAt).toBeNull();
   });
 
   it('flags only the device from the caller JWT as current', async () => {
@@ -127,6 +147,25 @@ describe('GET /devices', () => {
     expect(res.status).toBe(401);
   });
 
+  it('includes oneTimePreKeysRemaining per device', async () => {
+    vi.mocked(db.query.devices.findMany).mockResolvedValue([ROWS[0]] as never);
+    mockOtpCounts([{ deviceId: CURRENT_DEVICE_ID, remaining: 7 }]);
+
+    const res = await request(app).get('/devices').set('Authorization', AUTH_HEADER);
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].oneTimePreKeysRemaining).toBe(7);
+  });
+
+  it('defaults oneTimePreKeysRemaining to 0 when no prekeys exist', async () => {
+    vi.mocked(db.query.devices.findMany).mockResolvedValue([ROWS[0]] as never);
+
+    const res = await request(app).get('/devices').set('Authorization', AUTH_HEADER);
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].oneTimePreKeysRemaining).toBe(0);
+  });
+
   it('returns the exact response shape with no leaked internal fields', async () => {
     vi.mocked(db.query.devices.findMany).mockResolvedValue([ROWS[0]] as never);
 
@@ -134,7 +173,17 @@ describe('GET /devices', () => {
 
     expect(res.status).toBe(200);
     expect(Object.keys(res.body[0]).sort()).toEqual(
-      ['createdAt', 'current', 'id', 'identityPublicKey', 'isRevoked'].sort(),
+      [
+        'createdAt',
+        'current',
+        'id',
+        'identityPublicKey',
+        'deviceName',
+        'platform',
+        'lastSeenAt',
+        'revokedAt',
+        'oneTimePreKeysRemaining',
+      ].sort(),
     );
     expect(res.body[0]).not.toHaveProperty('userId');
     expect(res.body[0]).not.toHaveProperty('updatedAt');

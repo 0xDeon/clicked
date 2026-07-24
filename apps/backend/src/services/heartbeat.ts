@@ -2,7 +2,7 @@ import type { Server } from 'socket.io';
 import type { Redis } from 'ioredis';
 import type { AuthSocket } from '../middleware/socketAuth.js';
 import { db } from '../db/index.js';
-import { devices, userDevices } from '../db/schema.js';
+import { devices } from '../db/schema.js';
 import { eq, and, isNull } from 'drizzle-orm';
 import {
   refreshPresence,
@@ -23,7 +23,6 @@ export function startHeartbeatTimer(
   deviceId: string,
   redis: Redis | null,
   io: Server,
-  identityPublicKey?: string,
 ): void {
   const schedule = () => {
     clearTimeout(timers.get(socket.id));
@@ -76,27 +75,12 @@ export function startHeartbeatTimer(
     if (now - last >= LAST_SEEN_THROTTLE_MS) {
       lastSeenAt.set(deviceId, now);
       try {
-        await db.update(devices).set({ updatedAt: new Date() }).where(eq(devices.id, deviceId));
+        await db
+          .update(devices)
+          .set({ lastSeenAt: new Date(), updatedAt: new Date() })
+          .where(and(eq(devices.id, deviceId), isNull(devices.revokedAt)));
       } catch {
         // Non-critical update; ignore errors.
-      }
-
-      // Update user_devices.lastSeenAt for device-based presence derivation.
-      if (identityPublicKey) {
-        try {
-          await db
-            .update(userDevices)
-            .set({ lastSeenAt: new Date() })
-            .where(
-              and(
-                eq(userDevices.userId, userId),
-                eq(userDevices.identityPublicKey, identityPublicKey),
-                isNull(userDevices.revokedAt),
-              ),
-            );
-        } catch {
-          // Non-critical update; ignore errors.
-        }
       }
     }
 

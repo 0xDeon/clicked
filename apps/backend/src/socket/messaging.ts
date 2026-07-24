@@ -1,5 +1,5 @@
 import type { Server } from 'socket.io';
-import { and, eq, lt, desc, sql, inArray, isNull, ne } from 'drizzle-orm';
+import { and, eq, lt, desc, sql, inArray, isNull, ne, or } from 'drizzle-orm';
 
 import { db } from '../db/index.js';
 import {
@@ -7,7 +7,7 @@ import {
   conversationMembers,
   messages,
   messageEnvelopes,
-  userDevices,
+  devices,
   files,
 } from '../db/schema.js';
 import type { AuthSocket } from '../middleware/socketAuth.js';
@@ -26,17 +26,17 @@ import { EventDispatcher } from './dispatcher.js';
 const PAGE_SIZE = 30;
 
 /**
- * Returns the UUIDs of all active (non-revoked) user_devices that belong to
+ * Returns the UUIDs of all active (non-revoked) devices that belong to
  * `userId` but are NOT the sending device (`senderDeviceId`). These are the
  * "sibling" devices that must each receive their own envelope so they can
  * decrypt the message locally. Issue #188.
  */
 async function fetchSiblingDeviceIds(userId: string, senderDeviceId: string): Promise<string[]> {
-  const siblings = await db.query.userDevices.findMany({
+  const siblings = await db.query.devices.findMany({
     where: and(
-      eq(userDevices.userId, userId),
-      ne(userDevices.id, senderDeviceId),
-      isNull(userDevices.revokedAt),
+      eq(devices.userId, userId),
+      ne(devices.id, senderDeviceId),
+      isNull(devices.revokedAt),
     ),
     columns: { id: true },
   });
@@ -128,7 +128,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     }
 
     const effectiveCiphertext = ciphertext ?? content ?? undefined;
-    const resolvedContentType = contentType || 'text/plain';
+    const resolvedContentType = contentType || 'text';
 
     const validation = validateMessagePayload({
       contentType: resolvedContentType,
@@ -159,11 +159,11 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
 
     const existing = await db.query.messages.findFirst({
       where: eq(messages.id, messageId),
-      columns: { sequenceNumber: true },
+      columns: { createdAt: true },
     });
 
     if (existing) {
-      socket.emit('message_ack', { messageId, sequenceNumber: existing.sequenceNumber });
+      socket.emit('message_ack', { messageId, createdAt: existing.createdAt });
       return;
     }
 
@@ -203,18 +203,6 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     let recipientDeviceIds: string[] = [];
     try {
       message = await db.transaction(async (tx) => {
-        const [updatedConv] = await tx
-          .update(conversations)
-          .set({
-            lastSequenceNumber: sql`${conversations.lastSequenceNumber} + 1`,
-          })
-          .where(eq(conversations.id, conversationId))
-          .returning({ newSeq: conversations.lastSequenceNumber });
-
-        if (!updatedConv) {
-          throw new Error('Conversation not found');
-        }
-
         const [insertedMessage] = await tx
           .insert(messages)
           .values({
@@ -225,14 +213,13 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
             contentType: resolvedContentType,
             ciphertext: effectiveCiphertext || null,
             fileId: fileId,
-            sequenceNumber: updatedConv.newSeq,
           })
           .returning();
 
         if (envelopes && envelopes.length > 0) {
           const deviceIds = envelopes.map((e) => e.recipientDeviceId);
-          const devicesList = await tx.query.userDevices.findMany({
-            where: inArray(userDevices.id, deviceIds),
+          const devicesList = await tx.query.devices.findMany({
+            where: inArray(devices.id, deviceIds),
             columns: { id: true, userId: true },
           });
           const deviceToUser = new Map(devicesList.map((d) => [d.id, d.userId]));
@@ -252,7 +239,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
           }
         }
 
-        return insertedMessage;
+        return insertedMessage!;
       });
     } catch (error) {
       console.error('Transaction failed for message insert:', error);
@@ -261,7 +248,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     }
 
     if (message) {
-      socket.emit('message_ack', { messageId, sequenceNumber: message.sequenceNumber });
+      socket.emit('message_ack', { messageId, createdAt: message.createdAt });
       await deliverMessage(io, message, conversationId);
 
       const members = await db.query.conversationMembers.findMany({
@@ -319,11 +306,11 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
 
     const existing = await db.query.messages.findFirst({
       where: eq(messages.id, messageId),
-      columns: { sequenceNumber: true },
+      columns: { createdAt: true },
     });
 
     if (existing) {
-      socket.emit('message_ack', { messageId, sequenceNumber: existing.sequenceNumber });
+      socket.emit('message_ack', { messageId, createdAt: existing.createdAt });
       return;
     }
 
@@ -348,18 +335,6 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     let message;
     try {
       message = await db.transaction(async (tx) => {
-        const [updatedConv] = await tx
-          .update(conversations)
-          .set({
-            lastSequenceNumber: sql`${conversations.lastSequenceNumber} + 1`,
-          })
-          .where(eq(conversations.id, conversationId))
-          .returning({ newSeq: conversations.lastSequenceNumber });
-
-        if (!updatedConv) {
-          throw new Error('Conversation not found');
-        }
-
         const [insertedMessage] = await tx
           .insert(messages)
           .values({
@@ -370,14 +345,13 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
             contentType: contentType || original.contentType,
             ciphertext: ciphertext || null,
             editsMessageId: rootMessageId,
-            sequenceNumber: updatedConv.newSeq,
           })
           .returning();
 
         if (envelopes && envelopes.length > 0) {
           const deviceIds = envelopes.map((e) => e.recipientDeviceId);
-          const devicesList = await tx.query.userDevices.findMany({
-            where: inArray(userDevices.id, deviceIds),
+          const devicesList = await tx.query.devices.findMany({
+            where: inArray(devices.id, deviceIds),
             columns: { id: true, userId: true },
           });
           const deviceToUser = new Map(devicesList.map((d) => [d.id, d.userId]));
@@ -396,7 +370,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
           }
         }
 
-        return insertedMessage;
+        return insertedMessage!;
       });
     } catch (error) {
       console.error('Transaction failed for message edit:', error);
@@ -405,7 +379,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     }
 
     if (message) {
-      socket.emit('message_ack', { messageId, sequenceNumber: message.sequenceNumber });
+      socket.emit('message_ack', { messageId, createdAt: message.createdAt });
       await deliverMessage(io, message, conversationId);
 
       const members = await db.query.conversationMembers.findMany({
@@ -500,18 +474,6 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       let message;
       try {
         message = await db.transaction(async (tx) => {
-          const [updatedConv] = await tx
-            .update(conversations)
-            .set({
-              lastSequenceNumber: sql`${conversations.lastSequenceNumber} + 1`,
-            })
-            .where(eq(conversations.id, conversationId))
-            .returning({ newSeq: conversations.lastSequenceNumber });
-
-          if (!updatedConv) {
-            throw new Error('Conversation not found');
-          }
-
           const [insertedMessage] = await tx
             .insert(messages)
             .values({
@@ -520,7 +482,6 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
               ciphertext: content.trim(),
               contentType,
               fileId,
-              sequenceNumber: updatedConv.newSeq,
             })
             .returning();
 
@@ -575,21 +536,27 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       return;
     }
 
-    let cursor: bigint | undefined;
+    let cursor: { createdAt: Date; id: string } | undefined;
 
     if (before) {
       const ref = await db.query.messages.findFirst({
         where: eq(messages.id, before),
-        columns: { sequenceNumber: true },
+        columns: { createdAt: true, id: true },
       });
-      cursor = ref?.sequenceNumber || undefined;
+      cursor = ref ?? undefined;
     }
 
     const history = await db.query.messages.findMany({
       where: cursor
-        ? and(eq(messages.conversationId, conversationId), lt(messages.sequenceNumber, cursor))
+        ? and(
+            eq(messages.conversationId, conversationId),
+            or(
+              lt(messages.createdAt, cursor.createdAt),
+              and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id)),
+            ),
+          )
         : eq(messages.conversationId, conversationId),
-      orderBy: desc(messages.sequenceNumber),
+      orderBy: [desc(messages.createdAt), desc(messages.id)],
       limit: PAGE_SIZE,
       with: {
         envelopes: true,
@@ -1014,27 +981,14 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         ON CONFLICT DO NOTHING
       `);
 
-      const [replyMessage] = await db.transaction(async (tx) => {
-        const [updatedConv] = await tx
-          .update(conversations)
-          .set({
-            lastSequenceNumber: sql`${conversations.lastSequenceNumber} + 1`,
-          })
-          .where(eq(conversations.id, conversationId))
-          .returning({ newSeq: conversations.lastSequenceNumber });
-
-        if (!updatedConv) {
-          throw new Error('Conversation not found');
-        }
-
+      const replyMessage = await db.transaction(async (tx) => {
         const [inserted] = await tx
           .insert(messages)
           .values({
             conversationId,
             senderId: ASSISTANT_USER_ID,
-            contentType: 'text/plain',
+            contentType: 'text',
             ciphertext: data.reply,
-            sequenceNumber: updatedConv.newSeq,
           })
           .returning();
         return inserted;

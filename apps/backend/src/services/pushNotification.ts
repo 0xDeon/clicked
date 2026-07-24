@@ -63,8 +63,17 @@ export async function dispatchOfflinePush(
 export { FILE_CONTENT_TYPES };
 
 // ── #239 Coalescing ───────────────────────────────────────────────────────────
+//
+// Exported so other send paths (e.g. services/push.ts's file-message push)
+// can share the same coalescing window, per-device rate limit, and pruning
+// hygiene (#176) instead of sending one uncoalesced push per message with
+// no dead-subscription cleanup.
 
-function queueCoalescedPush(deviceId: string, conversationId: string, messageId: string): void {
+export function queueCoalescedPush(
+  deviceId: string,
+  conversationId: string,
+  messageId: string,
+): void {
   const key = `${deviceId}:${conversationId}`;
   const existing = pendingCoalesce.get(key);
 

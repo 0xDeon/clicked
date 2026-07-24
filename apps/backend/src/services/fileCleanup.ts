@@ -8,14 +8,11 @@
  * The job is idempotent: it sets hardDeletedAt only after a successful S3
  * delete, so a crash between steps is safe to retry.
  */
-import { S3Client, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { isNotNull, isNull, sql, and, eq, lt } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { files } from '../db/schema.js';
+import { getObjectStore } from '../lib/objectStore.js';
 import { reenableExpiredBackoffs } from './pushNotification.js';
-
-const s3 = new S3Client({ region: process.env['AWS_REGION'] ?? 'us-east-1' });
-const BUCKET = process.env['AWS_BUCKET'] ?? 'clicked-files';
 
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1_000; // every 5 minutes
 
@@ -57,12 +54,12 @@ export async function runHardDeletePass(): Promise<void> {
     if ((liveRef as unknown[]).length > 0) continue;
 
     try {
-      await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: file.storageKey }));
+      await getObjectStore().deleteObject(file.storageKey);
       await db
         .update(files)
         .set({ hardDeletedAt: new Date() })
         .where(sql`${files.id} = ${file.id}`);
-      console.log(`[file-cleanup] hard-deleted s3://${BUCKET}/${file.storageKey}`);
+      console.log(`[file-cleanup] hard-deleted ${file.storageKey}`);
     } catch (err) {
       console.error(`[file-cleanup] failed to delete ${file.storageKey}:`, err);
     }
@@ -77,9 +74,9 @@ export async function runHardDeletePass(): Promise<void> {
 
   for (const file of pendingCandidates) {
     try {
-      await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: file.storageKey }));
+      await getObjectStore().deleteObject(file.storageKey);
       await db.delete(files).where(eq(files.id, file.id));
-      console.log(`[file-cleanup] deleted pending file s3://${BUCKET}/${file.storageKey}`);
+      console.log(`[file-cleanup] deleted pending file ${file.storageKey}`);
     } catch (err) {
       console.error(`[file-cleanup] failed to delete pending file ${file.storageKey}:`, err);
     }

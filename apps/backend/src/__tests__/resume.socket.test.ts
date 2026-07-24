@@ -8,7 +8,7 @@ vi.mock('../db/index.js', () => ({
     query: {
       conversationMembers: { findFirst: vi.fn(), findMany: vi.fn() },
       messages: { findFirst: vi.fn() },
-      userDevices: { findMany: vi.fn() },
+      devices: { findMany: vi.fn() },
     },
     insert: vi.fn(),
     update: vi.fn(),
@@ -21,7 +21,7 @@ vi.mock('../db/schema.js', () => ({
   conversationMembers: {},
   messages: {},
   messageEnvelopes: {},
-  userDevices: {},
+  devices: {},
 }));
 
 vi.mock('../lib/conversationCache.js', () => ({

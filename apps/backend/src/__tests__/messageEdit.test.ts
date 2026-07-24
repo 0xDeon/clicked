@@ -5,7 +5,7 @@ import { EventEmitter } from 'events';
 
 const mockMessagesFindFirst = vi.fn();
 const mockMembersFindMany = vi.fn();
-const mockUserDevicesFindMany = vi.fn();
+const mockDevicesFindMany = vi.fn();
 
 const mockReturning = vi.fn();
 // values() must work both as `.values(x).returning()` (message insert) and as
@@ -28,7 +28,7 @@ vi.mock('../db/index.js', () => {
     query: {
       conversationMembers: { findFirst: vi.fn(), findMany: mockMembersFindMany },
       messages: { findFirst: mockMessagesFindFirst },
-      userDevices: { findMany: mockUserDevicesFindMany },
+      devices: { findMany: mockDevicesFindMany },
     },
     insert: mockInsert,
     update: mockUpdate,
@@ -43,7 +43,7 @@ vi.mock('../db/schema.js', () => ({
   conversationMembers: {},
   messages: {},
   messageEnvelopes: {},
-  userDevices: {},
+  devices: {},
 }));
 
 vi.mock('../lib/conversationCache.js', () => ({
@@ -123,9 +123,10 @@ const CONVERSATION_ID = 'conv-1';
 beforeEach(() => {
   vi.clearAllMocks();
   mockMembersFindMany.mockResolvedValue([]);
-  mockUserDevicesFindMany.mockResolvedValue([]);
-  mockReturning.mockResolvedValue([{ id: 'new-msg', sequenceNumber: 5 }]);
-  mockUpdateReturning.mockResolvedValue([{ newSeq: 5 }]);
+  mockDevicesFindMany.mockResolvedValue([]);
+  mockReturning.mockResolvedValue([
+    { id: 'new-msg', createdAt: new Date('2024-01-01T00:00:05.000Z') },
+  ]);
 });
 
 describe('edit_message socket event', () => {
@@ -250,7 +251,7 @@ describe('edit_message socket event', () => {
         editsMessageId: null,
         contentType: 'text/plain',
       })
-      .mockResolvedValueOnce({ sequenceNumber: 9 }); // already exists
+      .mockResolvedValueOnce({ createdAt: new Date('2024-01-01T00:00:09.000Z') }); // already exists
 
     const socket = makeSocket(USER_ID, DEVICE_ID);
     const io = makeIo();
@@ -261,7 +262,7 @@ describe('edit_message socket event', () => {
     expect(mockInsert).not.toHaveBeenCalled();
     expect(socket.emit).toHaveBeenCalledWith('message_ack', {
       messageId: 'dup',
-      sequenceNumber: 9,
+      createdAt: new Date('2024-01-01T00:00:09.000Z'),
     });
     expect(io.roomEmitted.map((e) => e.event)).not.toContain('message_edited');
   });

@@ -1,7 +1,7 @@
 import { and, eq, isNull } from 'drizzle-orm';
 import type { Server } from 'socket.io';
 import { db } from '../db/index.js';
-import { messageEnvelopes, userDevices, conversationMembers, messages } from '../db/schema.js';
+import { messageEnvelopes, devices, conversationMembers, messages } from '../db/schema.js';
 import { publishEphemeral } from './resumeStream.js';
 import type { Redis } from 'ioredis';
 import { conversationRoom } from './roomManager.js';
@@ -16,9 +16,9 @@ export async function isMessageFullyDeliveredToUser(
 ): Promise<boolean> {
   // Get all active devices for this user
   const activeDevices = await db
-    .select({ id: userDevices.id })
-    .from(userDevices)
-    .where(and(eq(userDevices.userId, recipientUserId), isNull(userDevices.revokedAt)));
+    .select({ id: devices.id })
+    .from(devices)
+    .where(and(eq(devices.userId, recipientUserId), isNull(devices.revokedAt)));
 
   if (activeDevices.length === 0) {
     // No active devices, consider message delivered by default

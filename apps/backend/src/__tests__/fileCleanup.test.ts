@@ -1,18 +1,19 @@
 /**
- * Tests for file cleanup service (#231).
+ * Tests for file cleanup service (#231, #168).
+ *
+ * #168: this job used to construct its own independent S3Client from
+ * AWS_REGION/AWS_BUCKET, disconnected from the OBJECT_STORE_* config every
+ * other storage code path uses — meaning it could target the wrong bucket
+ * entirely in a real deployment. It now shares the single process-wide
+ * `getObjectStore()` singleton (lib/objectStore.ts) instead.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// ── S3 mock (must use vi.hoisted so it's available in the factory) ────────────
-const mockS3Send = vi.hoisted(() => vi.fn());
+// ── object store mock (must use vi.hoisted so it's available in the factory) ──
+const mockDeleteObject = vi.hoisted(() => vi.fn());
 
-vi.mock('@aws-sdk/client-s3', () => ({
-  S3Client: class MockS3 {
-    send = mockS3Send;
-  },
-  DeleteObjectCommand: class MockDeleteCmd {
-    constructor(public input: unknown) {}
-  },
+vi.mock('../lib/objectStore.js', () => ({
+  getObjectStore: () => ({ deleteObject: mockDeleteObject }),
 }));
 
 // ── DB mock ───────────────────────────────────────────────────────────────────
@@ -55,7 +56,7 @@ const mockWhereFn = vi.fn().mockResolvedValue(undefined);
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockS3Send.mockResolvedValue(undefined);
+  mockDeleteObject.mockResolvedValue(undefined);
   mockUpdate.mockReturnValue({ set: mockSetFn });
   mockSetFn.mockReturnValue({ where: mockWhereFn });
   mockDelete.mockReturnValue({ where: mockWhereFn });
@@ -80,7 +81,7 @@ describe('#231 – runHardDeletePass', () => {
 
     await runHardDeletePass();
 
-    expect(mockS3Send).not.toHaveBeenCalled();
+    expect(mockDeleteObject).not.toHaveBeenCalled();
     expect(mockSetFn).not.toHaveBeenCalled();
   });
 
@@ -92,7 +93,7 @@ describe('#231 – runHardDeletePass', () => {
 
     await runHardDeletePass();
 
-    expect(mockS3Send).toHaveBeenCalledTimes(1);
+    expect(mockDeleteObject).toHaveBeenCalledTimes(1);
     expect(mockSetFn).toHaveBeenCalledWith({ hardDeletedAt: expect.any(Date) });
   });
 
@@ -101,7 +102,7 @@ describe('#231 – runHardDeletePass', () => {
       .mockResolvedValueOnce([{ id: 'file-3', storageKey: 'key-3' }])
       .mockResolvedValueOnce([]);
     mockExecute.mockResolvedValueOnce([]);
-    mockS3Send.mockRejectedValueOnce(new Error('NoSuchKey'));
+    mockDeleteObject.mockRejectedValueOnce(new Error('NoSuchKey'));
 
     await runHardDeletePass();
 
@@ -119,7 +120,7 @@ describe('#231 – runHardDeletePass', () => {
 
     await runHardDeletePass();
 
-    expect(mockS3Send).toHaveBeenCalledTimes(2);
+    expect(mockDeleteObject).toHaveBeenCalledTimes(2);
   });
 
   it('deletes pending files older than 24 hours', async () => {
@@ -129,7 +130,7 @@ describe('#231 – runHardDeletePass', () => {
 
     await runHardDeletePass();
 
-    expect(mockS3Send).toHaveBeenCalledTimes(1);
+    expect(mockDeleteObject).toHaveBeenCalledTimes(1);
     expect(mockDelete).toHaveBeenCalled();
   });
 });

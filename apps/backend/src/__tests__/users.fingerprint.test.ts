@@ -28,7 +28,8 @@ vi.mock('../db/index.js', () => ({
 vi.mock('../db/schema.js', () => ({
   users: { id: 'id', username: 'username' },
   wallets: {},
-  devices: { userId: 'userId', isRevoked: 'isRevoked' },
+  devices: { userId: 'userId', revokedAt: 'revokedAt' },
+  devicePrekeys: { deviceId: 'deviceId', keyType: 'keyType', consumed: 'consumed' },
 }));
 
 vi.mock('drizzle-orm', () => ({
@@ -37,6 +38,7 @@ vi.mock('drizzle-orm', () => ({
   or: vi.fn((...args: unknown[]) => args),
   ilike: vi.fn(),
   exists: vi.fn(),
+  isNull: vi.fn((col: unknown) => ({ op: 'isNull', col })),
   sql: vi.fn(),
 }));
 
@@ -88,7 +90,7 @@ function deriveFingerprint(identityKeys: string[]): string {
 beforeEach(() => {
   vi.clearAllMocks();
   // Default: authenticated device is active.
-  mockDeviceFindFirst.mockResolvedValue({ id: 'caller-device', isRevoked: false });
+  mockDeviceFindFirst.mockResolvedValue({ id: 'caller-device', revokedAt: null });
 });
 
 describe('GET /users/:id/key-fingerprint', () => {

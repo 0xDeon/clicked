@@ -158,7 +158,7 @@ describe('POST /auth/verify', () => {
     mockConsumeNonce.mockReturnValue(true);
     mockVerify.mockReturnValue(true);
     mockWalletFindFirst.mockResolvedValue({ userId: 'existing-user-id', address: WALLET });
-    mockDeviceFindFirst.mockResolvedValue({ id: 'device-id', isRevoked: false });
+    mockDeviceFindFirst.mockResolvedValue({ id: 'device-id', revokedAt: null });
 
     const res = await request(app).post('/auth/verify').send({
       walletAddress: WALLET,
@@ -222,7 +222,7 @@ describe('POST /auth/verify', () => {
     mockConsumeNonce.mockReturnValue(true);
     mockVerify.mockReturnValue(true);
     mockWalletFindFirst.mockResolvedValue({ userId: 'existing-user-id', address: WALLET });
-    mockDeviceFindFirst.mockResolvedValue({ id: 'device-id', isRevoked: true });
+    mockDeviceFindFirst.mockResolvedValue({ id: 'device-id', revokedAt: new Date() });
 
     const res = await request(app).post('/auth/verify').send({
       walletAddress: WALLET,
@@ -283,7 +283,7 @@ describe('Auth rate limiting', () => {
     mockConsumeNonce.mockReturnValue(true);
     mockVerify.mockReturnValue(true);
     mockWalletFindFirst.mockResolvedValue({ userId: 'existing-user-id', address: WALLET });
-    mockDeviceFindFirst.mockResolvedValue({ id: 'device-id', isRevoked: false });
+    mockDeviceFindFirst.mockResolvedValue({ id: 'device-id', revokedAt: null });
   });
 
   it('allows up to 10 /auth/challenge requests per minute, blocks the 11th with 429', async () => {
