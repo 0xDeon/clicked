@@ -14,7 +14,7 @@ vi.mock('../db/index.js', () => ({
 
 vi.mock('../db/schema.js', () => ({
   conversationMembers: { conversationId: 'conv_id', userId: 'user_id' },
-  userDevices: { userId: 'ud_user_id', revokedAt: 'ud_revoked_at', id: 'ud_id' },
+  devices: { userId: 'ud_user_id', revokedAt: 'ud_revoked_at', id: 'ud_id' },
   messageEnvelopes: {
     messageId: 'me_msg_id',
     recipientDeviceId: 'me_rcpt_device_id',
@@ -61,7 +61,6 @@ function baseMessage() {
     senderId: 'user-a',
     senderDeviceId: 'dev-a',
     contentType: 'text/plain',
-    sequenceNumber: 1,
     createdAt: new Date('2024-01-01'),
     deletedAt: null,
     ciphertext: 'base-ciphertext',

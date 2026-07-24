@@ -40,7 +40,7 @@ export async function requireAuth(
     where: and(eq(devices.id, payload.deviceId), eq(devices.userId, payload.userId)),
   });
 
-  if (!device || device.isRevoked) {
+  if (!device || device.revokedAt) {
     res.status(401).json({ error: 'Device not found or has been revoked' });
     return;
   }

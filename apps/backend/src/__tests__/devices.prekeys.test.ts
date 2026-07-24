@@ -1,5 +1,6 @@
 /**
- * Tests for POST /devices/:id/prekeys (issue #159)
+ * Tests for POST /devices/:id/prekeys (issue #159, updated for the unified
+ * `device_prekeys` table — #104).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -24,14 +25,24 @@ vi.mock('../db/index.js', () => ({
 
 vi.mock('../db/schema.js', () => ({
   devices: { id: 'id', userId: 'userId' },
-  signedPreKeys: { deviceId: 'deviceId', keyId: 'keyId' },
-  oneTimePreKeys: { deviceId: 'deviceId', keyId: 'keyId' },
+  devicePrekeys: {
+    deviceId: 'deviceId',
+    keyType: 'keyType',
+    keyId: 'keyId',
+    consumed: 'consumed',
+  },
 }));
+
+vi.mock('../lib/redis.js', () => ({ redis: null }));
 
 vi.mock('drizzle-orm', () => ({
   eq: vi.fn((col: unknown, val: unknown) => ({ col, val })),
   and: vi.fn((...args: unknown[]) => args),
   count: vi.fn(() => 'count(*)'),
+  sql: Object.assign(
+    vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values })),
+    { raw: vi.fn() },
+  ),
 }));
 
 // Stub crypto verify so we can control the outcome in tests.
@@ -79,7 +90,7 @@ const ACTIVE_DEVICE = {
   id: 'device-1',
   userId: 'owner-user-id',
   identityPublicKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
-  isRevoked: false,
+  revokedAt: null,
 };
 
 function setupInsertChain() {
@@ -120,7 +131,7 @@ describe('POST /devices/:id/prekeys', () => {
   });
 
   it('returns 403 when the device is revoked', async () => {
-    mockDeviceFindFirst.mockResolvedValue({ ...ACTIVE_DEVICE, isRevoked: true });
+    mockDeviceFindFirst.mockResolvedValue({ ...ACTIVE_DEVICE, revokedAt: new Date() });
 
     const res = await request(makeApp()).post('/devices/device-1/prekeys').send(VALID_BODY);
 

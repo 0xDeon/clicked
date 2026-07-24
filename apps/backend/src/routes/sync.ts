@@ -1,7 +1,7 @@
 import { Router, type Router as RouterType } from 'express';
-import { and, eq, gt, isNull, or, inArray } from 'drizzle-orm';
+import { and, asc, eq, gt, isNull, or, inArray } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { messageEnvelopes, messages, userDevices } from '../db/schema.js';
+import { messageEnvelopes, messages, devices } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 
 export const syncRouter: RouterType = Router();
@@ -13,28 +13,53 @@ const ENVELOPE_TTL_MS = parseInt(process.env['ENVELOPE_TTL_SECONDS'] ?? '604800'
 
 const SYNC_PAGE_SIZE = parseInt(process.env['SYNC_PAGE_SIZE'] ?? '50', 10);
 
+interface SyncCursor {
+  createdAt: Date;
+  id: string;
+}
+
+// Cursor is the envelope's own (createdAt, id) — not messages.sequenceNumber.
+// A per-conversation sequence number (#128) can't serve as a coherent cursor
+// across a device's *different* conversations, which is exactly what an
+// offline-catchup sync needs (#137); the envelope's own creation instant,
+// tie-broken by its id, is comparable across every conversation the device
+// has envelopes in.
+function encodeCursor(c: SyncCursor): string {
+  return `${c.createdAt.getTime()}:${c.id}`;
+}
+
+function decodeCursor(raw: string): SyncCursor | null {
+  const sep = raw.indexOf(':');
+  if (sep === -1) return null;
+  const millis = Number(raw.slice(0, sep));
+  const id = raw.slice(sep + 1);
+  if (!Number.isFinite(millis) || !id) return null;
+  return { createdAt: new Date(millis), id };
+}
+
 // ─── GET /sync ────────────────────────────────────────────────────────────────
 //
 // Returns message envelopes addressed to a device that are newer than the
-// provided sinceSequence cursor, ordered deterministically by sequenceNumber.
-// Supports cursor-based pagination stable under concurrent inserts.
+// provided cursor, ordered deterministically by (createdAt, id) across every
+// conversation the device has envelopes in. Cursor-based, stable under
+// concurrent inserts (id tie-breaks same-millisecond envelopes).
 //
 // Query params:
-//   deviceId      — UUID of the userDevices entry (E2E encryption device)
-//   sinceSequence — integer cursor; only envelopes with sequenceNumber > this
-//                   value are returned. Defaults to 0 (return everything).
-//   limit         — page size (max SYNC_PAGE_SIZE)
+//   deviceId — UUID of the devices entry (E2E encryption device)
+//   cursor   — opaque cursor from a previous response's `nextCursor`;
+//              omit to fetch from the beginning of the retention window
+//   limit    — page size (max SYNC_PAGE_SIZE)
 
 syncRouter.get('/', async (req: AuthRequest, res) => {
   const { userId } = req.auth!;
 
   const {
     deviceId,
-    sinceSequence,
+    cursor: cursorParam,
     limit: limitParam,
   } = req.query as {
     deviceId?: string;
-    sinceSequence?: string;
+    cursor?: string;
     limit?: string;
   };
 
@@ -43,10 +68,14 @@ syncRouter.get('/', async (req: AuthRequest, res) => {
     return;
   }
 
-  const cursor = parseInt(sinceSequence ?? '0', 10);
-  if (isNaN(cursor) || cursor < 0) {
-    res.status(400).json({ error: 'sinceSequence must be a non-negative integer' });
-    return;
+  let cursor: SyncCursor | undefined;
+  if (cursorParam) {
+    const decoded = decodeCursor(cursorParam);
+    if (!decoded) {
+      res.status(400).json({ error: 'Invalid cursor' });
+      return;
+    }
+    cursor = decoded;
   }
 
   const pageSize = Math.min(
@@ -55,12 +84,12 @@ syncRouter.get('/', async (req: AuthRequest, res) => {
   );
 
   // Verify the requesting user owns this E2E device.
-  const userDevice = await db.query.userDevices.findFirst({
-    where: and(eq(userDevices.id, deviceId), eq(userDevices.userId, userId)),
+  const ownedDevice = await db.query.devices.findFirst({
+    where: and(eq(devices.id, deviceId), eq(devices.userId, userId)),
     columns: { id: true, revokedAt: true },
   });
 
-  if (!userDevice) {
+  if (!ownedDevice) {
     res.status(403).json({ error: 'Device not found or not owned by this user' });
     return;
   }
@@ -68,17 +97,13 @@ syncRouter.get('/', async (req: AuthRequest, res) => {
   // TTL cutoff — envelopes older than this are considered expired.
   const ttlCutoff = new Date(Date.now() - ENVELOPE_TTL_MS);
 
-  // Join messageEnvelopes → messages to get sequenceNumber for cursor-based
-  // pagination. Only return envelopes within TTL that haven't been delivered,
-  // OR that the client explicitly requests again via cursor.
   const rows = await db
     .select({
       id: messageEnvelopes.id,
       messageId: messageEnvelopes.messageId,
       ciphertext: messageEnvelopes.ciphertext,
       deliveredAt: messageEnvelopes.deliveredAt,
-      createdAt: messageEnvelopes.createdAt,
-      sequenceNumber: messages.sequenceNumber,
+      envelopeCreatedAt: messageEnvelopes.createdAt,
       conversationId: messages.conversationId,
       senderId: messages.senderId,
       senderDeviceId: messages.senderDeviceId,
@@ -90,19 +115,30 @@ syncRouter.get('/', async (req: AuthRequest, res) => {
     .where(
       and(
         eq(messageEnvelopes.recipientDeviceId, deviceId),
-        gt(messages.sequenceNumber, cursor),
+        cursor
+          ? or(
+              gt(messageEnvelopes.createdAt, cursor.createdAt),
+              and(
+                eq(messageEnvelopes.createdAt, cursor.createdAt),
+                gt(messageEnvelopes.id, cursor.id),
+              ),
+            )
+          : undefined,
         // Exclude TTL-expired envelopes (already delivered AND past retention).
         or(isNull(messageEnvelopes.deliveredAt), gt(messageEnvelopes.createdAt, ttlCutoff)),
         isNull(messages.deletedAt),
       ),
     )
-    .orderBy(messages.sequenceNumber)
+    .orderBy(asc(messageEnvelopes.createdAt), asc(messageEnvelopes.id))
     .limit(pageSize + 1); // fetch one extra to detect hasMore
 
   const hasMore = rows.length > pageSize;
   const page = hasMore ? rows.slice(0, pageSize) : rows;
 
-  const nextCursor = page.length > 0 ? page[page.length - 1]!.sequenceNumber : cursor;
+  const lastRow = page[page.length - 1];
+  const nextCursor = lastRow
+    ? encodeCursor({ createdAt: lastRow.envelopeCreatedAt, id: lastRow.id })
+    : (cursorParam ?? null);
 
   // Mark returned envelopes as delivered (best-effort — do not block response).
   if (page.length > 0) {
@@ -124,12 +160,8 @@ syncRouter.get('/', async (req: AuthRequest, res) => {
       senderDeviceId: r.senderDeviceId,
       contentType: r.contentType,
       ciphertext: r.ciphertext,
-      sequenceNumber: r.sequenceNumber,
-      senderId: r.senderId,
-      senderDeviceId: r.senderDeviceId,
-      contentType: r.contentType,
       deliveredAt: r.deliveredAt,
-      createdAt: r.createdAt,
+      createdAt: r.envelopeCreatedAt,
       messageCreatedAt: r.messageCreatedAt,
     })),
     nextCursor,

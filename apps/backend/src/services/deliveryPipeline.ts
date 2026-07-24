@@ -1,7 +1,7 @@
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { Server } from 'socket.io';
 import { db } from '../db/index.js';
-import { conversationMembers, messageEnvelopes, userDevices } from '../db/schema.js';
+import { conversationMembers, messageEnvelopes, devices } from '../db/schema.js';
 import type { Message } from '../db/schema.js';
 import { conversationRoom } from './roomManager.js';
 
@@ -41,9 +41,9 @@ export async function deliverMessage(
 
   // Step 2: active devices only — revokedAt IS NULL.
   const activeDevices = await db
-    .select({ id: userDevices.id, userId: userDevices.userId })
-    .from(userDevices)
-    .where(and(inArray(userDevices.userId, userIds), isNull(userDevices.revokedAt)));
+    .select({ id: devices.id, userId: devices.userId })
+    .from(devices)
+    .where(and(inArray(devices.userId, userIds), isNull(devices.revokedAt)));
 
   if (activeDevices.length === 0) {
     io.to(conversationId).emit('new_message', message);
@@ -81,7 +81,6 @@ export async function deliverMessage(
       senderId: message.senderId,
       senderDeviceId: message.senderDeviceId,
       contentType: message.contentType,
-      sequenceNumber: message.sequenceNumber,
       createdAt: message.createdAt,
       envelopeId: envelope.id,
       ciphertext: envelope.ciphertext,
@@ -96,7 +95,6 @@ export async function deliverMessage(
     senderId: message.senderId,
     senderDeviceId: message.senderDeviceId,
     contentType: message.contentType,
-    sequenceNumber: message.sequenceNumber,
     createdAt: message.createdAt,
     deletedAt: message.deletedAt,
     ciphertext: null,

@@ -9,15 +9,9 @@
 // instead of guessing or dropping ciphertext. On success, the message and
 // its envelopes are persisted atomically.
 
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import {
-  conversationMembers,
-  messages,
-  messageEnvelopes,
-  userDevices,
-  conversations,
-} from '../db/schema.js';
+import { conversationMembers, messages, messageEnvelopes, devices } from '../db/schema.js';
 import type { Message, NewMessage } from '../db/schema.js';
 
 export interface FanoutSuccess {
@@ -54,8 +48,8 @@ export async function fanoutMessage(
   });
   const memberIds = members.map((m) => m.userId);
 
-  const activeDevices = await db.query.userDevices.findMany({
-    where: and(inArray(userDevices.userId, memberIds), isNull(userDevices.revokedAt)),
+  const activeDevices = await db.query.devices.findMany({
+    where: and(inArray(devices.userId, memberIds), isNull(devices.revokedAt)),
     columns: { id: true, userId: true },
   });
 
@@ -77,25 +71,7 @@ export async function fanoutMessage(
   }
 
   const message = await db.transaction(async (tx) => {
-    const [updatedConv] = await tx
-      .update(conversations)
-      .set({
-        lastSequenceNumber: sql`${conversations.lastSequenceNumber} + 1`,
-      })
-      .where(eq(conversations.id, newMessage.conversationId))
-      .returning({ newSeq: conversations.lastSequenceNumber });
-
-    if (!updatedConv) {
-      throw new Error('Conversation not found');
-    }
-
-    const [inserted] = await tx
-      .insert(messages)
-      .values({
-        ...newMessage,
-        sequenceNumber: updatedConv.newSeq,
-      })
-      .returning();
+    const [inserted] = await tx.insert(messages).values(newMessage).returning();
     const persisted = inserted!;
 
     const envelopeRows = providedDeviceIds.map((deviceId) => ({

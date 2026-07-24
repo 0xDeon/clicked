@@ -11,7 +11,7 @@
  * - GET /users/:id/presence → { online: boolean, lastSeen?: string }
  *
  * User presence is derived from device presence: a user is online when any
- * non-expired device entry exists (Redis OR user_devices.lastSeenAt within
+ * non-expired device entry exists (Redis OR devices.lastSeenAt within
  * the window). When offline, lastSeen reflects the most recent device activity.
  * - On connect: upsert device entry in `presence:user:{userId}` and refresh TTL
  * - On heartbeat: update lastSeen and refresh the device TTL
@@ -31,7 +31,7 @@ import type { Server } from 'socket.io';
 import type { Redis } from 'ioredis';
 import { isNull, eq, and, gte, desc } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { userDevices, conversationMembers } from '../db/schema.js';
+import { devices, conversationMembers } from '../db/schema.js';
 
 const PRESENCE_TTL = 90; // seconds
 const SOCKET_MAPPING_PREFIX = 'presence:sockets:';
@@ -229,11 +229,11 @@ export async function deriveDevicePresence(
 ): Promise<{ online: boolean; lastSeen: string | null }> {
   const windowStart = new Date(Date.now() - DEVICE_PRESENCE_WINDOW_MS);
 
-  const activeDevice = await db.query.userDevices.findFirst({
+  const activeDevice = await db.query.devices.findFirst({
     where: and(
-      eq(userDevices.userId, userId),
-      isNull(userDevices.revokedAt),
-      gte(userDevices.lastSeenAt, windowStart),
+      eq(devices.userId, userId),
+      isNull(devices.revokedAt),
+      gte(devices.lastSeenAt, windowStart),
     ),
     columns: { id: true },
   });
@@ -242,9 +242,9 @@ export async function deriveDevicePresence(
     return { online: true, lastSeen: null };
   }
 
-  const mostRecent = await db.query.userDevices.findFirst({
-    where: and(eq(userDevices.userId, userId), isNull(userDevices.revokedAt)),
-    orderBy: desc(userDevices.lastSeenAt),
+  const mostRecent = await db.query.devices.findFirst({
+    where: and(eq(devices.userId, userId), isNull(devices.revokedAt)),
+    orderBy: desc(devices.lastSeenAt),
     columns: { lastSeenAt: true },
   });
 

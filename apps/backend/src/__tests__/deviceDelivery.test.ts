@@ -44,7 +44,6 @@ const SAMPLE_PAYLOAD: DeviceDeliveryPayload = {
   messageId: 'msg-1',
   conversationId: 'conv-1',
   ciphertext: 'encrypted',
-  sequenceNumber: 42,
 };
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

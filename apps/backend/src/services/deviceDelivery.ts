@@ -4,7 +4,6 @@ export interface DeviceDeliveryPayload {
   messageId: string;
   conversationId: string;
   ciphertext: string;
-  sequenceNumber: number;
 }
 
 export const deviceChannel = (deviceId: string): string => `deliver:device:${deviceId}`;

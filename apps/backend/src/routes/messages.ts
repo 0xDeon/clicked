@@ -1,14 +1,8 @@
 import { Router } from 'express';
 import type { IRouter } from 'express';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import {
-  conversationMembers,
-  messages,
-  messageEnvelopes,
-  userDevices,
-  conversations,
-} from '../db/schema.js';
+import { conversationMembers, messages, messageEnvelopes, devices } from '../db/schema.js';
 import { softDeleteFile } from '../services/fileCleanup.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
@@ -64,11 +58,11 @@ messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, r
   // ── idempotency ────────────────────────────────────────────────────────────
   const existing = await db.query.messages.findFirst({
     where: eq(messages.id, messageId),
-    columns: { sequenceNumber: true },
+    columns: { createdAt: true },
   });
 
   if (existing) {
-    res.status(200).json({ messageId, sequenceNumber: existing.sequenceNumber });
+    res.status(200).json({ messageId, createdAt: existing.createdAt });
     return;
   }
 
@@ -76,18 +70,6 @@ messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, r
   let message;
   try {
     message = await db.transaction(async (tx) => {
-      const [updatedConv] = await tx
-        .update(conversations)
-        .set({
-          lastSequenceNumber: sql`${conversations.lastSequenceNumber} + 1`,
-        })
-        .where(eq(conversations.id, conversationId))
-        .returning({ newSeq: conversations.lastSequenceNumber });
-
-      if (!updatedConv) {
-        throw new Error('Conversation not found');
-      }
-
       const [insertedMessage] = await tx
         .insert(messages)
         .values({
@@ -98,14 +80,13 @@ messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, r
           contentType: contentType?.trim().toLowerCase() || 'text',
           ciphertext: ciphertext || null,
           fileId: fileId ?? null,
-          sequenceNumber: updatedConv.newSeq,
         })
         .returning();
 
       if (envelopes && envelopes.length > 0) {
         const deviceIds = envelopes.map((e) => e.recipientDeviceId);
-        const devicesList = await tx.query.userDevices.findMany({
-          where: inArray(userDevices.id, deviceIds),
+        const devicesList = await tx.query.devices.findMany({
+          where: inArray(devices.id, deviceIds),
           columns: { id: true, userId: true },
         });
         const deviceToUser = new Map(devicesList.map((d) => [d.id, d.userId]));

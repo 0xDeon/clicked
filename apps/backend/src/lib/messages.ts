@@ -3,7 +3,6 @@ export type MessageLike = {
   senderId: string;
   senderDeviceId?: string | null;
   contentType: string;
-  sequenceNumber: number;
   createdAt: Date;
   ciphertext?: string | null;
   deletedAt?: Date | null;

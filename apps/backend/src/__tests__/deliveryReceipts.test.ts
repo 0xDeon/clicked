@@ -24,7 +24,7 @@ vi.mock('../db/schema.js', () => ({
   conversationMembers: {},
   messages: {},
   messageEnvelopes: {},
-  userDevices: {},
+  devices: {},
 }));
 
 vi.mock('../lib/redis.js', () => ({ redis: null }));

@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { Router, type Router as RouterType } from 'express';
-import { eq, and, or, ilike, exists, sql } from 'drizzle-orm';
+import { eq, and, or, ilike, exists, sql, isNull } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { users, wallets, devices, conversationMembers } from '../db/schema.js';
+import { users, wallets, devices, devicePrekeys, conversationMembers } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { redis } from '../lib/redis.js';
 import { isOnline, deriveDevicePresence } from '../services/presence.js';
@@ -173,7 +173,7 @@ usersRouter.get('/:id/presence', async (req: AuthRequest, res) => {
       }
     }
 
-    // Fall back to device-based presence from user_devices.lastSeenAt.
+    // Fall back to device-based presence from devices.lastSeenAt.
     try {
       const { online, lastSeen } = await deriveDevicePresence(id);
       res.json({ online, ...(lastSeen ? { lastSeen } : {}) });
@@ -183,6 +183,80 @@ usersRouter.get('/:id/presence', async (req: AuthRequest, res) => {
   } catch {
     res.status(404).json({ error: 'User not found' });
   }
+});
+
+/**
+ * GET /users/:userId/devices/:deviceId/key-bundle
+ *
+ * X3DH prekey bundle (issue #110/#305): identity key + signed prekey + one
+ * one-time prekey, atomically claimed so it is never handed out twice. Falls
+ * back to a signed-prekey-only bundle once one-time prekeys are exhausted —
+ * the initiator just runs 3-DH instead of 4-DH in that case. `:deviceId` must
+ * belong to `:userId` — this route is the narrower, other-user-facing lookup;
+ * callers checking their own devices use GET /devices instead.
+ */
+usersRouter.get('/:userId/devices/:deviceId/key-bundle', async (req: AuthRequest, res) => {
+  const targetUserId = req.params['userId'] as string;
+  const deviceId = req.params['deviceId'] as string;
+
+  const device = await db.query.devices.findFirst({
+    where: eq(devices.id, deviceId),
+  });
+
+  if (!device || device.userId !== targetUserId || device.revokedAt) {
+    res.status(404).json({ error: 'Device not found or has been revoked' });
+    return;
+  }
+
+  const signedPreKey = await db.query.devicePrekeys.findFirst({
+    where: and(eq(devicePrekeys.deviceId, deviceId), eq(devicePrekeys.keyType, 'signed')),
+  });
+
+  if (!signedPreKey) {
+    res.status(409).json({ error: 'Device has not uploaded a signed prekey yet' });
+    return;
+  }
+
+  const claimedOneTimePreKey = await db.transaction(async (tx) => {
+    const [candidate] = await tx
+      .select({
+        id: devicePrekeys.id,
+        keyId: devicePrekeys.keyId,
+        publicKey: devicePrekeys.publicKey,
+      })
+      .from(devicePrekeys)
+      .where(
+        and(
+          eq(devicePrekeys.deviceId, deviceId),
+          eq(devicePrekeys.keyType, 'one_time'),
+          eq(devicePrekeys.consumed, false),
+        ),
+      )
+      .orderBy(devicePrekeys.createdAt)
+      .limit(1)
+      .for('update', { skipLocked: true });
+
+    if (!candidate) return null;
+
+    await tx
+      .update(devicePrekeys)
+      .set({ consumed: true })
+      .where(eq(devicePrekeys.id, candidate.id));
+
+    return { keyId: candidate.keyId, publicKey: candidate.publicKey };
+  });
+
+  res.json({
+    deviceId: device.id,
+    identityPublicKey: device.identityPublicKey,
+    registrationId: device.registrationId,
+    signedPreKey: {
+      keyId: signedPreKey.keyId,
+      publicKey: signedPreKey.publicKey,
+      signature: signedPreKey.signature,
+    },
+    oneTimePreKey: claimedOneTimePreKey,
+  });
 });
 
 /**
@@ -224,7 +298,7 @@ usersRouter.get('/:id/key-fingerprint', async (req: AuthRequest, res) => {
 
     // Fetch all active (non-revoked) device identity public keys.
     const activeDevices = await db.query.devices.findMany({
-      where: and(eq(devices.userId, id), eq(devices.isRevoked, false)),
+      where: and(eq(devices.userId, id), isNull(devices.revokedAt)),
       columns: { identityPublicKey: true },
     });
 

@@ -6,7 +6,8 @@ import {
   S3Client,
   type PutObjectCommandInput,
 } from '@aws-sdk/client-s3';
-import type { Env } from '../config.js';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { loadEnv, type Env } from '../config.js';
 
 export type ObjectStoreConfig = Pick<
   Env,
@@ -77,8 +78,39 @@ export class ObjectStore {
       }),
     );
   }
+
+  /** Real, cryptographically-signed PUT URL — only ever called in production (#166). */
+  async getPresignedPutUrl(key: string, contentType: string | undefined, ttlSeconds: number) {
+    const command = new PutObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+      ...(contentType ? { ContentType: contentType } : {}),
+    });
+    return getSignedUrl(this.client, command, { expiresIn: ttlSeconds });
+  }
+
+  /** Real, cryptographically-signed GET URL — only ever called in production (#166). */
+  async getPresignedGetUrl(key: string, ttlSeconds: number) {
+    const command = new GetObjectCommand({ Bucket: this.bucket, Key: key });
+    return getSignedUrl(this.client, command, { expiresIn: ttlSeconds });
+  }
 }
 
 export function createObjectStore(config: ObjectStoreConfig): ObjectStore {
   return new ObjectStore(createObjectStoreClient(config), config.OBJECT_STORE_BUCKET);
+}
+
+// Lazily-constructed, process-wide singleton. `lib/storage.ts` and
+// `services/fileCleanup.ts` both need the same configured client/bucket —
+// building it here (rather than in `index.ts`) avoids a circular import
+// (index.ts -> app.ts -> routes -> lib/storage.ts -> index.ts) and ensures
+// there's exactly one S3 client/bucket pair for the whole process (#161/#168
+// previously had three independent, inconsistently-configured ones).
+let singleton: ObjectStore | null = null;
+
+export function getObjectStore(): ObjectStore {
+  if (!singleton) {
+    singleton = createObjectStore(loadEnv());
+  }
+  return singleton;
 }

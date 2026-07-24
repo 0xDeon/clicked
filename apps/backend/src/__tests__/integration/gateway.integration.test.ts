@@ -1,7 +1,7 @@
 /**
  * Gateway integration tests — issue #215
  *
- * Spins up two Socket.IO gateway instances sharing a real Redis instance to
+ * Spins up two Socket.IO gateway instances sharing a Redis instance to
  * assert the following acceptance criteria:
  *
  *   1. Cross-node delivery   — message sent on node-1 arrives on node-2
@@ -10,8 +10,12 @@
  *   4. Revocation disconnect  — a device revoked via Redis pub/sub is force-disconnected
  *   5. Resume/sync after drop — missed ephemeral events are replayed on reconnect
  *
- * Requires Redis at REDIS_URL (default redis://localhost:6379).
- * Start one locally with: docker run -p 6379:6379 redis:7-alpine
+ * Uses `ioredis-mock` (#152) instead of a real Redis server: it's a faithful
+ * in-memory reimplementation of the ioredis client (hashes, sets, streams,
+ * SCAN, and — critically — real pub/sub/psubscribe semantics shared across
+ * `.duplicate()`'d instances, which is what `@socket.io/redis-adapter` and
+ * the device-revocation listener both depend on). This makes the suite
+ * hermetic: no Docker, no external service, runs the same in CI and locally.
  */
 
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
@@ -20,7 +24,8 @@ import { Server } from 'socket.io';
 import { io as ioc } from 'socket.io-client';
 import type { Socket as ClientSocket } from 'socket.io-client';
 import { createAdapter } from '@socket.io/redis-adapter';
-import { Redis } from 'ioredis';
+import type { Redis } from 'ioredis';
+import RedisMock from 'ioredis-mock';
 import jwt from 'jsonwebtoken';
 
 // ── hoisted redis reference ───────────────────────────────────────────────────
@@ -35,11 +40,10 @@ const redisRef = vi.hoisted(() => ({ instance: null as Redis | null }));
 vi.mock('../../db/index.js', () => {
   const db: Record<string, unknown> = {
     query: {
-      devices: { findFirst: vi.fn() },
+      devices: { findFirst: vi.fn(), findMany: vi.fn() },
       users: { findFirst: vi.fn() },
       conversationMembers: { findFirst: vi.fn(), findMany: vi.fn() },
       messages: { findFirst: vi.fn(), findMany: vi.fn() },
-      userDevices: { findMany: vi.fn() },
     },
     insert: vi.fn(),
     update: vi.fn(),
@@ -57,7 +61,6 @@ vi.mock('../../db/schema.js', () => ({
   conversationMembers: {},
   messages: {},
   messageEnvelopes: {},
-  userDevices: {},
   users: {},
 }));
 
@@ -122,7 +125,6 @@ import { setSocketServer } from '../../lib/socket.js';
 // ── fixtures ──────────────────────────────────────────────────────────────────
 
 const JWT_SECRET = 'test-secret-for-ci-only';
-const REDIS_URL = process.env['REDIS_URL'] ?? 'redis://localhost:6379';
 const CONV_ID = 'conv-integration-215';
 
 // Port range reserved for this suite — avoids clashes with other listeners.
@@ -229,11 +231,11 @@ const adapterSync = () => new Promise((r) => setTimeout(r, 150));
 
 // ── mock configurators ────────────────────────────────────────────────────────
 
-function mockDevice(user: typeof ALICE, isRevoked = false) {
+function mockDevice(user: typeof ALICE, revoked = false) {
   vi.mocked(db.query.devices.findFirst).mockResolvedValue({
     id: user.deviceId,
     userId: user.userId,
-    isRevoked,
+    revokedAt: revoked ? new Date() : null,
   } as never);
 }
 
@@ -252,12 +254,10 @@ function mockInsertMessage(msg: {
   senderId: string;
   senderDeviceId: string;
   ciphertext: string;
-  sequenceNumber?: number;
 }) {
   const row = {
     ...msg,
     contentType: 'text/plain',
-    sequenceNumber: msg.sequenceNumber ?? 1,
     createdAt: new Date(),
   };
   const returning = vi.fn().mockResolvedValue([row]);
@@ -277,16 +277,12 @@ const suppressConnectionClosed = (err: unknown) => {
   throw err;
 };
 
-// Skipped: requires a real Redis instance at REDIS_URL and fails locally
-// without one. CI provides Redis via a service container; run manually with
-// `docker run -p 6379:6379 redis:7-alpine` and remove `.skip` to exercise it.
-describe.skip('Gateway integration — issue #215', () => {
+describe('Gateway integration — issue #215', () => {
   let redis: Redis;
 
   beforeAll(async () => {
     process.on('unhandledRejection', suppressConnectionClosed);
-    redis = new Redis(REDIS_URL, { lazyConnect: true });
-    await redis.connect();
+    redis = new RedisMock();
     redisRef.instance = redis;
   });
 
@@ -308,14 +304,6 @@ describe.skip('Gateway integration — issue #215', () => {
       .mockResolvedValue([]); // activeDevices query → triggers new_message emit
     vi.mocked(db.select).mockReturnValue({
       from: vi.fn().mockReturnValue({ where: mockWhere }),
-    } as never);
-
-    // send_message bumps conversations.lastSequenceNumber inside db.transaction()
-    // before inserting the message row — default this to a working chain.
-    vi.mocked(db.update).mockReturnValue({
-      set: vi.fn().mockReturnThis(),
-      where: vi.fn().mockReturnThis(),
-      returning: vi.fn().mockResolvedValue([{ newSeq: 1 }]),
     } as never);
 
     // Flush all keys written by this suite so tests are hermetically isolated.
@@ -362,7 +350,7 @@ describe.skip('Gateway integration — issue #215', () => {
           conversationId: CONV_ID,
         } as never);
         vi.mocked(db.query.messages.findFirst).mockResolvedValue(undefined);
-        vi.mocked(db.query.userDevices.findMany).mockResolvedValue([] as never);
+        vi.mocked(db.query.devices.findMany).mockResolvedValue([] as never);
         mockInsertMessage({
           id: MSG_ID,
           conversationId: CONV_ID,
@@ -380,6 +368,11 @@ describe.skip('Gateway integration — issue #215', () => {
           conversationId: CONV_ID,
           messageId: MSG_ID,
           ciphertext: 'hello from node-1',
+          // validateMessagePayload requires >=1 envelope for text messages;
+          // it doesn't need to resolve to a real device for this test since
+          // room-broadcast delivery (not per-device envelope delivery, which
+          // "multi-device fanout" below covers) is what's under test here.
+          envelopes: [{ recipientDeviceId: BOB.deviceId, ciphertext: 'for-bob' }],
         });
 
         const msg = await bobReceived;
@@ -425,7 +418,7 @@ describe.skip('Gateway integration — issue #215', () => {
           conversationId: CONV_ID,
         } as never);
         vi.mocked(db.query.messages.findFirst).mockResolvedValue(undefined);
-        vi.mocked(db.query.userDevices.findMany).mockResolvedValue([
+        vi.mocked(db.query.devices.findMany).mockResolvedValue([
           { id: ALICE.deviceId, userId: ALICE.userId },
           { id: ALICE2.deviceId, userId: ALICE.userId },
         ] as never);
@@ -439,7 +432,6 @@ describe.skip('Gateway integration — issue #215', () => {
           senderDeviceId: BOB.deviceId,
           ciphertext: 'broadcast',
           contentType: 'text/plain',
-          sequenceNumber: 1,
           createdAt: new Date(),
         };
         vi.mocked(db.insert).mockReturnValue({
@@ -498,7 +490,7 @@ describe.skip('Gateway integration — issue #215', () => {
           conversationId: CONV_ID,
         } as never);
         vi.mocked(db.query.messages.findFirst).mockResolvedValue(undefined);
-        vi.mocked(db.query.userDevices.findMany).mockResolvedValue([] as never);
+        vi.mocked(db.query.devices.findMany).mockResolvedValue([] as never);
 
         // Introduce latency on the returning() step to prove ordering.
         const returning = vi.fn().mockImplementation(async () => {
@@ -512,7 +504,6 @@ describe.skip('Gateway integration — issue #215', () => {
               senderDeviceId: ALICE.deviceId,
               ciphertext: 'persist-test',
               contentType: 'text/plain',
-              sequenceNumber: 99,
               createdAt: new Date(),
             },
           ];
@@ -521,10 +512,7 @@ describe.skip('Gateway integration — issue #215', () => {
           values: vi.fn().mockReturnValue({ returning }),
         } as never);
 
-        const bobMessage = waitFor<{ id: string; sequenceNumber: number }>(
-          clientBob,
-          'new_message',
-        ).then((m) => {
+        const bobMessage = waitFor<{ id: string }>(clientBob, 'new_message').then((m) => {
           order.push('new_message_received');
           return m;
         });
@@ -533,13 +521,14 @@ describe.skip('Gateway integration — issue #215', () => {
           conversationId: CONV_ID,
           messageId: MSG_ID,
           ciphertext: 'persist-before-deliver',
+          envelopes: [{ recipientDeviceId: BOB.deviceId, ciphertext: 'for-bob' }],
         });
 
         const received = await bobMessage;
 
         expect(returning).toHaveBeenCalledOnce();
         expect(order).toEqual(['db_insert_done', 'new_message_received']);
-        expect(received.sequenceNumber).toBe(99);
+        expect(received.id).toBe(MSG_ID);
 
         clientAlice.disconnect();
         clientBob.disconnect();
@@ -562,6 +551,12 @@ describe.skip('Gateway integration — issue #215', () => {
       // Dedicated subscriber Redis client (ioredis becomes subscriber-only
       // after psubscribe, so we must not reuse the main redis instance).
       const revSub = redis.duplicate();
+      // ioredis-mock connections are already connected on construction but
+      // leave `.status` unset; startDeviceRevocationListener's guard
+      // (`status !== 'ready' && status !== 'connect'`) exists for real
+      // ioredis's lazyConnect flow, so tell it this connection is live —
+      // calling the mock's own .connect() again throws "already connected".
+      (revSub as unknown as { status: string }).status = 'ready';
       await startDeviceRevocationListener(revSub, redis);
 
       try {

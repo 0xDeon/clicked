@@ -8,8 +8,8 @@ import {
   index,
   integer,
   uniqueIndex,
+  check,
   type AnyPgColumn,
-  bigint,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 
@@ -43,7 +43,6 @@ export const conversations = pgTable('conversations', {
   type: conversationTypeEnum('type').notNull().default('dm'),
   name: text('name'),
   avatarUrl: text('avatar_url'),
-  lastSequenceNumber: bigint('last_sequence_number', { mode: 'bigint' }).notNull().default(0n),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
@@ -105,27 +104,36 @@ export const files = pgTable('files', {
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
-export const messages = pgTable('messages', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  conversationId: uuid('conversation_id')
-    .notNull()
-    .references(() => conversations.id, { onDelete: 'cascade' }),
-  senderId: uuid('sender_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  senderDeviceId: uuid('sender_device_id').references(() => userDevices.id, {
-    onDelete: 'set null',
-  }),
-  contentType: text('content_type').notNull().default('text/plain'),
-  sequenceNumber: bigint('sequence_number', { mode: 'bigint' }),
-  ciphertext: text('ciphertext'),
-  fileId: uuid('file_id').references(() => files.id, { onDelete: 'set null' }),
-  editsMessageId: uuid('edits_message_id').references((): AnyPgColumn => messages.id, {
-    onDelete: 'set null',
-  }),
-  createdAt: timestamp('created_at').notNull().defaultNow(),
-  deletedAt: timestamp('deleted_at'),
-});
+// Ordering is by (createdAt, id) — a monotonic per-conversation sequence
+// counter was considered (and briefly implemented) but dropped: the same
+// counter can't also serve as a coherent cross-conversation cursor for
+// offline sync (#137), and maintaining two separate counters for two
+// separate orderings was judged not worth the complexity. `id` (uuid) is
+// only a tiebreaker for same-millisecond inserts, not a chronological signal.
+export const messages = pgTable(
+  'messages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    senderId: uuid('sender_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    senderDeviceId: uuid('sender_device_id').references(() => devices.id, {
+      onDelete: 'set null',
+    }),
+    contentType: text('content_type').notNull().default('text'),
+    ciphertext: text('ciphertext'),
+    fileId: uuid('file_id').references(() => files.id, { onDelete: 'set null' }),
+    editsMessageId: uuid('edits_message_id').references((): AnyPgColumn => messages.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    deletedAt: timestamp('deleted_at'),
+  },
+  (table) => [index('messages_conversation_created_idx').on(table.conversationId, table.createdAt)],
+);
 
 export const messageEnvelopes = pgTable(
   'message_envelopes',
@@ -136,7 +144,7 @@ export const messageEnvelopes = pgTable(
       .references(() => messages.id, { onDelete: 'cascade' }),
     recipientDeviceId: uuid('recipient_device_id')
       .notNull()
-      .references(() => userDevices.id, { onDelete: 'cascade' }),
+      .references(() => devices.id, { onDelete: 'cascade' }),
     recipientUserId: uuid('recipient_user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
@@ -151,12 +159,16 @@ export const messageEnvelopes = pgTable(
   ],
 );
 
-// ─── Devices & prekeys (issues #158, #159, #162) ─────────────────────────────
+// ─── Devices & prekeys (issues #103, #104, #158, #159, #162) ─────────────────
 //
 // Each user may register multiple devices. Each device has an Ed25519 identity
 // key pair; the public key is stored here for fingerprint derivation and prekey
-// signature validation.  `isRevoked` lets the server reject stale devices
-// without deleting the row (preserving audit history).
+// signature validation. This is the single canonical device registry — it also
+// carries the fields the realtime/messaging/push layers need (`lastSeenAt`,
+// `pushEnabled`), so `messages.senderDeviceId`, `messageEnvelopes.recipientDeviceId`,
+// and `pushSubscriptions.deviceId` all FK here. `revokedAt` lets the server
+// reject stale devices without deleting the row (preserving audit history) and
+// records *when* revocation happened, unlike a plain boolean.
 
 export const devicePlatformEnum = pgEnum('device_platform', ['web', 'ios', 'android']);
 
@@ -174,46 +186,64 @@ export const devices = pgTable(
     deviceName: text('device_name'),
     platform: devicePlatformEnum('platform'),
     lastSeenAt: timestamp('last_seen_at'),
-    isRevoked: boolean('is_revoked').notNull().default(false),
+    pushEnabled: boolean('push_enabled').notNull().default(true),
+    revokedAt: timestamp('revoked_at'),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },
-  (table) => [uniqueIndex('devices_user_identity_idx').on(table.userId, table.identityPublicKey)],
+  (table) => [
+    uniqueIndex('devices_user_identity_idx').on(table.userId, table.identityPublicKey),
+    index('devices_user_id_active_idx')
+      .on(table.userId)
+      .where(sql`${table.revokedAt} IS NULL`),
+  ],
 );
 
-// One signed prekey per device (upserted on upload).
-export const signedPreKeys = pgTable(
-  'signed_pre_keys',
+// Signed + one-time prekeys in a single table, discriminated by `keyType`
+// (#104). One active signed prekey per device (enforced by the partial unique
+// index below, replaced on upload); one-time prekeys are consumed at most
+// once — `consumed` flips to true atomically instead of deleting the row, so
+// bundle-fetch history stays auditable.
+export const prekeyTypeEnum = pgEnum('prekey_type', ['signed', 'one_time']);
+
+export const devicePrekeys = pgTable(
+  'device_prekeys',
   {
     id: uuid('id').primaryKey().defaultRandom(),
     deviceId: uuid('device_id')
       .notNull()
       .references(() => devices.id, { onDelete: 'cascade' }),
-    // Application-assigned integer key-id (unique per device).
+    keyType: prekeyTypeEnum('key_type').notNull(),
+    // Application-assigned integer key-id (unique per device + type).
     keyId: integer('key_id').notNull(),
     // Base64-encoded public key.
     publicKey: text('public_key').notNull(),
     // Base64-encoded Ed25519 signature over publicKey, signed by identityPublicKey.
-    signature: text('signature').notNull(),
+    // Required when keyType='signed' — enforced below by a DB check constraint.
+    signature: text('signature'),
+    consumed: boolean('consumed').notNull().default(false),
     createdAt: timestamp('created_at').notNull().defaultNow(),
   },
-  // Only one signed prekey per device at a time — upsert on this unique constraint.
-  (table) => [uniqueIndex('spk_device_idx').on(table.deviceId)],
-);
-
-// One-time prekeys — each consumed at most once.
-export const oneTimePreKeys = pgTable(
-  'one_time_pre_keys',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    deviceId: uuid('device_id')
-      .notNull()
-      .references(() => devices.id, { onDelete: 'cascade' }),
-    keyId: integer('key_id').notNull(),
-    publicKey: text('public_key').notNull(),
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-  },
-  (table) => [uniqueIndex('otp_device_keyid_idx').on(table.deviceId, table.keyId)],
+  (table) => [
+    uniqueIndex('device_prekeys_device_type_keyid_idx').on(
+      table.deviceId,
+      table.keyType,
+      table.keyId,
+    ),
+    // Enforces "one active signed prekey per device" at the DB level; the
+    // upload endpoint upserts against this as its ON CONFLICT target.
+    uniqueIndex('device_prekeys_signed_device_idx')
+      .on(table.deviceId)
+      .where(sql`${table.keyType} = 'signed'`),
+    // Fast bundle assembly: unconsumed one-time prekeys per device.
+    index('device_prekeys_one_time_available_idx')
+      .on(table.deviceId)
+      .where(sql`${table.keyType} = 'one_time' AND ${table.consumed} = false`),
+    check(
+      'device_prekeys_signed_requires_signature',
+      sql`${table.keyType} <> 'signed' OR ${table.signature} IS NOT NULL`,
+    ),
+  ],
 );
 
 // ─── Token transfers (#46) ────────────────────────────────────────────────────
@@ -237,40 +267,6 @@ export const tokenTransfers = pgTable('token_transfers', {
   memo: text('memo'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
-
-// ─── User devices (#153) ──────────────────────────────────────────────────────
-//
-// Device identity registry for end-to-end encryption. Each row is one device a
-// user has registered, holding its long-term identity public key. A device is
-// never hard-deleted — revoking sets `revokedAt` so historical sessions stay
-// auditable. `(userId, deviceId)` is unique so a client re-registering the same
-// device upserts instead of duplicating, and the partial index keeps lookups of
-// a user's *active* devices fast.
-
-export const userDevices = pgTable(
-  'user_devices',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    userId: uuid('user_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
-    deviceId: text('device_id').notNull(),
-    deviceName: text('device_name').notNull(),
-    platform: devicePlatformEnum('platform').notNull(),
-    identityPublicKey: text('identity_public_key').notNull(),
-    registrationId: integer('registration_id'),
-    lastSeenAt: timestamp('last_seen_at'),
-    pushEnabled: boolean('push_enabled').notNull().default(true),
-    revokedAt: timestamp('revoked_at'),
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-  },
-  (table) => [
-    uniqueIndex('user_devices_user_id_device_id_unique').on(table.userId, table.deviceId),
-    index('user_devices_user_id_active_idx')
-      .on(table.userId)
-      .where(sql`${table.revokedAt} IS NULL`),
-  ],
-);
 
 // ─── Treasury Proposals (#130) ────────────────────────────────────────────────
 //
@@ -339,7 +335,7 @@ export const pushSubscriptions = pgTable('push_subscriptions', {
   id: uuid('id').primaryKey().defaultRandom(),
   deviceId: uuid('device_id')
     .notNull()
-    .references(() => userDevices.id, { onDelete: 'cascade' }),
+    .references(() => devices.id, { onDelete: 'cascade' }),
   endpoint: text('endpoint').notNull().unique(),
   p256dh: text('p256dh').notNull(),
   auth: text('auth').notNull(),
@@ -401,9 +397,9 @@ export const messagesRelations = relations(messages, ({ one, many }) => ({
     references: [conversations.id],
   }),
   sender: one(users, { fields: [messages.senderId], references: [users.id] }),
-  senderDevice: one(userDevices, {
+  senderDevice: one(devices, {
     fields: [messages.senderDeviceId],
-    references: [userDevices.id],
+    references: [devices.id],
   }),
   file: one(files, { fields: [messages.fileId], references: [files.id] }),
   envelopes: many(messageEnvelopes),
@@ -417,9 +413,9 @@ export const messagesRelations = relations(messages, ({ one, many }) => ({
 
 export const messageEnvelopesRelations = relations(messageEnvelopes, ({ one }) => ({
   message: one(messages, { fields: [messageEnvelopes.messageId], references: [messages.id] }),
-  recipientDevice: one(userDevices, {
+  recipientDevice: one(devices, {
     fields: [messageEnvelopes.recipientDeviceId],
-    references: [userDevices.id],
+    references: [devices.id],
   }),
   recipientUser: one(users, { fields: [messageEnvelopes.recipientUserId], references: [users.id] }),
 }));
@@ -437,26 +433,17 @@ export const tokenTransfersRelations = relations(tokenTransfers, ({ one }) => ({
 
 export const devicesRelations = relations(devices, ({ one, many }) => ({
   user: one(users, { fields: [devices.userId], references: [users.id] }),
-  signedPreKey: many(signedPreKeys),
-  oneTimePreKeys: many(oneTimePreKeys),
-}));
-
-export const signedPreKeysRelations = relations(signedPreKeys, ({ one }) => ({
-  device: one(devices, { fields: [signedPreKeys.deviceId], references: [devices.id] }),
-}));
-
-export const oneTimePreKeysRelations = relations(oneTimePreKeys, ({ one }) => ({
-  device: one(devices, { fields: [oneTimePreKeys.deviceId], references: [devices.id] }),
-}));
-
-export const userDevicesRelations = relations(userDevices, ({ one, many }) => ({
-  user: one(users, { fields: [userDevices.userId], references: [users.id] }),
+  prekeys: many(devicePrekeys),
   messages: many(messages),
   pushSubscriptions: many(pushSubscriptions),
 }));
 
+export const devicePrekeysRelations = relations(devicePrekeys, ({ one }) => ({
+  device: one(devices, { fields: [devicePrekeys.deviceId], references: [devices.id] }),
+}));
+
 export const pushSubscriptionsRelations = relations(pushSubscriptions, ({ one }) => ({
-  device: one(userDevices, { fields: [pushSubscriptions.deviceId], references: [userDevices.id] }),
+  device: one(devices, { fields: [pushSubscriptions.deviceId], references: [devices.id] }),
 }));
 
 export const treasuryProposalsRelations = relations(treasuryProposals, ({ one, many }) => ({
@@ -494,9 +481,5 @@ export type TokenTransfer = typeof tokenTransfers.$inferSelect;
 export type NewTokenTransfer = typeof tokenTransfers.$inferInsert;
 export type Device = typeof devices.$inferSelect;
 export type NewDevice = typeof devices.$inferInsert;
-export type SignedPreKey = typeof signedPreKeys.$inferSelect;
-export type NewSignedPreKey = typeof signedPreKeys.$inferInsert;
-export type OneTimePreKey = typeof oneTimePreKeys.$inferSelect;
-export type NewOneTimePreKey = typeof oneTimePreKeys.$inferInsert;
-export type UserDevice = typeof userDevices.$inferSelect;
-export type NewUserDevice = typeof userDevices.$inferInsert;
+export type DevicePrekey = typeof devicePrekeys.$inferSelect;
+export type NewDevicePrekey = typeof devicePrekeys.$inferInsert;

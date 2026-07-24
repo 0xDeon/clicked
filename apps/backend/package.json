@@ -48,6 +48,7 @@
     "@eslint/js": "^10.0.1",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/ioredis-mock": "8.2.7",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/morgan": "^1.9.10",
     "@types/node": "^20.19.37",
@@ -56,13 +57,14 @@
     "@vitest/coverage-v8": "^4.1.6",
     "drizzle-kit": "^0.31.10",
     "eslint": "^9.39.4",
+    "ioredis-mock": "8.13.1",
     "prettier": "^3.8.3",
+    "socket.io-client": "^4.8.3",
     "supertest": "^7.2.2",
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.59.3",
-    "socket.io-client": "^4.8.3",
     "vitest": "^4.1.6"
   }
 }
