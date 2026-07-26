@@ -8,6 +8,9 @@ import { useSocket } from '@/hooks/useSocket';
 import { useAuth } from '@/components/auth/useAuth';
 import { Avatar } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { clearSessionKeys } from '@/lib/crypto/sessionStore';
+import { sessionStore } from '@/lib/sessionStore';
+
 
 type Wallet = {
   address?: string;
@@ -336,6 +339,9 @@ export default function ConversationPage() {
           : typeof record.contactId === 'string'
             ? record.contactId
             : (record.subjectUserId as string);
+
+      clearSessionKeys();
+      void sessionStore.clear();
 
       setSafetyByUser((prev) => ({
         ...prev,

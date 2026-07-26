@@ -81,12 +81,12 @@ class CryptoStore {
   }
 
   async generateIdentityKeyPair(): Promise<CryptoKeyPair> {
-    const keyPair = (await window.crypto.subtle.generateKey(
+    const keyPair = (await crypto.subtle.generateKey(
       {
         name: 'ECDH',
         namedCurve: 'P-256',
       },
-      false,
+      true,
       ['deriveKey', 'deriveBits'],
     )) as CryptoKeyPair;
 
@@ -94,13 +94,15 @@ class CryptoStore {
   }
 
   async storeIdentityKeyPair(keyPair: CryptoKeyPair): Promise<void> {
-    const publicKeyJwk = await window.crypto.subtle.exportKey('jwk', keyPair.publicKey);
+    const publicKeyJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
+    const privateKeyJwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
 
     await this.dbPut(
       'keys',
       {
         id: 'identity_keypair',
         publicKey: publicKeyJwk,
+        privateKey: privateKeyJwk,
         createdAt: Date.now(),
       },
       'identity_keypair',
@@ -108,13 +110,18 @@ class CryptoStore {
   }
 
   async getIdentityPrivateKey(): Promise<CryptoKey | null> {
-    const keyExists = await this.dbGet<{ id: string; publicKey: JsonWebKey; createdAt: number }>(
-      'keys',
-      'identity_keypair',
-    );
-    if (!keyExists) return null;
+    const keyData = await this.dbGet<{
+      id: string;
+      publicKey: JsonWebKey;
+      privateKey?: JsonWebKey;
+      createdAt: number;
+    }>('keys', 'identity_keypair');
 
-    const privateKey = await window.crypto.subtle.generateKey(
+    if (!keyData?.privateKey) return null;
+
+    return crypto.subtle.importKey(
+      'jwk',
+      keyData.privateKey,
       {
         name: 'ECDH',
         namedCurve: 'P-256',
@@ -122,8 +129,18 @@ class CryptoStore {
       false,
       ['deriveKey', 'deriveBits'],
     );
+  }
 
-    return privateKey.privateKey;
+  async getIdentityPrivateKeyJwk(): Promise<JsonWebKey | null> {
+    const keyData = await this.dbGet<{
+      id: string;
+      publicKey: JsonWebKey;
+      privateKey?: JsonWebKey;
+      createdAt: number;
+    }>('keys', 'identity_keypair');
+
+    if (keyData?.privateKey) return keyData.privateKey;
+    return null;
   }
 
   async getIdentityPublicKey(): Promise<JsonWebKey | null> {
@@ -145,7 +162,7 @@ class CryptoStore {
     const keyPair = await this.generateIdentityKeyPair();
     await this.storeIdentityKeyPair(keyPair);
 
-    const publicKeyJwk = await window.crypto.subtle.exportKey('jwk', keyPair.publicKey);
+    const publicKeyJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
     return publicKeyJwk;
   }
 
