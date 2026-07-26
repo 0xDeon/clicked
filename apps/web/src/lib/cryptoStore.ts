@@ -1,6 +1,6 @@
 class CryptoStore {
   private dbName = 'clicked_crypto';
-  private dbVersion = 1;
+  private dbVersion = 2; // Incremented for identity key storage upgrade
   private db: IDBDatabase | null = null;
 
   private async getDb(): Promise<IDBDatabase> {
@@ -22,6 +22,10 @@ class CryptoStore {
         }
         if (!db.objectStoreNames.contains('deviceId')) {
           db.createObjectStore('deviceId');
+        }
+        // Version 2: Add identityKeyPair store for structured CryptoKey persistence
+        if (event.oldVersion < 2 && !db.objectStoreNames.contains('identityKeyPair')) {
+          db.createObjectStore('identityKeyPair');
         }
       };
     });
@@ -80,22 +84,41 @@ class CryptoStore {
     return newId;
   }
 
+  /**
+   * Generate a new identity keypair with extractable=true for private key persistence.
+   * The private CryptoKey is stored via IndexedDB structured clone (no export required).
+   */
   async generateIdentityKeyPair(): Promise<CryptoKeyPair> {
     const keyPair = (await window.crypto.subtle.generateKey(
       {
         name: 'ECDH',
         namedCurve: 'P-256',
       },
-      false,
+      true, // extractable=true for private key (allows structured clone storage)
       ['deriveKey', 'deriveBits'],
     )) as CryptoKeyPair;
 
     return keyPair;
   }
 
+  /**
+   * Persist the identity keypair using IndexedDB structured clone.
+   * Stores both the full CryptoKeyPair and the exported public JWK for compatibility.
+   */
   async storeIdentityKeyPair(keyPair: CryptoKeyPair): Promise<void> {
     const publicKeyJwk = await window.crypto.subtle.exportKey('jwk', keyPair.publicKey);
 
+    // Store full CryptoKeyPair via structured clone (no export needed for private key)
+    await this.dbPut(
+      'identityKeyPair',
+      {
+        keyPair, // IndexedDB can serialize CryptoKey objects directly
+        createdAt: Date.now(),
+      },
+      'current',
+    );
+
+    // Maintain legacy public key storage for backwards compatibility
     await this.dbPut(
       'keys',
       {
@@ -107,23 +130,33 @@ class CryptoStore {
     );
   }
 
+  /**
+   * Retrieve the persisted identity private key.
+   * Returns the same CryptoKey across page reloads, preserving identity continuity.
+   */
   async getIdentityPrivateKey(): Promise<CryptoKey | null> {
-    const keyExists = await this.dbGet<{ id: string; publicKey: JsonWebKey; createdAt: number }>(
+    const stored = await this.dbGet<{ keyPair: CryptoKeyPair; createdAt: number }>(
+      'identityKeyPair',
+      'current',
+    );
+    
+    if (stored?.keyPair?.privateKey) {
+      return stored.keyPair.privateKey;
+    }
+
+    // Fallback: check if we have legacy data (migration path)
+    const legacyKey = await this.dbGet<{ id: string; publicKey: JsonWebKey; createdAt: number }>(
       'keys',
       'identity_keypair',
     );
-    if (!keyExists) return null;
+    
+    if (!legacyKey) {
+      return null;
+    }
 
-    const privateKey = await window.crypto.subtle.generateKey(
-      {
-        name: 'ECDH',
-        namedCurve: 'P-256',
-      },
-      false,
-      ['deriveKey', 'deriveBits'],
-    );
-
-    return privateKey.privateKey;
+    // Legacy data exists but no CryptoKey — identity was lost, must regenerate
+    console.warn('Identity private key was not persisted. Regenerating identity keypair.');
+    return null;
   }
 
   async getIdentityPublicKey(): Promise<JsonWebKey | null> {
@@ -135,13 +168,23 @@ class CryptoStore {
     return keyData.publicKey;
   }
 
+  /**
+   * Initialize or retrieve the identity key, ensuring the private key is persisted.
+   */
   async initializeIdentityKey(): Promise<JsonWebKey> {
-    const existing = await this.dbGet<{ id: string; publicKey: JsonWebKey; createdAt: number }>(
-      'keys',
-      'identity_keypair',
+    // Check if we have a persisted keypair
+    const stored = await this.dbGet<{ keyPair: CryptoKeyPair; createdAt: number }>(
+      'identityKeyPair',
+      'current',
     );
-    if (existing) return existing.publicKey;
 
+    if (stored?.keyPair?.privateKey) {
+      // Identity exists and private key is persisted
+      const publicKeyJwk = await window.crypto.subtle.exportKey('jwk', stored.keyPair.publicKey);
+      return publicKeyJwk;
+    }
+
+    // No persisted keypair — generate and store new identity
     const keyPair = await this.generateIdentityKeyPair();
     await this.storeIdentityKeyPair(keyPair);
 
@@ -163,6 +206,7 @@ class CryptoStore {
   async clear(): Promise<void> {
     await this.dbClear('keys');
     await this.dbClear('deviceId');
+    await this.dbClear('identityKeyPair');
   }
 
   closeDb(): void {

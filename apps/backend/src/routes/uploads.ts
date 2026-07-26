@@ -6,6 +6,7 @@ import { db } from '../db/index.js';
 import { files, conversationMembers } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { generatePresignedPut, generateStorageKey } from '../lib/storage.js';
+import { verifyFileIntegrity } from '../lib/fileIntegrity.js';
 
 export const uploadsRouter: IRouter = Router();
 
@@ -86,6 +87,9 @@ uploadsRouter.post('/', async (req: AuthRequest, res) => {
 });
 
 // POST /uploads/:fileId/confirm — mark file as ready after client PUT succeeds
+//
+// SECURITY FIX: Now performs SHA-256 integrity verification before marking ready.
+// If hash mismatch is detected, the file is marked as corrupted and never becomes ready.
 uploadsRouter.post('/:fileId/confirm', async (req: AuthRequest, res) => {
   const userId = req.auth!.userId;
   const fileId = req.params['fileId'] as string;
@@ -119,6 +123,31 @@ uploadsRouter.post('/:fileId/confirm', async (req: AuthRequest, res) => {
     return;
   }
 
+  // SECURITY FIX: Verify SHA-256 integrity before marking ready
+  const integrityCheck = await verifyFileIntegrity(file.storageKey, file.sha256);
+
+  if (!integrityCheck.valid) {
+    // Mark file as corrupted/failed — never becomes ready
+    await db
+      .update(files)
+      .set({ 
+        status: 'deleted', // Mark as deleted to prevent usage
+        deletedAt: new Date(),
+      })
+      .where(eq(files.id, fileId));
+
+    res.status(422).json({
+      error: 'File integrity verification failed',
+      details: {
+        reason: integrityCheck.error || 'Hash mismatch',
+        expectedHash: integrityCheck.expectedHash,
+        computedHash: integrityCheck.computedHash,
+      },
+    });
+    return;
+  }
+
+  // Integrity verified — mark as ready
   await db.update(files).set({ status: 'ready' }).where(eq(files.id, fileId));
 
   res.status(200).json({ fileId, status: 'ready' });

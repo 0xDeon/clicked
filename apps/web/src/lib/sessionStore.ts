@@ -30,7 +30,12 @@ interface CachedSession {
 }
 
 interface SessionProtocol {
-  deriveSharedSecret(publicKey1: JsonWebKey, publicKey2: JsonWebKey): Promise<CryptoKey>;
+  /**
+   * Derive shared secret from caller's private key and peer's public key.
+   * @param callerPrivateKey - The caller's ECDH private CryptoKey
+   * @param peerPublicKeyJwk - The peer's ECDH public key (JWK format)
+   */
+  deriveSharedSecret(callerPrivateKey: CryptoKey, peerPublicKeyJwk: JsonWebKey): Promise<CryptoKey>;
   encryptMessage(
     message: string,
     sharedSecret: CryptoKey,
@@ -39,35 +44,39 @@ interface SessionProtocol {
 }
 
 class SealedBoxProtocol implements SessionProtocol {
-  async deriveSharedSecret(publicKey1: JsonWebKey, publicKey2: JsonWebKey): Promise<CryptoKey> {
-    const importedKey1 = await window.crypto.subtle.importKey(
+  /**
+   * FIXED: Derive shared secret using ECDH correctly.
+   * 
+   * WebCrypto requires:
+   *   deriveBits({ name: 'ECDH', public: peerPublicKey }, callerPrivateKey, length)
+   * 
+   * Previously both keys were imported as public keys, which is cryptographically invalid.
+   * Now we accept the caller's private CryptoKey directly and peer's public JWK.
+   */
+  async deriveSharedSecret(
+    callerPrivateKey: CryptoKey, 
+    peerPublicKeyJwk: JsonWebKey
+  ): Promise<CryptoKey> {
+    // Import peer's public key for ECDH
+    const peerPublicKey = await window.crypto.subtle.importKey(
       'jwk',
-      publicKey1,
+      peerPublicKeyJwk,
       {
         name: 'ECDH',
         namedCurve: 'X25519',
       },
       false,
-      ['deriveBits'],
+      [], // No usages needed for public key in deriveBits
     );
 
-    const importedKey2 = await window.crypto.subtle.importKey(
-      'jwk',
-      publicKey2,
-      {
-        name: 'ECDH',
-        namedCurve: 'X25519',
-      },
-      false,
-      ['deriveBits'],
-    );
-
+    // Perform ECDH: deriveBits(algorithm_with_peer_public, caller_private, bits)
     const sharedBits = await window.crypto.subtle.deriveBits(
-      { name: 'ECDH', public: importedKey2 },
-      importedKey1,
+      { name: 'ECDH', public: peerPublicKey },
+      callerPrivateKey,
       256,
     );
 
+    // Import the derived bits as an AES-GCM key
     const sharedSecret = await window.crypto.subtle.importKey(
       'raw',
       sharedBits,
@@ -262,11 +271,20 @@ class SessionStore {
     return response.json();
   }
 
+  /**
+   * Establish a session with a recipient device.
+   * FIXED: Now passes caller's private key (not public) to deriveSharedSecret.
+   * 
+   * @param recipientId - The recipient user ID
+   * @param recipientDeviceId - The recipient device ID
+   * @param token - Auth token for API calls
+   * @param myPrivateKey - The caller's identity ECDH private key
+   */
   async establishSession(
     recipientId: string,
     recipientDeviceId: string,
     token: string,
-    myPublicKey: JsonWebKey,
+    myPrivateKey: CryptoKey,
   ): Promise<SessionData> {
     const bundle = await this.fetchDeviceBundle(recipientId, recipientDeviceId, token);
 
@@ -280,11 +298,13 @@ class SessionStore {
       throw new Error('Invalid signed prekey signature');
     }
 
+    // Select peer's prekey (one-time if available, else signed prekey)
     const selectedPrekeyPublicKey =
       bundle.oneTimePrekey?.publicKey || bundle.signedPrekey.publicKey;
 
+    // FIXED: Pass our private key and peer's public key (correct ECDH usage)
     const sharedSecret = await this.protocol.deriveSharedSecret(
-      myPublicKey,
+      myPrivateKey,
       selectedPrekeyPublicKey,
     );
 
