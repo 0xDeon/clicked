@@ -130,7 +130,7 @@ uploadsRouter.post('/:fileId/confirm', async (req: AuthRequest, res) => {
     // Mark file as corrupted/failed — never becomes ready
     await db
       .update(files)
-      .set({ 
+      .set({
         status: 'deleted', // Mark as deleted to prevent usage
         deletedAt: new Date(),
       })

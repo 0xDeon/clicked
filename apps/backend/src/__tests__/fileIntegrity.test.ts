@@ -1,6 +1,6 @@
 /**
  * Tests for file integrity verification.
- * 
+ *
  * Verifies that:
  * - SHA-256 hashes are correctly computed
  * - Matching hashes mark file as ready
@@ -50,7 +50,7 @@ describe('File Integrity Verification', () => {
 
     it('produces consistent hashes for same content', () => {
       const buffer = Buffer.from('Test content');
-      
+
       const hash1 = computeSha256FromBuffer(buffer);
       const hash2 = computeSha256FromBuffer(buffer);
 
@@ -70,11 +70,7 @@ describe('File Integrity Verification', () => {
 
     it('handles chunked streaming correctly', async () => {
       // Simulate large file with multiple chunks
-      const chunks = [
-        Buffer.from('First '),
-        Buffer.from('Second '),
-        Buffer.from('Third'),
-      ];
+      const chunks = [Buffer.from('First '), Buffer.from('Second '), Buffer.from('Third')];
       const stream = Readable.from(chunks);
 
       const hash = await computeSha256FromStream(stream);

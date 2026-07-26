@@ -1,10 +1,10 @@
 /**
  * Shared push recipient filtering for consistent behavior across all push paths.
- * 
+ *
  * Implements unified filtering logic for:
  * - dispatchOfflinePush (text messages)
  * - sendPushForMessage (file messages)
- * 
+ *
  * Ensures both paths respect:
  * - conversationMembers.isMuted
  * - devices.pushEnabled
@@ -32,7 +32,7 @@ export interface PushFilterOptions {
 
 /**
  * Get all eligible push recipients for a conversation message.
- * 
+ *
  * Filters out:
  * - The sender themselves
  * - Members who muted the conversation
@@ -40,12 +40,10 @@ export interface PushFilterOptions {
  * - Devices with pushEnabled=false
  * - Revoked devices
  * - Devices that are currently connected via WebSocket
- * 
+ *
  * @returns Array of device IDs that should receive push notifications
  */
-export async function getEligiblePushRecipients(
-  options: PushFilterOptions,
-): Promise<string[]> {
+export async function getEligiblePushRecipients(options: PushFilterOptions): Promise<string[]> {
   const { conversationId, senderId, recipientDeviceIds, redis } = options;
 
   // Step 1: Get conversation members with mute status
@@ -97,7 +95,10 @@ export async function getEligiblePushRecipients(
   let candidateDevices = memberDevices;
 
   // Step 4: If specific recipient device IDs were provided, intersect with them
-  if (recipientDeviceIds && recipientDeviceIds.length > 0) {
+  if (recipientDeviceIds) {
+    if (recipientDeviceIds.length === 0) {
+      return []; // Explicit empty list means no recipients
+    }
     const recipientSet = new Set(recipientDeviceIds);
     candidateDevices = memberDevices.filter((d) => recipientSet.has(d.id));
   }

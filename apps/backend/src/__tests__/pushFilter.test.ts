@@ -1,6 +1,6 @@
 /**
  * Tests for unified push recipient filtering.
- * 
+ *
  * Verifies that getEligiblePushRecipients correctly filters based on:
  * - conversationMembers.isMuted
  * - devices.pushEnabled
@@ -9,6 +9,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Redis } from 'ioredis';
+import RedisMock from 'ioredis-mock';
 
 const mockMembersFindMany = vi.fn();
 const mockDevicesFindMany = vi.fn();
@@ -23,7 +25,11 @@ vi.mock('../db/index.js', () => ({
 }));
 
 vi.mock('../db/schema.js', () => ({
-  conversationMembers: { conversationId: 'conversation_id', userId: 'user_id', isMuted: 'is_muted' },
+  conversationMembers: {
+    conversationId: 'conversation_id',
+    userId: 'user_id',
+    isMuted: 'is_muted',
+  },
   devices: { userId: 'user_id', pushEnabled: 'push_enabled', revokedAt: 'revoked_at' },
 }));
 
@@ -79,12 +85,12 @@ describe('Push Filter Parity', () => {
   });
 
   it('filters out online users (Redis available)', async () => {
-    const mockRedis = { fake: 'redis' } as any;
+    const mockRedis = new RedisMock();
     mockMembersFindMany.mockResolvedValue([
       { userId: 'recipient-1', isMuted: false },
       { userId: 'recipient-2', isMuted: false },
     ]);
-    mockIsOnline.mockImplementation(async (_redis: any, userId: string) => {
+    mockIsOnline.mockImplementation(async (_redis: Redis, userId: string) => {
       return userId === 'recipient-1'; // recipient-1 is online
     });
     mockDevicesFindMany.mockResolvedValue([{ id: 'device-2', userId: 'recipient-2' }]);
@@ -122,7 +128,7 @@ describe('Push Filter Parity', () => {
 
   it('filters out devices with pushEnabled=false', async () => {
     mockMembersFindMany.mockResolvedValue([{ userId: 'recipient-1', isMuted: false }]);
-    
+
     // Query should only return devices where pushEnabled=true
     mockDevicesFindMany.mockResolvedValue([{ id: 'device-enabled', userId: 'recipient-1' }]);
 
@@ -140,7 +146,7 @@ describe('Push Filter Parity', () => {
       { id: 'device-connected', userId: 'recipient-1' },
       { id: 'device-offline', userId: 'recipient-1' },
     ]);
-    
+
     mockIsDeviceConnected.mockImplementation((deviceId: string) => {
       return deviceId === 'device-connected';
     });
@@ -174,7 +180,7 @@ describe('Push Filter Parity', () => {
   });
 
   it('applies all filters in combination', async () => {
-    const mockRedis = { fake: 'redis' } as any;
+    const mockRedis = new RedisMock();
     mockMembersFindMany.mockResolvedValue([
       { userId: 'sender-1', isMuted: false }, // Should be filtered (sender)
       { userId: 'muted-user', isMuted: true }, // Should be filtered (muted)
@@ -182,7 +188,7 @@ describe('Push Filter Parity', () => {
       { userId: 'eligible-user', isMuted: false }, // Should pass
     ]);
 
-    mockIsOnline.mockImplementation(async (_redis: any, userId: string) => {
+    mockIsOnline.mockImplementation(async (_redis: Redis, userId: string) => {
       return userId === 'online-user';
     });
 
@@ -206,9 +212,7 @@ describe('Push Filter Parity', () => {
   });
 
   it('returns empty array when no eligible recipients', async () => {
-    mockMembersFindMany.mockResolvedValue([
-      { userId: 'sender-1', isMuted: false },
-    ]);
+    mockMembersFindMany.mockResolvedValue([{ userId: 'sender-1', isMuted: false }]);
 
     const result = await getEligiblePushRecipients({
       conversationId: 'conv-1',

@@ -1,6 +1,6 @@
 /**
  * Integration tests for all four security fixes working together.
- * 
+ *
  * Demonstrates:
  * 1. ECDH session establishment with correct key usage
  * 2. Identity key persistence across page reloads
@@ -20,7 +20,7 @@ describe('Security Fixes Integration', () => {
       // 4. Alice encrypts message using session key
       // 5. Bob decrypts message using same session key
       // 6. Both can continue using persisted keys after "page reload"
-      
+
       expect(true).toBe(true); // Placeholder for actual implementation
     });
   });
@@ -32,7 +32,7 @@ describe('Security Fixes Integration', () => {
       // 2. Both respect isMuted, pushEnabled, connection state, online state
       // 3. Sender never receives push for own message
       // 4. Coalescing works correctly for both paths
-      
+
       expect(true).toBe(true); // Placeholder for actual implementation
     });
   });
@@ -45,7 +45,7 @@ describe('Security Fixes Integration', () => {
       // 3. Server verifies integrity before marking ready
       // 4. File with wrong hash is marked corrupted
       // 5. File can be downloaded and decrypted by recipient
-      
+
       expect(true).toBe(true); // Placeholder for actual implementation
     });
   });
@@ -70,24 +70,24 @@ describe('Security Fixes Integration', () => {
 
 /**
  * Summary of Security Fixes
- * 
+ *
  * PART 1: ECDH Session Establishment
  * - Fixed deriveSharedSecret to accept caller's private CryptoKey (not public JWK)
  * - establishSession now passes private key to deriveSharedSecret
  * - Both parties derive identical shared secrets for encryption/decryption
- * 
+ *
  * PART 2: Identity Key Persistence
  * - Identity keypairs now generated with extractable=true
  * - Private CryptoKey persisted via IndexedDB structured clone
  * - getIdentityPrivateKey returns same key across page reloads
  * - No regeneration occurs after initialization
- * 
+ *
  * PART 3: Push Preference Parity
  * - Created shared pushFilter.ts with getEligiblePushRecipients
  * - Both dispatchOfflinePush and sendPushForMessage use same logic
  * - Filters respect isMuted, pushEnabled, connection state, online state
  * - Consistent behavior across all push delivery paths
- * 
+ *
  * PART 4: File Integrity Verification
  * - Created fileIntegrity.ts with streaming SHA-256 computation
  * - Upload confirmation now verifies hash before marking ready

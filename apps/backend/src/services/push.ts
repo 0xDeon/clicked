@@ -1,4 +1,3 @@
-import { db } from '../db/index.js';
 import { queueCoalescedPush } from './pushNotification.js';
 import { getEligiblePushRecipients } from './pushFilter.js';
 import { redis } from '../lib/redis.js';
@@ -15,10 +14,10 @@ export interface PushContext {
  * SECURITY FIX: Now uses shared filtering logic (pushFilter.ts) to ensure
  * consistent behavior with dispatchOfflinePush:
  * - Respects conversationMembers.isMuted
- * - Respects devices.pushEnabled  
+ * - Respects devices.pushEnabled
  * - Filters by connection state
  * - Filters by online/offline state
- * 
+ *
  * Shares queueCoalescedPush with the text-message path (#176) so a burst of
  * file messages coalesces into one push per device instead of one per
  * message, and gets the same per-device rate limit and dead-subscription

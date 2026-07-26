@@ -1,6 +1,6 @@
 /**
  * File integrity verification using SHA-256.
- * 
+ *
  * Verifies uploaded file content matches the claimed hash before marking as ready.
  * Works with local filesystem storage, S3, and MinIO.
  */
@@ -18,22 +18,22 @@ export interface IntegrityCheckResult {
 
 /**
  * Compute SHA-256 hash of a stream (streaming hashing for large files).
- * 
+ *
  * @param stream - Readable stream of file content
  * @returns Hex-encoded SHA-256 hash
  */
 export async function computeSha256FromStream(stream: Readable): Promise<string> {
   return new Promise((resolve, reject) => {
     const hash = createHash('sha256');
-    
+
     stream.on('data', (chunk) => {
       hash.update(chunk);
     });
-    
+
     stream.on('end', () => {
       resolve(hash.digest('hex'));
     });
-    
+
     stream.on('error', (err) => {
       reject(err);
     });
@@ -42,7 +42,7 @@ export async function computeSha256FromStream(stream: Readable): Promise<string>
 
 /**
  * Compute SHA-256 hash of a buffer (for in-memory content).
- * 
+ *
  * @param buffer - File content buffer
  * @returns Hex-encoded SHA-256 hash
  */
@@ -52,10 +52,10 @@ export function computeSha256FromBuffer(buffer: Buffer): string {
 
 /**
  * Verify the integrity of an uploaded file against its claimed SHA-256 hash.
- * 
+ *
  * Retrieves the object from storage, computes its SHA-256, and compares.
  * Uses streaming hashing to avoid loading large files into memory.
- * 
+ *
  * @param storageKey - The storage key/path of the uploaded object
  * @param expectedSha256 - The hex-encoded SHA-256 hash claimed by the client
  * @returns Integrity check result with validation status
@@ -66,10 +66,10 @@ export async function verifyFileIntegrity(
 ): Promise<IntegrityCheckResult> {
   try {
     const store = getObjectStore();
-    
+
     // Fetch the object from storage
     const response = await store.getObject(storageKey);
-    
+
     if (!response.Body) {
       return {
         valid: false,
@@ -102,26 +102,23 @@ export async function verifyFileIntegrity(
 
 /**
  * Verify file size matches the expected size.
- * 
+ *
  * @param storageKey - The storage key/path of the uploaded object
  * @param expectedSize - The size in bytes claimed by the client
  * @returns True if size matches, false otherwise
  */
-export async function verifyFileSize(
-  storageKey: string,
-  expectedSize: number,
-): Promise<boolean> {
+export async function verifyFileSize(storageKey: string, expectedSize: number): Promise<boolean> {
   try {
     const store = getObjectStore();
     const response = await store.getObject(storageKey);
-    
+
     if (!response.Body) {
       return false;
     }
 
     // Get content length from response
     const actualSize = response.ContentLength;
-    
+
     if (actualSize === undefined) {
       return false;
     }

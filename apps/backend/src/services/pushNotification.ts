@@ -47,7 +47,7 @@ const lastPushSentAt = new Map<string, number>();
 /**
  * #236 – After a message is persisted, dispatch push to every recipient device
  * that currently has no active socket connection.
- * 
+ *
  * SECURITY FIX: Now uses shared filtering logic (pushFilter.ts) to ensure
  * consistent behavior with sendPushForMessage:
  * - Respects conversationMembers.isMuted
