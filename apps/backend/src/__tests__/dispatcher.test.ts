@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { EventDispatcher } from '../socket/dispatcher.js';
 import type { AuthSocket } from '../middleware/socketAuth.js';
@@ -185,5 +185,117 @@ describe('EventDispatcher.listen — envelope routing', () => {
     await new Promise((r) => setTimeout(r, 10));
     const errors = emitted.filter((e) => e.event === 'error');
     expect(errors.length).toBeGreaterThan(0);
+  });
+});
+
+describe('EventDispatcher — configurable idempotency TTL (#344)', () => {
+  const ORIGINAL_TTL = process.env.IDEMPOTENCY_TTL_SECONDS;
+
+  afterEach(() => {
+    if (ORIGINAL_TTL === undefined) delete process.env.IDEMPOTENCY_TTL_SECONDS;
+    else process.env.IDEMPOTENCY_TTL_SECONDS = ORIGINAL_TTL;
+  });
+
+  it('defaults the Redis SET EX TTL to 86400 seconds when unset', async () => {
+    delete process.env.IDEMPOTENCY_TTL_SECONDS;
+    const { socket, trigger } = makeSocket();
+    const redis = makeRedis('OK');
+    const dispatcher = new EventDispatcher(makeIo(), socket, redis as never);
+    dispatcher.register('join_room', vi.fn());
+    dispatcher.listen();
+
+    trigger('dispatch', {
+      eventId: 'evt-default-ttl',
+      type: 'join_room',
+      timestamp: Date.now(),
+      payload: {},
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(redis.set).toHaveBeenCalledWith(
+      'event:idempotency:evt-default-ttl',
+      '1',
+      'EX',
+      86_400,
+      'NX',
+    );
+  });
+
+  it('reads the Redis SET EX TTL from IDEMPOTENCY_TTL_SECONDS when configured', async () => {
+    process.env.IDEMPOTENCY_TTL_SECONDS = '120';
+    const { socket, trigger } = makeSocket();
+    const redis = makeRedis('OK');
+    const dispatcher = new EventDispatcher(makeIo(), socket, redis as never);
+    dispatcher.register('join_room', vi.fn());
+    dispatcher.listen();
+
+    trigger('dispatch', {
+      eventId: 'evt-custom-ttl',
+      type: 'join_room',
+      timestamp: Date.now(),
+      payload: {},
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(redis.set).toHaveBeenCalledWith(
+      'event:idempotency:evt-custom-ttl',
+      '1',
+      'EX',
+      120,
+      'NX',
+    );
+  });
+
+  it('falls back to the default TTL for an invalid (non-numeric) override', async () => {
+    process.env.IDEMPOTENCY_TTL_SECONDS = 'not-a-number';
+    const { socket, trigger } = makeSocket();
+    const redis = makeRedis('OK');
+    const dispatcher = new EventDispatcher(makeIo(), socket, redis as never);
+    dispatcher.register('join_room', vi.fn());
+    dispatcher.listen();
+
+    trigger('dispatch', {
+      eventId: 'evt-invalid-ttl',
+      type: 'join_room',
+      timestamp: Date.now(),
+      payload: {},
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(redis.set).toHaveBeenCalledWith(
+      'event:idempotency:evt-invalid-ttl',
+      '1',
+      'EX',
+      86_400,
+      'NX',
+    );
+  });
+
+  it('rejects a duplicate eventId within the TTL window regardless of configured TTL', async () => {
+    process.env.IDEMPOTENCY_TTL_SECONDS = '300';
+    const { socket, trigger } = makeSocket();
+    // null == Redis SET NX found the key already present (still within TTL)
+    const redis = makeRedis(null);
+    const dispatcher = new EventDispatcher(makeIo(), socket, redis as never);
+    const handler = vi.fn();
+    dispatcher.register('join_room', handler);
+    dispatcher.listen();
+
+    trigger('dispatch', {
+      eventId: 'evt-duplicate-within-ttl',
+      type: 'join_room',
+      timestamp: Date.now(),
+      payload: {},
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(handler).not.toHaveBeenCalled();
+    expect(redis.set).toHaveBeenCalledWith(
+      'event:idempotency:evt-duplicate-within-ttl',
+      '1',
+      'EX',
+      300,
+      'NX',
+    );
   });
 });

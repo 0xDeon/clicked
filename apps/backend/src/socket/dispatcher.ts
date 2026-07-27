@@ -10,7 +10,16 @@ import {
 
 type Handler = (payload: Record<string, unknown>) => Promise<void>;
 
-const IDEMPOTENCY_TTL_SECONDS = 86_400; // 24 h
+const DEFAULT_IDEMPOTENCY_TTL_SECONDS = 86_400; // 24 h
+
+// Read lazily (not at module load) so tests can override
+// process.env.IDEMPOTENCY_TTL_SECONDS per-case without a module reset.
+function getIdempotencyTtlSeconds(): number {
+  const raw = process.env.IDEMPOTENCY_TTL_SECONDS;
+  if (!raw) return DEFAULT_IDEMPOTENCY_TTL_SECONDS;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_IDEMPOTENCY_TTL_SECONDS;
+}
 
 export class EventDispatcher {
   private handlers = new Map<string, Handler>();
@@ -81,7 +90,7 @@ export class EventDispatcher {
       if (this.redis) {
         const idempotencyKey = `event:idempotency:${envelope.eventId}`;
         const set = await this.redis
-          .set(idempotencyKey, '1', 'EX', IDEMPOTENCY_TTL_SECONDS, 'NX')
+          .set(idempotencyKey, '1', 'EX', getIdempotencyTtlSeconds(), 'NX')
           .catch(() => null);
         if (set === null) {
           // Already processed — acknowledge without re-running.
