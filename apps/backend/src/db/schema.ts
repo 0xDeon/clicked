@@ -9,6 +9,7 @@ import {
   integer,
   uniqueIndex,
   check,
+  jsonb,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
@@ -125,6 +126,12 @@ export const messages = pgTable(
     }),
     contentType: text('content_type').notNull().default('text'),
     ciphertext: text('ciphertext'),
+    // Structured, server-generated metadata for `content_type = 'system'` rows
+    // (device add/revoke, membership changes). Kept separate from `ciphertext`
+    // so genuine E2EE ciphertext — opaque, per-device-encrypted — is never
+    // conflated with plaintext system metadata. Null for every non-system row;
+    // enforced by `messages_system_payload_check` below.
+    systemPayload: jsonb('system_payload').$type<{ userId: string; change: string } | null>(),
     fileId: uuid('file_id').references(() => files.id, { onDelete: 'set null' }),
     editsMessageId: uuid('edits_message_id').references((): AnyPgColumn => messages.id, {
       onDelete: 'set null',
@@ -132,7 +139,15 @@ export const messages = pgTable(
     createdAt: timestamp('created_at').notNull().defaultNow(),
     deletedAt: timestamp('deleted_at'),
   },
-  (table) => [index('messages_conversation_created_idx').on(table.conversationId, table.createdAt)],
+  (table) => [
+    index('messages_conversation_created_idx').on(table.conversationId, table.createdAt),
+    // System messages carry structured metadata, never ciphertext; everything
+    // else carries ciphertext (or an envelope), never a system payload.
+    check(
+      'messages_system_payload_check',
+      sql`${table.contentType} <> 'system' OR (${table.ciphertext} IS NULL AND ${table.systemPayload} IS NOT NULL)`,
+    ),
+  ],
 );
 
 export const messageEnvelopes = pgTable(
