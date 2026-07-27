@@ -120,7 +120,9 @@ beforeEach(() => {
   });
 
   // The revoked user is a member of exactly one conversation.
-  mockMemberFindMany.mockResolvedValue([{ conversationId: 'conversation-1', userId: CALLER.userId }]);
+  mockMemberFindMany.mockResolvedValue([
+    { conversationId: 'conversation-1', userId: CALLER.userId },
+  ]);
 
   setupTransactionCapture();
 });
