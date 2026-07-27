@@ -11,6 +11,18 @@ import {
 type Handler = (payload: Record<string, unknown>) => Promise<void>;
 
 const IDEMPOTENCY_TTL_SECONDS = 86_400; // 24 h
+const SOCKET_EVENT_MAX_AGE_MS = parseInt(process.env['SOCKET_EVENT_MAX_AGE_MS'] ?? '300000', 10);
+const SOCKET_EVENT_MAX_FUTURE_SKEW_MS = parseInt(
+  process.env['SOCKET_EVENT_MAX_FUTURE_SKEW_MS'] ?? '30000',
+  10,
+);
+
+function isEnvelopeTimestampFresh(timestamp: number): boolean {
+  const now = Date.now();
+  return (
+    timestamp >= now - SOCKET_EVENT_MAX_AGE_MS && timestamp <= now + SOCKET_EVENT_MAX_FUTURE_SKEW_MS
+  );
+}
 
 export class EventDispatcher {
   private handlers = new Map<string, Handler>();
@@ -71,6 +83,17 @@ export class EventDispatcher {
           'error',
           createEnvelope('error', {
             message: `Unknown event type: ${envelope.type}`,
+            eventId: envelope.eventId,
+          }),
+        );
+        return;
+      }
+
+      if (!isEnvelopeTimestampFresh(envelope.timestamp)) {
+        this.socket.emit(
+          'error',
+          createEnvelope('error', {
+            message: 'Stale or invalid envelope timestamp',
             eventId: envelope.eventId,
           }),
         );

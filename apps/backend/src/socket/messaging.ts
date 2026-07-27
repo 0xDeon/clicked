@@ -396,123 +396,141 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
   });
 
   // ── send_file_message ──────────────────────────────────────────────────────
-  socket.on(
-    'send_file_message',
-    async (payload: {
+  dispatcher.register('send_file_message', async (payload) => {
+    const { conversationId, fileId, content, contentType, messageId } = payload as {
       conversationId: string;
       fileId: string;
       content: string;
       contentType: 'file' | 'image' | 'video' | 'audio';
-    }) => {
-      const { conversationId, fileId, content, contentType } = payload;
+      messageId?: string;
+    };
 
-      if (!content?.trim()) {
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'Content (envelope ciphertext) must not be empty',
-        });
-        return;
-      }
-
-      const validContentTypes = ['file', 'image', 'video', 'audio'] as const;
-      if (!validContentTypes.includes(contentType)) {
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'contentType must be one of: file, image, video, audio',
-        });
-        return;
-      }
-
-      const membership = await db.query.conversationMembers.findFirst({
-        where: and(
-          eq(conversationMembers.conversationId, conversationId),
-          eq(conversationMembers.userId, userId),
-        ),
+    if (!messageId) {
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'messageId is required',
       });
+      return;
+    }
 
-      if (!membership) {
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'Not a member of this conversation',
-        });
-        return;
-      }
-
-      const file = await db.query.files.findFirst({
-        where: eq(files.id, fileId),
+    if (!content?.trim()) {
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'Content (envelope ciphertext) must not be empty',
       });
+      return;
+    }
 
-      if (!file) {
-        socket.emit('error', { event: 'send_file_message', message: 'File not found' });
-        return;
-      }
+    const validContentTypes = ['file', 'image', 'video', 'audio'] as const;
+    if (!validContentTypes.includes(contentType)) {
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'contentType must be one of: file, image, video, audio',
+      });
+      return;
+    }
 
-      if (file.status !== 'ready') {
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'File is not ready for use',
-        });
-        return;
-      }
+    const membership = await db.query.conversationMembers.findFirst({
+      where: and(
+        eq(conversationMembers.conversationId, conversationId),
+        eq(conversationMembers.userId, userId),
+      ),
+    });
 
-      if (file.conversationId !== conversationId) {
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'File does not belong to this conversation',
-        });
-        return;
-      }
+    if (!membership) {
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'Not a member of this conversation',
+      });
+      return;
+    }
 
-      if (file.uploaderId !== userId) {
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'Access denied: you are not the uploader of this file',
-        });
-        return;
-      }
+    const existing = await db.query.messages.findFirst({
+      where: eq(messages.id, messageId),
+      columns: { createdAt: true },
+    });
 
-      let message;
-      try {
-        message = await db.transaction(async (tx) => {
-          const [insertedMessage] = await tx
-            .insert(messages)
-            .values({
-              conversationId,
-              senderId: userId,
-              ciphertext: content.trim(),
-              contentType,
-              fileId,
-            })
-            .returning();
+    if (existing) {
+      socket.emit('message_ack', { messageId, createdAt: existing.createdAt });
+      return;
+    }
 
-          return insertedMessage;
-        });
-      } catch (error) {
-        console.error('Transaction failed for file message:', error);
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'Failed to persist file message',
-        });
-        return;
-      }
+    const file = await db.query.files.findFirst({
+      where: eq(files.id, fileId),
+    });
 
-      if (message) {
-        io.to(conversationId).emit('new_message', message);
+    if (!file) {
+      socket.emit('error', { event: 'send_file_message', message: 'File not found' });
+      return;
+    }
 
-        const members = await db.query.conversationMembers.findMany({
-          where: eq(conversationMembers.conversationId, conversationId),
-          columns: { userId: true },
-        });
-        await invalidateConversationCaches(members.map((member) => member.userId));
+    if (file.status !== 'ready') {
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'File is not ready for use',
+      });
+      return;
+    }
 
-        sendPushForMessage({
-          conversationId,
-          messageId: message.id,
-          senderId: userId,
-        });
-      }
-    },
-  );
+    if (file.conversationId !== conversationId) {
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'File does not belong to this conversation',
+      });
+      return;
+    }
+
+    if (file.uploaderId !== userId) {
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'Access denied: you are not the uploader of this file',
+      });
+      return;
+    }
+
+    let message;
+    try {
+      message = await db.transaction(async (tx) => {
+        const [insertedMessage] = await tx
+          .insert(messages)
+          .values({
+            id: messageId,
+            conversationId,
+            senderId: userId,
+            ciphertext: content.trim(),
+            contentType,
+            fileId,
+          })
+          .returning();
+
+        return insertedMessage;
+      });
+    } catch (error) {
+      console.error('Transaction failed for file message:', error);
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'Failed to persist file message',
+      });
+      return;
+    }
+
+    if (message) {
+      socket.emit('message_ack', { messageId, createdAt: message.createdAt });
+      io.to(conversationId).emit('new_message', message);
+
+      const members = await db.query.conversationMembers.findMany({
+        where: eq(conversationMembers.conversationId, conversationId),
+        columns: { userId: true },
+      });
+      await invalidateConversationCaches(members.map((member) => member.userId));
+
+      sendPushForMessage({
+        conversationId,
+        messageId: message.id,
+        senderId: userId,
+      });
+    }
+  });
 
   // ── message_history ────────────────────────────────────────────────────────
   dispatcher.register('message_history', async (payload) => {
