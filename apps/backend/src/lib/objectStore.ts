@@ -136,7 +136,10 @@ let singleton: ObjectStoreLike | null = null;
 
 export function getObjectStore(): ObjectStoreLike {
   if (!singleton) {
-    singleton = process.env['NODE_ENV'] === 'production' ? createObjectStore(loadEnv()) : getLocalObjectStore();
+    singleton =
+      process.env['NODE_ENV'] === 'production'
+        ? createObjectStore(loadEnv())
+        : getLocalObjectStore();
   }
   return singleton;
 }
