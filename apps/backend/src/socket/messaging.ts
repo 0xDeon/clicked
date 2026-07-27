@@ -9,6 +9,7 @@ import {
   messageEnvelopes,
   devices,
   files,
+  users,
 } from '../db/schema.js';
 import type { AuthSocket } from '../middleware/socketAuth.js';
 import { invalidateConversationCaches } from '../lib/conversationCache.js';
@@ -41,6 +42,26 @@ async function fetchSiblingDeviceIds(userId: string, senderDeviceId: string): Pr
     columns: { id: true },
   });
   return siblings.map((d) => d.id);
+}
+
+async function findUsersBlockingConversationAccess(
+  type: 'dm' | 'group',
+  memberIds: string[],
+): Promise<string[]> {
+  if (memberIds.length === 0) return [];
+
+  const invitedUsers = await db.query.users.findMany({
+    where: inArray(users.id, memberIds),
+    columns: {
+      id: true,
+      allowDirectMessages: true,
+      allowGroupInvites: true,
+    },
+  });
+
+  return invitedUsers
+    .filter((user) => (type === 'dm' ? !user.allowDirectMessages : !user.allowGroupInvites))
+    .map((user) => user.id);
 }
 
 export function registerMessagingHandlers(io: Server, socket: AuthSocket): void {
@@ -642,6 +663,15 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         ),
       );
 
+    const receiptSettings = await db.query.users.findFirst({
+      where: eq(users.id, userId),
+      columns: { sendReadReceipts: true },
+    });
+
+    if (!receiptSettings?.sendReadReceipts) {
+      return;
+    }
+
     io.to(conversationId).volatile.emit('read_receipt', {
       conversationId,
       userId,
@@ -781,7 +811,22 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       memberIds: string[];
     };
 
-    const allMembers = Array.from(new Set([userId, ...memberIds]));
+    const requestedMembers = Array.from(new Set(memberIds.filter((memberId) => memberId !== userId)));
+    const blockedMemberIds = await findUsersBlockingConversationAccess(type, requestedMembers);
+
+    if (blockedMemberIds.length > 0) {
+      socket.emit('error', {
+        event: 'create_conversation',
+        message:
+          type === 'dm'
+            ? 'One or more recipients are not accepting direct messages'
+            : 'One or more recipients are not accepting group invites',
+        blockedUserIds: blockedMemberIds,
+      });
+      return;
+    }
+
+    const allMembers = Array.from(new Set([userId, ...requestedMembers]));
 
     const [conversation] = await db.insert(conversations).values({ type, name }).returning();
 

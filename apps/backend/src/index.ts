@@ -204,9 +204,10 @@ io.on('connection', async (socket: AuthSocket) => {
     const becameOnline = await setOnline(appRedis, userId, deviceId);
     const connectUser = await db.query.users.findFirst({
       where: eq(users.id, userId),
-      columns: { presenceVisible: true },
+      columns: { presenceVisible: true, lastSeenVisible: true },
     });
     const presenceVisible = connectUser?.presenceVisible ?? true;
+    const lastSeenVisible = connectUser?.lastSeenVisible ?? false;
     if (becameOnline && presenceVisible) {
       for (const m of memberships) {
         io.to(conversationRoom(m.conversationId)).emit('user_online', { userId });
@@ -214,7 +215,7 @@ io.on('connection', async (socket: AuthSocket) => {
           userId,
           online: true,
           status: 'online',
-          lastSeen: Date.now(),
+          ...(lastSeenVisible ? { lastSeen: Date.now() } : {}),
         });
         // Also emit to direct conversation room for backward compatibility
         io.to(m.conversationId).emit('user_online', { userId });
@@ -222,7 +223,7 @@ io.on('connection', async (socket: AuthSocket) => {
           userId,
           online: true,
           status: 'online',
-          lastSeen: Date.now(),
+          ...(lastSeenVisible ? { lastSeen: Date.now() } : {}),
         });
       }
       await recordPresenceForCoMembers(
@@ -308,9 +309,10 @@ io.on('connection', async (socket: AuthSocket) => {
       if (fullyOffline) {
         const user = await db.query.users.findFirst({
           where: eq(users.id, userId),
-          columns: { presenceVisible: true },
+          columns: { presenceVisible: true, lastSeenVisible: true },
         });
         const presenceVisible = user?.presenceVisible ?? true;
+        const lastSeenVisible = user?.lastSeenVisible ?? false;
 
         if (presenceVisible) {
           const memberships = await db.query.conversationMembers.findMany({
@@ -325,14 +327,14 @@ io.on('connection', async (socket: AuthSocket) => {
             io.to(conversationRoom(m.conversationId)).emit('presence_update', {
               userId,
               online: false,
-              ...(lastSeen ? { lastSeen } : {}),
+              ...(lastSeenVisible && lastSeen ? { lastSeen } : {}),
             });
             // Also emit to direct conversation room for backward compatibility
             io.to(m.conversationId).emit('user_offline', { userId });
             io.to(m.conversationId).emit('presence_update', {
               userId,
               online: false,
-              ...(lastSeen ? { lastSeen } : {}),
+              ...(lastSeenVisible && lastSeen ? { lastSeen } : {}),
             });
           }
           await recordPresenceForCoMembers(
