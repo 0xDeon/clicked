@@ -188,6 +188,10 @@ export const devices = pgTable(
     lastSeenAt: timestamp('last_seen_at'),
     pushEnabled: boolean('push_enabled').notNull().default(true),
     revokedAt: timestamp('revoked_at'),
+    // Set by the device-GC job once a revoked device has aged past
+    // DEVICE_STALE_AFTER_DAYS. Purely informational — flags the row for
+    // admin visibility/future hard-delete without destroying audit history.
+    staleFlaggedAt: timestamp('stale_flagged_at'),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },
@@ -243,6 +247,34 @@ export const devicePrekeys = pgTable(
       'device_prekeys_signed_requires_signature',
       sql`${table.keyType} <> 'signed' OR ${table.signature} IS NOT NULL`,
     ),
+  ],
+);
+
+// ─── MLS key packages ─────────────────────────────────────────────────────────
+//
+// One-time-use MLS KeyPackages a device publishes so it can be added to a
+// group's ratchet tree (mirrors `devicePrekeys`' one-time-prekey model:
+// `consumed` flips to true instead of deleting the row, so issuance stays
+// auditable). The background GC job (services/deviceGc.ts) prunes
+// consumed/expired rows on a retention window.
+
+export const mlsKeyPackages = pgTable(
+  'mls_key_packages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    deviceId: uuid('device_id')
+      .notNull()
+      .references(() => devices.id, { onDelete: 'cascade' }),
+    // Base64-encoded MLS KeyPackage TLS encoding (see lib/keys.ts MlsKeyPackageSchema).
+    keyPackage: text('key_package').notNull(),
+    consumed: boolean('consumed').notNull().default(false),
+    consumedAt: timestamp('consumed_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    index('mls_key_packages_device_available_idx')
+      .on(table.deviceId)
+      .where(sql`${table.consumed} = false`),
   ],
 );
 
@@ -434,12 +466,17 @@ export const tokenTransfersRelations = relations(tokenTransfers, ({ one }) => ({
 export const devicesRelations = relations(devices, ({ one, many }) => ({
   user: one(users, { fields: [devices.userId], references: [users.id] }),
   prekeys: many(devicePrekeys),
+  mlsKeyPackages: many(mlsKeyPackages),
   messages: many(messages),
   pushSubscriptions: many(pushSubscriptions),
 }));
 
 export const devicePrekeysRelations = relations(devicePrekeys, ({ one }) => ({
   device: one(devices, { fields: [devicePrekeys.deviceId], references: [devices.id] }),
+}));
+
+export const mlsKeyPackagesRelations = relations(mlsKeyPackages, ({ one }) => ({
+  device: one(devices, { fields: [mlsKeyPackages.deviceId], references: [devices.id] }),
 }));
 
 export const pushSubscriptionsRelations = relations(pushSubscriptions, ({ one }) => ({
@@ -483,3 +520,5 @@ export type Device = typeof devices.$inferSelect;
 export type NewDevice = typeof devices.$inferInsert;
 export type DevicePrekey = typeof devicePrekeys.$inferSelect;
 export type NewDevicePrekey = typeof devicePrekeys.$inferInsert;
+export type MlsKeyPackage = typeof mlsKeyPackages.$inferSelect;
+export type NewMlsKeyPackage = typeof mlsKeyPackages.$inferInsert;
