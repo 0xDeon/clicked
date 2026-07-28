@@ -15,6 +15,13 @@
       "when": 1785100800000,
       "tag": "0001_gc_background_jobs",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785187200000,
+      "tag": "0002_device_capabilities",
+      "breakpoints": true
     }
   ]
 }

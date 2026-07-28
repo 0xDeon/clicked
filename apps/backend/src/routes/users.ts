@@ -8,6 +8,7 @@ import { redis } from '../lib/redis.js';
 import { isOnline, deriveDevicePresence } from '../services/presence.js';
 import { getSocketServer } from '../lib/socket.js';
 import { conversationRoom } from '../services/roomManager.js';
+import { normalizeCapabilities } from '../lib/capabilities.js';
 
 export const usersRouter: RouterType = Router();
 
@@ -250,6 +251,9 @@ usersRouter.get('/:userId/devices/:deviceId/key-bundle', async (req: AuthRequest
     deviceId: device.id,
     identityPublicKey: device.identityPublicKey,
     registrationId: device.registrationId,
+    // Lets the initiating sender pick an encryption path this recipient
+    // device supports before running X3DH (#180-follow-on).
+    capabilities: normalizeCapabilities(device.capabilities),
     signedPreKey: {
       keyId: signedPreKey.keyId,
       publicKey: signedPreKey.publicKey,

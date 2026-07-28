@@ -9,9 +9,11 @@ import {
   integer,
   uniqueIndex,
   check,
+  jsonb,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
+import { DEFAULT_CAPABILITIES, type DeviceCapabilities } from '../lib/capabilities.js';
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -192,6 +194,14 @@ export const devices = pgTable(
     // DEVICE_STALE_AFTER_DAYS. Purely informational — flags the row for
     // admin visibility/future hard-delete without destroying audit history.
     staleFlaggedAt: timestamp('stale_flagged_at'),
+    // Supported protocols/ciphersuites/file-transfer versions this device
+    // advertises (lib/capabilities.ts). Defaults to the sealed_box-only
+    // baseline so rows written before this column existed, or clients that
+    // never send it, negotiate correctly rather than erroring — see
+    // lib/capabilities.ts `normalizeCapabilities`.
+    capabilities: jsonb('capabilities').$type<DeviceCapabilities>().notNull().default(
+      DEFAULT_CAPABILITIES,
+    ),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },

@@ -21,6 +21,7 @@ import { SignedPreKeyEntrySchema, PreKeyEntrySchema, verifyEd25519Signature } fr
 import { conversationRoom } from '../services/roomManager.js';
 import { redis } from '../lib/redis.js';
 import { markDeviceRevoked } from '../services/deviceRevocation.js';
+import { DeviceCapabilitiesSchema, normalizeCapabilities } from '../lib/capabilities.js';
 
 export const devicesRouter: RouterType = Router();
 
@@ -81,6 +82,7 @@ devicesRouter.get('/', async (req: AuthRequest, res) => {
         platform: device.platform,
         lastSeenAt: device.lastSeenAt,
         revokedAt: device.revokedAt,
+        capabilities: normalizeCapabilities(device.capabilities),
         oneTimePreKeysRemaining: remainingByDevice.get(device.id) ?? 0,
         createdAt: device.createdAt,
         current: device.id === currentDeviceId,
@@ -296,6 +298,51 @@ devicesRouter.post('/:id/prekeys', validate(UploadPreKeysSchema), async (req: Au
   });
 });
 
+// ─── PATCH /devices/:id/capabilities ────────────────────────────────────────
+// Lets a device advertise updated capabilities (e.g. gaining MLS support in
+// a later app version) without re-registering its identity key (#180-follow-
+// on "upgrade" path). Unrecognized protocol/ciphersuite strings are accepted
+// and stored as-is — they're simply ignored by selectProtocol() until this
+// server version knows about them, which is what keeps rollout staged rather
+// than a hard break for mismatched client/server versions.
+
+devicesRouter.patch(
+  '/:id/capabilities',
+  validate(DeviceCapabilitiesSchema),
+  async (req: AuthRequest, res) => {
+    const deviceId = req.params['id'] as string;
+    const callerId = req.auth!.userId;
+
+    const device = await db.query.devices.findFirst({
+      where: eq(devices.id, deviceId),
+    });
+
+    if (!device) {
+      res.status(404).json({ error: 'Device not found' });
+      return;
+    }
+
+    if (device.userId !== callerId) {
+      res.status(403).json({ error: 'Only the device owner may update capabilities' });
+      return;
+    }
+
+    if (device.revokedAt) {
+      res.status(403).json({ error: 'Device is revoked' });
+      return;
+    }
+
+    const capabilities = normalizeCapabilities(req.body);
+
+    await db
+      .update(devices)
+      .set({ capabilities, updatedAt: new Date() })
+      .where(eq(devices.id, deviceId));
+
+    res.status(200).json({ id: deviceId, capabilities });
+  },
+);
+
 // ─── POST /devices — register a new device for an existing user --------------
 
 devicesRouter.post('/', validate(RegisterDeviceSchema), async (req: AuthRequest, res) => {
@@ -317,12 +364,18 @@ devicesRouter.post('/', validate(RegisterDeviceSchema), async (req: AuthRequest,
     if (existing) {
       // Re-registering a previously-revoked identity key re-activates it
       // rather than creating a duplicate row for the same crypto identity.
+      // This also doubles as the "upgrade" path for capabilities (#180-
+      // follow-on): a client re-registering with a newer capability set
+      // gets it applied without needing a separate call.
       [row] = await db
         .update(devices)
         .set({
           deviceName: body.deviceName,
           platform: body.platform,
           registrationId: body.registrationId ?? null,
+          ...(body.capabilities !== undefined
+            ? { capabilities: normalizeCapabilities(body.capabilities) }
+            : {}),
           revokedAt: null,
           updatedAt: new Date(),
         })
@@ -337,6 +390,9 @@ devicesRouter.post('/', validate(RegisterDeviceSchema), async (req: AuthRequest,
           deviceName: body.deviceName,
           platform: body.platform,
           registrationId: body.registrationId ?? null,
+          ...(body.capabilities !== undefined
+            ? { capabilities: normalizeCapabilities(body.capabilities) }
+            : {}),
         })
         .returning({ id: devices.id, createdAt: devices.createdAt });
     }

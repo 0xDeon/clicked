@@ -16,6 +16,7 @@ import { invalidateConversationCaches } from '../lib/conversationCache.js';
 import { serializeMessage } from '../lib/messages.js';
 import { getSocketServer } from '../lib/socket.js';
 import { MAX_MESSAGES_LIMIT, DEFAULT_MESSAGES_LIMIT } from '../constants.js';
+import { normalizeCapabilities, selectProtocol } from '../lib/capabilities.js';
 
 export const conversationsRouter: IRouter = Router();
 
@@ -808,7 +809,16 @@ conversationsRouter.get('/:id/devices', async (req: AuthRequest, res) => {
       identityPublicKey: true,
       deviceName: true,
       platform: true,
+      capabilities: true,
     },
+  });
+
+  // Look up the caller's own device capabilities so each returned device can
+  // carry the protocol the sender should actually use with it (#180-follow-
+  // on) — sparing every client from re-implementing selectProtocol().
+  const callerDevice = await db.query.devices.findFirst({
+    where: eq(devices.id, req.auth!.deviceId),
+    columns: { capabilities: true },
   });
 
   res.json({
@@ -818,6 +828,8 @@ conversationsRouter.get('/:id/devices', async (req: AuthRequest, res) => {
       identityPublicKey: d.identityPublicKey,
       deviceName: d.deviceName,
       platform: d.platform,
+      capabilities: normalizeCapabilities(d.capabilities),
+      negotiatedProtocol: selectProtocol(callerDevice?.capabilities, d.capabilities).protocol,
     })),
   });
 });
