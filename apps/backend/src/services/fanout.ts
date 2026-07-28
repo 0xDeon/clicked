@@ -85,9 +85,7 @@ export async function fanoutMessage(
     if (envelopeRows.length > 0) {
       const envelopeInsertStart = process.hrtime.bigint();
       await tx.insert(messageEnvelopes).values(envelopeRows);
-      envelopeInsertDuration.observe(
-        Number(process.hrtime.bigint() - envelopeInsertStart) / 1e9,
-      );
+      envelopeInsertDuration.observe(Number(process.hrtime.bigint() - envelopeInsertStart) / 1e9);
     }
 
     return persisted;
