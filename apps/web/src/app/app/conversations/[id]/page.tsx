@@ -5,6 +5,7 @@ import { AlertTriangle, CheckCircle2, Fingerprint, RefreshCw, ShieldCheck, X } f
 import { useParams } from 'next/navigation';
 import { API_BASE_URL } from '@/lib/api';
 import { useSocket } from '@/hooks/useSocket';
+import { emitSocketEnvelope } from '@/lib/realtime';
 import { useAuth } from '@/components/auth/useAuth';
 import { Avatar } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -310,7 +311,7 @@ export default function ConversationPage() {
   useEffect(() => {
     if (!socket) return;
 
-    socket.emit('join_room', { conversationId: id });
+    emitSocketEnvelope(socket, 'join_room', { conversationId: id });
 
     function onNewMessage(message: Message) {
       if (message.conversationId === id) {

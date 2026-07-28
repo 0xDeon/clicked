@@ -122,6 +122,20 @@ function readyFile(
   };
 }
 
+// Handlers now run exclusively through the enveloped 'dispatch' path (#342)
+// — there's no more raw socket.on(type, ...) listener to grab directly.
+let envelopeSeq = 0;
+async function dispatchEnvelope(socket: EventEmitter, type: string, payload: unknown) {
+  envelopeSeq += 1;
+  EventEmitter.prototype.emit.call(socket, 'dispatch', {
+    eventId: `test-evt-${envelopeSeq}`,
+    type,
+    timestamp: Date.now(),
+    payload,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 beforeEach(() => {
@@ -166,10 +180,7 @@ describe('send_file_message socket event', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await handler({
+    await dispatchEnvelope(socket, 'send_file_message', {
       conversationId: CONVERSATION_ID,
       fileId: FILE_ID,
       content: ENVELOPE_CIPHERTEXT,
@@ -200,10 +211,7 @@ describe('send_file_message socket event', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await handler({
+    await dispatchEnvelope(socket, 'send_file_message', {
       conversationId: CONVERSATION_ID,
       fileId: FILE_ID,
       content: ENVELOPE_CIPHERTEXT,
@@ -234,10 +242,7 @@ describe('send_file_message socket event', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await handler({
+    await dispatchEnvelope(socket, 'send_file_message', {
       conversationId: CONVERSATION_ID,
       fileId: 'nonexistent-file',
       content: ENVELOPE_CIPHERTEXT,
@@ -268,10 +273,7 @@ describe('send_file_message socket event', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await handler({
+    await dispatchEnvelope(socket, 'send_file_message', {
       conversationId: CONVERSATION_ID,
       fileId: FILE_ID,
       content: ENVELOPE_CIPHERTEXT,
@@ -302,10 +304,7 @@ describe('send_file_message socket event', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await handler({
+    await dispatchEnvelope(socket, 'send_file_message', {
       conversationId: CONVERSATION_ID,
       fileId: FILE_ID,
       content: ENVELOPE_CIPHERTEXT,
@@ -336,10 +335,7 @@ describe('send_file_message socket event', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await handler({
+    await dispatchEnvelope(socket, 'send_file_message', {
       conversationId: CONVERSATION_ID,
       fileId: FILE_ID,
       content: ENVELOPE_CIPHERTEXT,
@@ -370,10 +366,7 @@ describe('send_file_message socket event', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await handler({
+    await dispatchEnvelope(socket, 'send_file_message', {
       conversationId: CONVERSATION_ID,
       fileId: FILE_ID,
       content: ENVELOPE_CIPHERTEXT,
@@ -403,10 +396,7 @@ describe('send_file_message socket event', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await handler({
+    await dispatchEnvelope(socket, 'send_file_message', {
       conversationId: CONVERSATION_ID,
       fileId: FILE_ID,
       content: '   ',
@@ -457,10 +447,7 @@ describe('send_file_message socket event', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await handler({
+    await dispatchEnvelope(socket, 'send_file_message', {
       conversationId: CONVERSATION_ID,
       fileId: FILE_ID,
       content: ENVELOPE_CIPHERTEXT,
@@ -504,10 +491,7 @@ describe('send_file_message socket event', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await handler({
+    await dispatchEnvelope(socket, 'send_file_message', {
       conversationId: CONVERSATION_ID,
       fileId: FILE_ID,
       content: ENVELOPE_CIPHERTEXT,
@@ -557,10 +541,7 @@ describe('send_file_message socket event', () => {
       const { registerMessagingHandlers } = await import('../socket/messaging.js');
       registerMessagingHandlers(io as never, socket as never);
 
-      const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
-        p: unknown,
-      ) => Promise<void>;
-      await handler({
+      await dispatchEnvelope(socket, 'send_file_message', {
         conversationId: CONVERSATION_ID,
         fileId: FILE_ID,
         content: ENVELOPE_CIPHERTEXT,

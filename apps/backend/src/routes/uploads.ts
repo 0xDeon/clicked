@@ -6,6 +6,7 @@ import { db } from '../db/index.js';
 import { files, conversationMembers } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { generatePresignedPut, generateStorageKey } from '../lib/storage.js';
+import { getObjectStore } from '../lib/objectStore.js';
 
 export const uploadsRouter: IRouter = Router();
 
@@ -116,6 +117,22 @@ uploadsRouter.post('/:fileId/confirm', async (req: AuthRequest, res) => {
 
   if (file.status === 'deleted') {
     res.status(409).json({ error: 'File has been deleted' });
+    return;
+  }
+
+  const head = await getObjectStore().headObject(file.storageKey);
+
+  if (!head.exists) {
+    res.status(422).json({ error: 'Object not found in storage', storageKey: file.storageKey });
+    return;
+  }
+
+  if (head.size !== undefined && head.size !== file.size) {
+    res.status(422).json({
+      error: 'Object size mismatch',
+      expectedSize: file.size,
+      actualSize: head.size,
+    });
     return;
   }
 

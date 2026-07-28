@@ -47,6 +47,10 @@ vi.mock('../services/deviceRevocation.js', () => ({
   isDeviceConnected: mockIsDeviceConnected,
 }));
 
+vi.mock('../lib/redis.js', () => ({
+  redis: null,
+}));
+
 process.env['VAPID_PUBLIC_KEY'] = 'test-public-key';
 process.env['VAPID_PRIVATE_KEY'] = 'test-private-key';
 

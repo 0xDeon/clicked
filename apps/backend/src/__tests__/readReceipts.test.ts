@@ -89,6 +89,20 @@ function makeIo() {
   return io;
 }
 
+// Handlers now run exclusively through the enveloped 'dispatch' path (#342)
+// — there's no more raw socket.on(type, ...) listener to grab directly.
+let envelopeSeq = 0;
+async function dispatchEnvelope(socket: EventEmitter, type: string, payload: unknown) {
+  envelopeSeq += 1;
+  EventEmitter.prototype.emit.call(socket, 'dispatch', {
+    eventId: `test-evt-${envelopeSeq}`,
+    type,
+    timestamp: Date.now(),
+    payload,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 describe('message_read socket event', () => {
@@ -118,10 +132,7 @@ describe('message_read socket event', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('message_read')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await handler({ conversationId, lastReadMessageId });
+    await dispatchEnvelope(socket, 'message_read', { conversationId, lastReadMessageId });
 
     expect(mockUpdate).toHaveBeenCalled();
     expect(setFn).toHaveBeenCalledWith({ lastReadMessageId });
@@ -137,10 +148,10 @@ describe('message_read socket event', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('message_read')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await handler({ conversationId: 'conv-x', lastReadMessageId: 'msg-1' });
+    await dispatchEnvelope(socket, 'message_read', {
+      conversationId: 'conv-x',
+      lastReadMessageId: 'msg-1',
+    });
 
     expect(socket.emit).toHaveBeenCalledWith(
       'error',
@@ -167,10 +178,10 @@ describe('message_read socket event', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('message_read')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await handler({ conversationId: 'conv-1', lastReadMessageId: 'wrong-msg' });
+    await dispatchEnvelope(socket, 'message_read', {
+      conversationId: 'conv-1',
+      lastReadMessageId: 'wrong-msg',
+    });
 
     expect(socket.emit).toHaveBeenCalledWith(
       'error',
@@ -201,10 +212,7 @@ describe('message_read socket event', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('message_read')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await handler({ conversationId: 'conv-2', lastReadMessageId });
+    await dispatchEnvelope(socket, 'message_read', { conversationId: 'conv-2', lastReadMessageId });
 
     expect(setFn).toHaveBeenCalledWith({ lastReadMessageId });
     expect(whereFn).toHaveBeenCalled();

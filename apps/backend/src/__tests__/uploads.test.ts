@@ -52,6 +52,12 @@ vi.mock('../lib/storage.js', () => ({
   generateStorageKey: vi.fn(() => 'uploads/conv-123/abc123def456'),
 }));
 
+const mockHeadObject = vi.fn();
+
+vi.mock('../lib/objectStore.js', () => ({
+  getObjectStore: () => ({ headObject: mockHeadObject }),
+}));
+
 vi.mock('../middleware/auth.js', () => ({
   requireAuth: (req: express.Request, _res: express.Response, next: express.NextFunction) => {
     (req as express.Request & { auth?: { userId: string } }).auth = { userId: 'user-abc' };
@@ -196,12 +202,15 @@ describe('POST /uploads/:fileId/confirm', () => {
     app = await buildApp();
   });
 
-  it('returns 200 and status ready when file is pending and owned by caller', async () => {
+  it('returns 200 and status ready when object exists with matching size', async () => {
     mockFileFindFirst.mockResolvedValueOnce({
       id: 'file-001',
       uploaderId: 'user-abc',
       status: 'pending',
+      storageKey: 'uploads/conv-123/abc123def456',
+      size: 1024,
     });
+    mockHeadObject.mockResolvedValueOnce({ exists: true, size: 1024 });
     mockUpdate.mockReturnValueOnce({
       set: vi.fn().mockReturnThis(),
       where: vi.fn().mockResolvedValueOnce(undefined),
@@ -210,6 +219,7 @@ describe('POST /uploads/:fileId/confirm', () => {
     const res = await request(app).post('/uploads/file-001/confirm');
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ fileId: 'file-001', status: 'ready' });
+    expect(mockHeadObject).toHaveBeenCalledWith('uploads/conv-123/abc123def456');
   });
 
   it('returns 404 when file does not exist', async () => {
@@ -246,6 +256,53 @@ describe('POST /uploads/:fileId/confirm', () => {
     });
     const res = await request(app).post('/uploads/file-001/confirm');
     expect(res.status).toBe(409);
+  });
+
+  it('returns 422 with an "object not found" error when the object is missing from storage', async () => {
+    mockFileFindFirst.mockResolvedValueOnce({
+      id: 'file-001',
+      uploaderId: 'user-abc',
+      status: 'pending',
+      storageKey: 'uploads/conv-123/missing',
+      size: 1024,
+    });
+    mockHeadObject.mockResolvedValueOnce({ exists: false });
+
+    const res = await request(app).post('/uploads/file-001/confirm');
+    expect(res.status).toBe(422);
+    expect(res.body.error).toMatch(/not found/i);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('returns 422 with a "size mismatch" error when the object size does not match the declared size', async () => {
+    mockFileFindFirst.mockResolvedValueOnce({
+      id: 'file-001',
+      uploaderId: 'user-abc',
+      status: 'pending',
+      storageKey: 'uploads/conv-123/mismatch',
+      size: 1024,
+    });
+    mockHeadObject.mockResolvedValueOnce({ exists: true, size: 2048 });
+
+    const res = await request(app).post('/uploads/file-001/confirm');
+    expect(res.status).toBe(422);
+    expect(res.body.error).toMatch(/size mismatch/i);
+    expect(res.body).toMatchObject({ expectedSize: 1024, actualSize: 2048 });
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does not flip status to ready when verification fails', async () => {
+    mockFileFindFirst.mockResolvedValueOnce({
+      id: 'file-001',
+      uploaderId: 'user-abc',
+      status: 'pending',
+      storageKey: 'uploads/conv-123/missing',
+      size: 1024,
+    });
+    mockHeadObject.mockResolvedValueOnce({ exists: false });
+
+    await request(app).post('/uploads/file-001/confirm');
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 });
 

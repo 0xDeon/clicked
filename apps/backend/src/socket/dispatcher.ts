@@ -21,23 +21,12 @@ export class EventDispatcher {
     private redis: Redis | null,
   ) {}
 
-  // Register a handler for an event type.
-  // Also attaches a backward-compatible socket.on listener so legacy clients
-  // that emit raw events (without the standard envelope) continue to work.
+  // Register a handler for an event type. The handler only ever runs through
+  // the enveloped `dispatch` path (see listen()) — there is no raw
+  // socket.on(type, ...) fallback, so every event gets envelope validation
+  // and eventId idempotency (#342).
   register(type: string, handler: Handler): void {
     this.handlers.set(type, handler);
-
-    this.socket.on(type, async (rawPayload: unknown) => {
-      const payload =
-        rawPayload && typeof rawPayload === 'object' && !Array.isArray(rawPayload)
-          ? (rawPayload as Record<string, unknown>)
-          : {};
-      try {
-        await handler(payload);
-      } catch (err) {
-        console.error(`[dispatcher] handler error for "${type}":`, err);
-      }
-    });
   }
 
   // Attach the standard envelope listener. Call after all register() calls.

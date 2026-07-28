@@ -11,6 +11,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { pushSubscriptions } from '../db/schema.js';
 import { isDeviceConnected } from './deviceRevocation.js';
+import { redis } from '../lib/redis.js';
 
 const FILE_CONTENT_TYPES = new Set(['file', 'image', 'video', 'audio']);
 
@@ -54,7 +55,7 @@ export async function dispatchOfflinePush(
   if (!vapidReady || recipientDeviceIds.length === 0) return;
 
   for (const deviceId of recipientDeviceIds) {
-    if (!isDeviceConnected(deviceId)) {
+    if (!(await isDeviceConnected(redis, deviceId))) {
       queueCoalescedPush(deviceId, conversationId, messageId);
     }
   }

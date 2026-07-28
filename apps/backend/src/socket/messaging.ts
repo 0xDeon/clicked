@@ -16,11 +16,14 @@ import { serializeMessage } from '../lib/messages.js';
 import { redis } from '../lib/redis.js';
 import { sendPushForMessage } from '../services/push.js';
 import { validateMessagePayload } from '../lib/validateMessagePayload.js';
+import { checkEnvelopeSizes } from '../services/rateLimit.js';
 import { dispatchOfflinePush, FILE_CONTENT_TYPES } from '../services/pushNotification.js';
 import { deliverMessage } from '../services/deliveryPipeline.js';
 import { publishEphemeral, readMissedEvents } from '../services/resumeStream.js';
 import { handleDeviceDeliveryReceipt } from '../services/deliveryAggregation.js';
 import { conversationRoom } from '../services/roomManager.js';
+import { handleHeartbeat } from '../services/heartbeat.js';
+import { cleanupStaleSockets } from '../services/presence.js';
 import { EventDispatcher } from './dispatcher.js';
 
 const PAGE_SIZE = 30;
@@ -63,6 +66,15 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       socket.to(conversationRoom(cid)).emit('typing_stop', rp);
     }
     typingTimers.clear();
+  });
+
+  // ── heartbeat ──────────────────────────────────────────────────────────────
+  dispatcher.register('heartbeat', async () => {
+    const deviceId = socket.auth!.deviceId;
+    await handleHeartbeat(socket, userId, deviceId, redis);
+    if (redis) {
+      await cleanupStaleSockets(io, redis, userId, socket.id);
+    }
   });
 
   // ── join_room ──────────────────────────────────────────────────────────────
@@ -141,6 +153,16 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         event: 'send_message',
         code: validation.code,
         message: validation.message,
+      });
+      return;
+    }
+
+    const envelopeSizeCheck = checkEnvelopeSizes(envelopes);
+    if (!envelopeSizeCheck.valid) {
+      socket.emit('error', {
+        event: 'send_message',
+        code: 'envelope_too_large',
+        message: `Envelope for device ${envelopeSizeCheck.oversizedDeviceId} exceeds size limit`,
       });
       return;
     }
@@ -287,6 +309,16 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       return;
     }
 
+    const envelopeSizeCheck = checkEnvelopeSizes(envelopes);
+    if (!envelopeSizeCheck.valid) {
+      socket.emit('error', {
+        event: 'edit_message',
+        code: 'envelope_too_large',
+        message: `Envelope for device ${envelopeSizeCheck.oversizedDeviceId} exceeds size limit`,
+      });
+      return;
+    }
+
     const original = await db.query.messages.findFirst({
       where: eq(messages.id, originalMessageId),
     });
@@ -396,15 +428,13 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
   });
 
   // ── send_file_message ──────────────────────────────────────────────────────
-  socket.on(
-    'send_file_message',
-    async (payload: {
+  dispatcher.register('send_file_message', async (payload) => {
+    const { conversationId, fileId, content, contentType } = payload as {
       conversationId: string;
       fileId: string;
       content: string;
       contentType: 'file' | 'image' | 'video' | 'audio';
-    }) => {
-      const { conversationId, fileId, content, contentType } = payload;
+    };
 
       if (!content?.trim()) {
         socket.emit('error', {
@@ -511,8 +541,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
           senderId: userId,
         });
       }
-    },
-  );
+  });
 
   // ── message_history ────────────────────────────────────────────────────────
   dispatcher.register('message_history', async (payload) => {

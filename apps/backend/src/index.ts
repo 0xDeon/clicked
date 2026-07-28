@@ -15,7 +15,6 @@ import { setSocketServer } from './lib/socket.js';
 import {
   cleanupStaleSockets,
   reconcileBoot,
-  refreshPresenceSocket,
   registerPresenceSocket,
   setOffline,
   setOnline,
@@ -23,12 +22,7 @@ import {
   deriveDevicePresence,
 } from './services/presence.js';
 import { startHeartbeatTimer, clearHeartbeatTimer } from './services/heartbeat.js';
-import {
-  isDeviceRevoked,
-  registerDeviceSocket,
-  startDeviceRevocationListener,
-  unregisterDeviceSocket,
-} from './services/deviceRevocation.js';
+import { isDeviceRevoked, startDeviceRevocationListener } from './services/deviceRevocation.js';
 import {
   checkPayloadSize,
   checkRateLimit,
@@ -120,9 +114,6 @@ io.on('connection', async (socket: AuthSocket) => {
   socket.data['userId'] = userId;
   socket.data['deviceId'] = deviceId;
 
-  // Register socket for device-revocation tracking (cross-instance via Redis pub/sub).
-  registerDeviceSocket(deviceId, socket.id);
-
   // Start the server-side heartbeat watchdog (90 s timeout).
   startHeartbeatTimer(socket, userId, deviceId, appRedis, io);
 
@@ -137,13 +128,7 @@ io.on('connection', async (socket: AuthSocket) => {
   }
 
   // Per-socket middleware: intercept every incoming event before handlers.
-  const EXCLUDED_EVENTS = new Set(['heartbeat']);
   socket.use(async ([event, ...args], next) => {
-    // Skip internal heartbeat pings.
-    if (EXCLUDED_EVENTS.has(event)) {
-      return next();
-    }
-
     // Reject events from a device that was revoked mid-session.
     if (isDeviceRevoked(deviceId)) {
       socket.emit('error', { event: 'device_revoked', message: 'Device has been revoked' });
@@ -233,13 +218,6 @@ io.on('connection', async (socket: AuthSocket) => {
     }
   }
 
-  socket.on('heartbeat', async () => {
-    if (appRedis) {
-      await refreshPresenceSocket(appRedis, userId, deviceId, socket.id);
-      await cleanupStaleSockets(io, appRedis, userId, socket.id);
-    }
-  });
-
   registerMessagingHandlers(io, socket);
 
   // Subscribe to the device delivery channel so cross-node per-device
@@ -262,7 +240,6 @@ io.on('connection', async (socket: AuthSocket) => {
     console.log('User disconnected:', userId, reason);
 
     clearHeartbeatTimer(socket.id);
-    unregisterDeviceSocket(socket.id);
 
     // Unsubscribe from the device delivery channel on disconnect.
     if (appRedis) {
