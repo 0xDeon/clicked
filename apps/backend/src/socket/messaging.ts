@@ -440,8 +440,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       if (!Array.isArray(envelopes) || envelopes.length === 0) {
         socket.emit('error', {
           event: 'send_file_message',
-          message:
-            'envelopes are required for file messages (they carry the encrypted file key)',
+          message: 'envelopes are required for file messages (they carry the encrypted file key)',
         });
         return;
       }

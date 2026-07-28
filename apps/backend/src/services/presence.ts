@@ -57,7 +57,10 @@ const pendingOfflineBroadcasts = new Map<string, ReturnType<typeof setTimeout>>(
  * live devices/sockets — this schedules the *broadcast*, not the
  * underlying presence-state removal, which should already be immediate.
  */
-export function scheduleOfflineBroadcast(userId: string, broadcast: () => void | Promise<void>): void {
+export function scheduleOfflineBroadcast(
+  userId: string,
+  broadcast: () => void | Promise<void>,
+): void {
   const existing = pendingOfflineBroadcasts.get(userId);
   if (existing) clearTimeout(existing);
 
