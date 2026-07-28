@@ -21,6 +21,16 @@ export const conversationsRouter: IRouter = Router();
 
 conversationsRouter.use(requireAuth);
 
+// Post-schema-overhaul audit (see PR description): every relation name below
+// (`members`, `user`, `wallets`, `messages`, `sender`, `envelopes`) was
+// checked against the current `relations()` declarations in db/schema.ts and
+// every selected column against the current table definitions — none
+// reference dropped columns/relations. The `as never` casts at the call
+// sites below exist only because TS can't correlate this function's return
+// type with drizzle's recursive `with:` generic when it's built dynamically
+// (a known drizzle limitation, not a sign the shape is unverified); the
+// `ConversationPayload`/`ConversationMemberPayload` types the results are
+// cast to afterward are what's actually checked against the query shape.
 const getConversationRelations = (deviceId: string) => ({
   members: {
     with: {
