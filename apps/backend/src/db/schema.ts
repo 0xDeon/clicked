@@ -288,6 +288,32 @@ export const mlsKeyPackages = pgTable(
   ],
 );
 
+// ─── Archived plaintext (one-time ciphertext-only migration) ────────────────
+//
+// Holds plaintext copied out of `messages.content` before that column was
+// dropped (drizzle/0003_ciphertext_only_messages.sql). Deliberately not
+// wired into any route — see docs/message-encryption-migration.md for the
+// archive-then-purge policy this implements. `originalMessageId` is not a
+// foreign key on purpose: this table must outlive the `messages` row it was
+// copied from (e.g. message hard-deletion must not cascade into it).
+
+export const messageContentArchive = pgTable(
+  'message_content_archive',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    originalMessageId: uuid('original_message_id').notNull(),
+    conversationId: uuid('conversation_id'),
+    senderId: uuid('sender_id'),
+    content: text('content').notNull(),
+    originalCreatedAt: timestamp('original_created_at'),
+    archivedAt: timestamp('archived_at').notNull().defaultNow(),
+  },
+  (table) => [index('message_content_archive_original_message_idx').on(table.originalMessageId)],
+);
+
+export type MessageContentArchive = typeof messageContentArchive.$inferSelect;
+export type NewMessageContentArchive = typeof messageContentArchive.$inferInsert;
+
 // ─── Token transfers (#46) ────────────────────────────────────────────────────
 //
 // One row per Soroban `transfer` event the listener (services/stellarListener.ts)
