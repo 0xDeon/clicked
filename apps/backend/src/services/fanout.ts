@@ -13,6 +13,7 @@ import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { conversationMembers, messages, messageEnvelopes, devices } from '../db/schema.js';
 import type { Message, NewMessage } from '../db/schema.js';
+import { messagesPersistedTotal, envelopeInsertDuration } from '../lib/metrics.js';
 
 export interface FanoutSuccess {
   ok: true;
@@ -82,11 +83,17 @@ export async function fanoutMessage(
     }));
 
     if (envelopeRows.length > 0) {
+      const envelopeInsertStart = process.hrtime.bigint();
       await tx.insert(messageEnvelopes).values(envelopeRows);
+      envelopeInsertDuration.observe(
+        Number(process.hrtime.bigint() - envelopeInsertStart) / 1e9,
+      );
     }
 
     return persisted;
   });
+
+  messagesPersistedTotal.inc({ contentType: newMessage.contentType ?? 'text' });
 
   return { ok: true, message };
 }

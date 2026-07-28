@@ -45,6 +45,7 @@ import {
 import { startFileCleanupJob } from './services/fileCleanup.js';
 import { loadEnv } from './config.js';
 import { getObjectStore } from './lib/objectStore.js';
+import { presenceChurnTotal, connectedSockets } from './lib/metrics.js';
 import {
   conversationRoom,
   joinUserRoom,
@@ -119,6 +120,7 @@ io.on('connection', async (socket: AuthSocket) => {
 
   socket.data['userId'] = userId;
   socket.data['deviceId'] = deviceId;
+  connectedSockets.inc();
 
   // Register socket for device-revocation tracking (cross-instance via Redis pub/sub).
   registerDeviceSocket(deviceId, socket.id);
@@ -207,6 +209,9 @@ io.on('connection', async (socket: AuthSocket) => {
       columns: { presenceVisible: true },
     });
     const presenceVisible = connectUser?.presenceVisible ?? true;
+    if (becameOnline) {
+      presenceChurnTotal.inc({ transition: 'online' });
+    }
     if (becameOnline && presenceVisible) {
       for (const m of memberships) {
         io.to(conversationRoom(m.conversationId)).emit('user_online', { userId });
@@ -260,6 +265,7 @@ io.on('connection', async (socket: AuthSocket) => {
 
   socket.on('disconnect', async (reason: string) => {
     console.log('User disconnected:', userId, reason);
+    connectedSockets.dec();
 
     clearHeartbeatTimer(socket.id);
     unregisterDeviceSocket(socket.id);
@@ -304,6 +310,10 @@ io.on('connection', async (socket: AuthSocket) => {
       const fullyOffline = deviceHasNoSockets
         ? await setOffline(appRedis, userId, deviceId)
         : false;
+
+      if (fullyOffline) {
+        presenceChurnTotal.inc({ transition: 'offline' });
+      }
 
       if (fullyOffline) {
         const user = await db.query.users.findFirst({
