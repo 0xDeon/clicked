@@ -8,6 +8,7 @@ import { useSocket } from '@/hooks/useSocket';
 import { useAuth } from '@/components/auth/useAuth';
 import { Avatar } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';
+import TransferCard from '@/components/chat/TransferCard';
 
 type Wallet = {
   address?: string;
@@ -136,6 +137,32 @@ function messageBody(message: Message) {
   if (message.contentType === 'system')
     return message.content ?? message.ciphertext ?? 'System event';
   return message.content ?? message.ciphertext ?? 'Encrypted message';
+}
+
+type TransferPayload = {
+  amount: number;
+  token?: string;
+  txHash: string;
+};
+
+function parseTransferPayload(message: Message): TransferPayload | null {
+  if (message.unavailable) return null;
+  const raw = message.content ?? message.ciphertext;
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<TransferPayload> & { type?: string };
+    if (parsed?.type !== 'transfer' || typeof parsed.txHash !== 'string') return null;
+    const amount = typeof parsed.amount === 'number' ? parsed.amount : Number(parsed.amount);
+    if (!Number.isFinite(amount)) return null;
+    return {
+      amount,
+      token: typeof parsed.token === 'string' ? parsed.token : undefined,
+      txHash: parsed.txHash,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function isRelevantKeyChangeEvent(payload: unknown, userIds: Set<string>, conversationId: string) {
@@ -452,6 +479,7 @@ export default function ConversationPage() {
               {messages.map((message) => {
                 const isSelf = message.senderId === currentUser?.id;
                 const senderName = message.sender?.username ?? 'Unknown';
+                const transfer = parseTransferPayload(message);
 
                 return (
                   <div
@@ -467,15 +495,23 @@ export default function ConversationPage() {
                       {!isSelf ? (
                         <p className="mb-1 px-1 text-xs text-foreground/45">{senderName}</p>
                       ) : null}
-                      <div
-                        className={`rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-                          isSelf
-                            ? 'rounded-br-sm bg-accent text-white'
-                            : 'rounded-bl-sm border border-border bg-background/60 text-foreground/90'
-                        }`}
-                      >
-                        {messageBody(message)}
-                      </div>
+                      {transfer ? (
+                        <TransferCard
+                          amount={transfer.amount}
+                          token={transfer.token}
+                          txHash={transfer.txHash}
+                        />
+                      ) : (
+                        <div
+                          className={`rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+                            isSelf
+                              ? 'rounded-br-sm bg-accent text-white'
+                              : 'rounded-bl-sm border border-border bg-background/60 text-foreground/90'
+                          }`}
+                        >
+                          {messageBody(message)}
+                        </div>
+                      )}
                       <p className="mt-1 px-1 text-[10px] text-foreground/35">
                         {formatTime(message.createdAt)}
                       </p>
