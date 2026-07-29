@@ -120,7 +120,7 @@ describe('ECDH Session Establishment (Fixed)', () => {
         'raw',
         sharedBits,
         { name: 'AES-GCM' },
-        false,
+        true,
         ['encrypt', 'decrypt'],
       );
     };
@@ -150,7 +150,7 @@ describe('ECDH Session Establishment (Fixed)', () => {
         namedCurve: 'P-256',
       },
       false,
-      ['deriveBits'], // Public key should not have deriveBits usage
+      [],
     );
 
     const bobPublicKey = await window.crypto.subtle.importKey(
@@ -165,13 +165,13 @@ describe('ECDH Session Establishment (Fixed)', () => {
     );
 
     // This should throw because deriveBits requires a private key as base key
-    await expect(async () => {
-      await window.crypto.subtle.deriveBits(
+    await expect(
+      window.crypto.subtle.deriveBits(
         { name: 'ECDH', public: bobPublicKey },
         alicePublicKey, // BUG: This is a public key, not private
         256,
-      );
-    }).rejects.toThrow();
+      ),
+    ).rejects.toThrow();
   });
 
   it('session keys remain consistent across encryption/decryption', async () => {

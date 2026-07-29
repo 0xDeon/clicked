@@ -36,6 +36,10 @@ const RequestSlotSchema = z.object({
   isThumbnail: z.boolean().optional().default(false),
 });
 
+const ConfirmUploadSchema = z.object({
+  sha256: z.string().min(1),
+});
+
 // POST /uploads — request a presigned upload slot
 uploadsRouter.post('/', async (req: AuthRequest, res) => {
   const userId = req.auth!.userId;
@@ -123,15 +127,24 @@ uploadsRouter.post('/:fileId/confirm', async (req: AuthRequest, res) => {
     return;
   }
 
-  // SECURITY FIX: Verify SHA-256 integrity before marking ready
+  const parsed = ConfirmUploadSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(422).json({ error: 'sha256 is required' });
+    return;
+  }
+
+  if (parsed.data.sha256 !== file.sha256) {
+    res.status(422).json({ error: 'sha256 mismatch' });
+    return;
+  }
+
   const integrityCheck = await verifyFileIntegrity(file.storageKey, file.sha256);
 
   if (!integrityCheck.valid) {
-    // Mark file as corrupted/failed — never becomes ready
     await db
       .update(files)
       .set({
-        status: 'deleted', // Mark as deleted to prevent usage
+        status: 'deleted',
         deletedAt: new Date(),
       })
       .where(eq(files.id, fileId));
@@ -147,7 +160,6 @@ uploadsRouter.post('/:fileId/confirm', async (req: AuthRequest, res) => {
     return;
   }
 
-  // Integrity verified — mark as ready
   await db.update(files).set({ status: 'ready' }).where(eq(files.id, fileId));
 
   res.status(200).json({ fileId, status: 'ready' });

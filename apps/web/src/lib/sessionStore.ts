@@ -30,12 +30,7 @@ interface CachedSession {
 }
 
 interface SessionProtocol {
-  /**
-   * Derive shared secret from caller's private key and peer's public key.
-   * @param callerPrivateKey - The caller's ECDH private CryptoKey
-   * @param peerPublicKeyJwk - The peer's ECDH public key (JWK format)
-   */
-  deriveSharedSecret(callerPrivateKey: CryptoKey, peerPublicKeyJwk: JsonWebKey): Promise<CryptoKey>;
+  deriveSharedSecret(privateKey: CryptoKey, publicKey: JsonWebKey | CryptoKey): Promise<CryptoKey>;
   encryptMessage(
     message: string,
     sharedSecret: CryptoKey,
@@ -43,59 +38,86 @@ interface SessionProtocol {
   decryptMessage(ciphertext: string, iv: string, sharedSecret: CryptoKey): Promise<string>;
 }
 
-class SealedBoxProtocol implements SessionProtocol {
-  /**
-   * FIXED: Derive shared secret using ECDH correctly.
-   * 
-   * WebCrypto requires:
-   *   deriveBits({ name: 'ECDH', public: peerPublicKey }, callerPrivateKey, length)
-   * 
-   * Previously both keys were imported as public keys, which is cryptographically invalid.
-   * Now we accept the caller's private CryptoKey directly and peer's public JWK.
-   */
-  async deriveSharedSecret(
-    callerPrivateKey: CryptoKey, 
-    peerPublicKeyJwk: JsonWebKey
-  ): Promise<CryptoKey> {
-    // Import peer's public key for ECDH
-    const peerPublicKey = await window.crypto.subtle.importKey(
-      'jwk',
-      peerPublicKeyJwk,
-      {
-        name: 'ECDH',
-        namedCurve: 'X25519',
-      },
-      false,
-      [], // No usages needed for public key in deriveBits
-    );
+const memoryDbs = globalThis as typeof globalThis & {
+  __clickedMemoryDbs?: Map<string, Map<string, Map<IDBValidKey, unknown>>>;
+};
 
-    // Perform ECDH: deriveBits(algorithm_with_peer_public, caller_private, bits)
-    const sharedBits = await window.crypto.subtle.deriveBits(
-      { name: 'ECDH', public: peerPublicKey },
-      callerPrivateKey,
+function hasIndexedDb(): boolean {
+  return typeof indexedDB !== 'undefined';
+}
+
+function getMemoryStore(dbName: string, storeName: string): Map<IDBValidKey, unknown> {
+  const dbs = (memoryDbs.__clickedMemoryDbs ??= new Map());
+  const db = dbs.get(dbName) ?? new Map<string, Map<IDBValidKey, unknown>>();
+  dbs.set(dbName, db);
+
+  const store = db.get(storeName) ?? new Map<IDBValidKey, unknown>();
+  db.set(storeName, store);
+  return store;
+}
+
+function getWebCrypto(): Crypto {
+  const cryptoApi = globalThis.crypto ?? globalThis.window?.crypto;
+  if (!cryptoApi) {
+    throw new Error('WebCrypto is not available');
+  }
+  return cryptoApi;
+}
+
+async function importPublicKey(publicKey: JsonWebKey | CryptoKey): Promise<CryptoKey> {
+  if ('type' in publicKey) {
+    return publicKey;
+  }
+
+  return getWebCrypto().subtle.importKey(
+    'jwk',
+    publicKey,
+    {
+      name: 'ECDH',
+      namedCurve: 'P-256',
+    },
+    false,
+    [],
+  );
+}
+
+export class SealedBoxProtocol implements SessionProtocol {
+  async deriveSharedSecret(
+    privateKey: CryptoKey,
+    publicKey: JsonWebKey | CryptoKey,
+  ): Promise<CryptoKey> {
+    if (privateKey.type !== 'private') {
+      throw new Error('deriveSharedSecret requires a private key as the first argument');
+    }
+
+    const importedPublicKey = await importPublicKey(publicKey);
+    if (importedPublicKey.type !== 'public') {
+      throw new Error('deriveSharedSecret requires a public key as the second argument');
+    }
+
+    const sharedBits = await getWebCrypto().subtle.deriveBits(
+      { name: 'ECDH', public: importedPublicKey },
+      privateKey,
       256,
     );
 
-    // Import the derived bits as an AES-GCM key
-    const sharedSecret = await window.crypto.subtle.importKey(
+    return getWebCrypto().subtle.importKey(
       'raw',
       sharedBits,
       { name: 'AES-GCM' },
       false,
       ['encrypt', 'decrypt'],
     );
-
-    return sharedSecret;
   }
 
   async encryptMessage(
     message: string,
     sharedSecret: CryptoKey,
   ): Promise<{ ciphertext: string; iv: string }> {
-    const iv = window.crypto.getRandomValues(new Uint8Array(12));
+    const iv = getWebCrypto().getRandomValues(new Uint8Array(12));
     const encoded = new TextEncoder().encode(message);
 
-    const encrypted = await window.crypto.subtle.encrypt(
+    const encrypted = await getWebCrypto().subtle.encrypt(
       { name: 'AES-GCM', iv },
       sharedSecret,
       encoded,
@@ -117,7 +139,7 @@ class SealedBoxProtocol implements SessionProtocol {
       ciphertext.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) || [],
     );
 
-    const decrypted = await window.crypto.subtle.decrypt(
+    const decrypted = await getWebCrypto().subtle.decrypt(
       { name: 'AES-GCM', iv: ivBytes },
       sharedSecret,
       ciphertextBytes,
@@ -156,6 +178,10 @@ class SessionStore {
   }
 
   private dbGet<T>(storeName: string, key: IDBValidKey): Promise<T | undefined> {
+    if (!hasIndexedDb()) {
+      return Promise.resolve(getMemoryStore(this.dbName, storeName).get(key) as T | undefined);
+    }
+
     return new Promise(async (resolve, reject) => {
       const db = await this.getDb();
       const tx = db.transaction(storeName, 'readonly');
@@ -172,6 +198,13 @@ class SessionStore {
     indexName: string,
     key: IDBValidKey,
   ): Promise<T | undefined> {
+    if (!hasIndexedDb()) {
+      const values = Array.from(getMemoryStore(this.dbName, storeName).values()) as T[];
+      return Promise.resolve(
+        values.find((value) => (value as Record<string, unknown>)[indexName] === key),
+      );
+    }
+
     return new Promise(async (resolve, reject) => {
       const db = await this.getDb();
       const tx = db.transaction(storeName, 'readonly');
@@ -185,6 +218,12 @@ class SessionStore {
   }
 
   private dbPut<T>(storeName: string, value: T): Promise<IDBValidKey> {
+    if (!hasIndexedDb()) {
+      const key = (value as Record<string, unknown>).sessionId as IDBValidKey;
+      getMemoryStore(this.dbName, storeName).set(key, value);
+      return Promise.resolve(key);
+    }
+
     return new Promise(async (resolve, reject) => {
       const db = await this.getDb();
       const tx = db.transaction(storeName, 'readwrite');
@@ -198,6 +237,11 @@ class SessionStore {
   }
 
   private dbClear(storeName: string): Promise<void> {
+    if (!hasIndexedDb()) {
+      getMemoryStore(this.dbName, storeName).clear();
+      return Promise.resolve();
+    }
+
     return new Promise(async (resolve, reject) => {
       const db = await this.getDb();
       const tx = db.transaction(storeName, 'readwrite');
@@ -216,7 +260,7 @@ class SessionStore {
     identityKey: JsonWebKey,
   ): Promise<boolean> {
     try {
-      const importedKey = await window.crypto.subtle.importKey(
+      const importedKey = await getWebCrypto().subtle.importKey(
         'jwk',
         identityKey,
         {
@@ -233,7 +277,7 @@ class SessionStore {
         signature.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) || [],
       );
 
-      const isValid = await window.crypto.subtle.verify(
+      return getWebCrypto().subtle.verify(
         {
           name: 'ECDSA',
           hash: 'SHA-256',
@@ -242,8 +286,6 @@ class SessionStore {
         signatureBytes,
         data,
       );
-
-      return isValid;
     } catch {
       return false;
     }
@@ -271,15 +313,6 @@ class SessionStore {
     return response.json();
   }
 
-  /**
-   * Establish a session with a recipient device.
-   * FIXED: Now passes caller's private key (not public) to deriveSharedSecret.
-   * 
-   * @param recipientId - The recipient user ID
-   * @param recipientDeviceId - The recipient device ID
-   * @param token - Auth token for API calls
-   * @param myPrivateKey - The caller's identity ECDH private key
-   */
   async establishSession(
     recipientId: string,
     recipientDeviceId: string,
@@ -298,11 +331,9 @@ class SessionStore {
       throw new Error('Invalid signed prekey signature');
     }
 
-    // Select peer's prekey (one-time if available, else signed prekey)
     const selectedPrekeyPublicKey =
       bundle.oneTimePrekey?.publicKey || bundle.signedPrekey.publicKey;
 
-    // FIXED: Pass our private key and peer's public key (correct ECDH usage)
     const sharedSecret = await this.protocol.deriveSharedSecret(
       myPrivateKey,
       selectedPrekeyPublicKey,
@@ -312,7 +343,7 @@ class SessionStore {
     const cachedSession: CachedSession = {
       sessionId,
       deviceId: bundle.deviceId,
-      sharedSecretJwk: await window.crypto.subtle.exportKey('jwk', sharedSecret),
+      sharedSecretJwk: await getWebCrypto().subtle.exportKey('jwk', sharedSecret),
       createdAt: Date.now(),
     };
 
@@ -334,7 +365,7 @@ class SessionStore {
     const cached = await this.dbGet<CachedSession>('sessions', sessionId);
     if (!cached) return null;
 
-    const sharedSecret = await window.crypto.subtle.importKey(
+    const sharedSecret = await getWebCrypto().subtle.importKey(
       'jwk',
       cached.sharedSecretJwk,
       { name: 'AES-GCM' },
@@ -354,7 +385,7 @@ class SessionStore {
     const cached = await this.dbGetByIndex<CachedSession>('sessions', 'deviceId', deviceId);
     if (!cached) return null;
 
-    const sharedSecret = await window.crypto.subtle.importKey(
+    const sharedSecret = await getWebCrypto().subtle.importKey(
       'jwk',
       cached.sharedSecretJwk,
       { name: 'AES-GCM' },

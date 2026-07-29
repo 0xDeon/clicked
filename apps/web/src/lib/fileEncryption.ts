@@ -207,8 +207,6 @@ export interface SendFileResult {
 export async function sendEncryptedFile(params: SendFileParams): Promise<SendFileResult> {
   const {
     file,
-    conversationId: _conversationId,
-    messageId: _messageId,
     devices,
     thumbnail,
     authToken,
