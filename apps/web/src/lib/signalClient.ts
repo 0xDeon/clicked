@@ -26,6 +26,7 @@
  */
 
 import type { DeviceRecord, MessageEnvelope } from './crypto.js';
+import { onSessionReset } from './identityTrust.js';
 
 // ─── Placeholder store types ──────────────────────────────────────────────────
 // Production: implement SignalProtocolStore backed by IndexedDB.
@@ -34,6 +35,26 @@ import type { DeviceRecord, MessageEnvelope } from './crypto.js';
 export interface SignalProtocolAddress {
   deviceId: string;
   identityPublicKey: string;
+}
+
+// ─── Session bookkeeping (session reset / re-handshake on key change) ────────
+//
+// Placeholder for the real per-device SessionRecord libsignal-client would
+// keep (Double-Ratchet root/chain keys). Phase-2 activation replaces this
+// map's value type with the library's actual session state; the reset
+// behaviour below stays the same either way. Registered with
+// identityTrust.ts so a detected identity-key change tears down the ratchet
+// session for the affected device(s) — the next encryptToDevice() call must
+// then run X3DH again from scratch instead of resuming stale ratchet state.
+const sessionsByDeviceId = new Map<string, unknown>();
+
+onSessionReset((deviceIds) => {
+  for (const deviceId of deviceIds) sessionsByDeviceId.delete(deviceId);
+});
+
+/** True once a Double-Ratchet session has been established for this device. */
+export function hasSession(deviceId: string): boolean {
+  return sessionsByDeviceId.has(deviceId);
 }
 
 export interface EncryptedMessage {
