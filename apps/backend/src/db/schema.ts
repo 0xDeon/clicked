@@ -7,6 +7,7 @@ import {
   pgEnum,
   index,
   integer,
+  jsonb,
   uniqueIndex,
   check,
   type AnyPgColumn,
@@ -346,6 +347,73 @@ export const pushSubscriptions = pgTable('push_subscriptions', {
 
 export type PushSubscription = typeof pushSubscriptions.$inferSelect;
 export type NewPushSubscription = typeof pushSubscriptions.$inferInsert;
+
+// ─── Audit log (#376) ─────────────────────────────────────────────────────────
+//
+// Append-only record of security-relevant events, for incident response.
+// Nothing here may contain message content: an audit trail that leaks
+// plaintext would undo the end-to-end encryption it exists to protect. Rows
+// carry identifiers, counts and outcomes only — `services/auditLog.ts`
+// strips anything content-shaped before it reaches the database.
+//
+// Append-only is enforced in the database itself (see the migration's
+// `audit_logs_no_mutation` trigger), not just by convention, because the
+// value of the log to an incident responder depends on it not being editable
+// by the same application account an attacker would already have reached.
+//
+// `actorUserId` is who did it; `subjectUserId` is whose account it happened
+// to. They differ for exactly the events that matter most — someone else's
+// device fetching your key bundle, a failed sign-in against your wallet — and
+// the account-scoped query indexes on the subject so a user's own history
+// includes what was done *to* them, not just by them.
+
+export const auditActionEnum = pgEnum('audit_action', [
+  'device_linked',
+  'device_revoked',
+  'logout_everywhere',
+  'key_bundle_drained',
+  'auth_failed',
+  'file_access_denied',
+  'group_member_added',
+  'group_member_removed',
+]);
+
+export type AuditAction = (typeof auditActionEnum.enumValues)[number];
+
+export const auditLogs = pgTable(
+  'audit_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    action: auditActionEnum('action').notNull(),
+    // Deliberately *not* foreign keys. An audit row must record what was true
+    // when it was written and stay that way: a cascade would delete history
+    // along with the account it incriminates, and ON DELETE SET NULL would
+    // issue an UPDATE that the append-only trigger correctly refuses. Ids are
+    // stored plain, and a responder resolves them (or finds them gone) at
+    // read time. Nullable because a failed sign-in has no established actor.
+    actorUserId: uuid('actor_user_id'),
+    actorDeviceId: uuid('actor_device_id'),
+    subjectUserId: uuid('subject_user_id'),
+    /** Kind of thing acted on: 'device', 'file', 'conversation', 'wallet'. */
+    targetType: text('target_type'),
+    targetId: text('target_id'),
+    ipAddress: text('ip_address'),
+    userAgent: text('user_agent'),
+    /** Sanitised, bounded key/value context. Never message content. */
+    metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    // Account-scoped queries are the primary read path.
+    index('audit_logs_subject_created_idx').on(table.subjectUserId, table.createdAt),
+    index('audit_logs_actor_created_idx').on(table.actorUserId, table.createdAt),
+    // "Show me every failed auth in the last hour" during an incident.
+    index('audit_logs_action_created_idx').on(table.action, table.createdAt),
+  ],
+);
+
+export type AuditLog = typeof auditLogs.$inferSelect;
+export type NewAuditLog = typeof auditLogs.$inferInsert;
 
 // ─── Relations ────────────────────────────────────────────────────────────────
 

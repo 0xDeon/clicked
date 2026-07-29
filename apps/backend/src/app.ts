@@ -16,6 +16,7 @@ import { filesRouter } from './routes/files.js';
 import { pushRouter } from './routes/push.js';
 import { syncRouter } from './routes/sync.js';
 import { userDevicesRouter } from './routes/userDevices.js';
+import { auditLogsRouter } from './routes/auditLogs.js';
 import { requireAuth, type AuthRequest } from './middleware/auth.js';
 
 const packageJson = JSON.parse(
@@ -61,6 +62,7 @@ app.use('/files', filesRouter);
 app.use('/push', pushRouter);
 app.use('/sync', syncRouter);
 app.use('/user-devices', userDevicesRouter);
+app.use('/audit-logs', auditLogsRouter);
 
 app.get('/me', requireAuth, (req, res) => {
   res.json({ user: (req as AuthRequest).auth });

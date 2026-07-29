@@ -5,6 +5,7 @@ import { db } from '../db/index.js';
 import { messages, conversationMembers, files } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { generatePresignedGet } from '../lib/storage.js';
+import { actorFromRequest, recordAuditEvent } from '../services/auditLog.js';
 
 export const filesRouter: IRouter = Router();
 filesRouter.use(requireAuth);
@@ -49,6 +50,16 @@ filesRouter.get('/:fileId', async (req: AuthRequest, res) => {
   });
 
   if (!membership) {
+    // A non-member reaching for a file id is the clearest signal of an
+    // attempt to read someone else's attachments (#376).
+    void recordAuditEvent({
+      action: 'file_access_denied',
+      ...actorFromRequest(req),
+      targetType: 'file',
+      targetId: fileId,
+      metadata: { conversationId: message.conversationId, reason: 'not_a_member' },
+    });
+
     res.status(403).json({ error: 'Not authorized to access this file' });
     return;
   }
