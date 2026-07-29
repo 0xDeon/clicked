@@ -1,5 +1,5 @@
 import type { Server } from 'socket.io';
-import { and, eq, lt, desc, sql, inArray, isNull, ne, or } from 'drizzle-orm';
+import { and, eq, lt, desc, sql, inArray, isNull, ne, or, lte } from 'drizzle-orm';
 
 import { db } from '../db/index.js';
 import {
@@ -9,6 +9,7 @@ import {
   messageEnvelopes,
   devices,
   files,
+  users,
 } from '../db/schema.js';
 import type { AuthSocket } from '../middleware/socketAuth.js';
 import { invalidateConversationCaches } from '../lib/conversationCache.js';
@@ -607,29 +608,48 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       conversationId: string;
       lastReadMessageId: string;
     };
+    const deviceId = socket.auth!.deviceId;
 
-    const membership = await db.query.conversationMembers.findFirst({
-      where: and(
-        eq(conversationMembers.conversationId, conversationId),
-        eq(conversationMembers.userId, userId),
-      ),
-    });
+    const [user, membership] = await Promise.all([
+      db.query.users.findFirst({
+        where: eq(users.id, userId),
+        columns: { sendReadReceipts: true },
+      }),
+      db.query.conversationMembers.findFirst({
+        where: and(
+          eq(conversationMembers.conversationId, conversationId),
+          eq(conversationMembers.userId, userId),
+        ),
+      }),
+    ]);
 
     if (!membership) {
       socket.emit('error', { event: 'message_read', message: 'Not a member of this conversation' });
       return;
     }
 
-    const message = await db.query.messages.findFirst({
+    const newMessage = await db.query.messages.findFirst({
       where: and(eq(messages.id, lastReadMessageId), eq(messages.conversationId, conversationId)),
     });
 
-    if (!message) {
+    if (!newMessage) {
       socket.emit('error', {
         event: 'message_read',
         message: 'Message not found in conversation',
       });
       return;
+    }
+
+    // Monotonicity check: only advance lastReadMessageId
+    if (membership.lastReadMessageId) {
+      const lastReadMessage = await db.query.messages.findFirst({
+        where: eq(messages.id, membership.lastReadMessageId),
+        columns: { createdAt: true },
+      });
+
+      if (lastReadMessage && newMessage.createdAt <= lastReadMessage.createdAt) {
+        return; // Stale or backwards update, ignore
+      }
     }
 
     await db
@@ -642,11 +662,41 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         ),
       );
 
-    io.to(conversationId).volatile.emit('read_receipt', {
+    // Stamp readAt on all envelopes for this device up to the read point
+    const messagesToUpdate = await db.query.messages.findMany({
+      where: and(
+        eq(messages.conversationId, conversationId),
+        lte(messages.createdAt, newMessage.createdAt),
+      ),
+      columns: { id: true },
+    });
+
+    if (messagesToUpdate.length > 0) {
+      const messageIds = messagesToUpdate.map((m) => m.id);
+      await db
+        .update(messageEnvelopes)
+        .set({ readAt: new Date() })
+        .where(
+          and(
+            eq(messageEnvelopes.recipientDeviceId, deviceId),
+            inArray(messageEnvelopes.messageId, messageIds),
+            isNull(messageEnvelopes.readAt),
+          ),
+        );
+    }
+
+    // Privacy check: only broadcast if user has read receipts enabled
+    if (!user?.sendReadReceipts) {
+      return;
+    }
+
+    const receipt = {
       conversationId,
       userId,
       lastReadMessageId,
-    });
+    };
+
+    io.to(conversationId).volatile.emit('read_receipt', receipt);
 
     if (redis) {
       const members = await db.query.conversationMembers.findMany({
@@ -656,7 +706,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       await publishEphemeral(
         redis,
         members.map((member) => member.userId),
-        { type: 'read_receipt', data: { conversationId, userId, lastReadMessageId } },
+        { type: 'read_receipt', data: receipt },
       );
     }
   });
