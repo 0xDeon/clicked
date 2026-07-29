@@ -73,12 +73,17 @@ export class Phase1SessionCrypto implements SessionCrypto {
 // ─── Phase-2 implementation (@signalapp/libsignal-client) ────────────────────
 
 /**
- * LibsignalSessionCrypto — wraps @signalapp/libsignal-client (Signal Protocol).
+ * LibsignalSessionCrypto — wraps signalClient.ts's Signal session layer
+ * (X3DH + per-device sessions today, @signalapp/libsignal-client once
+ * activated — see docs/signal-integration.md).
  *
  * The library is loaded lazily via a dynamic import so it does not bloat the
  * initial bundle for users who have not yet established a Signal session.
  *
- * Audit status and bundle-size analysis: see docs/signal-integration.md
+ * Requires `configureSignalClient({ myIdentity, fetchKeyBundle })`
+ * (signalClient.ts) to have been called once — e.g. during sign-in, right
+ * after getOrCreateDeviceIdentity() — before the first send; otherwise
+ * encryptToDevice/buildEnvelopes reject with a clear "not configured" error.
  *
  * This implementation satisfies the SessionCrypto interface; no callsite
  * changes are required when activating this path.
