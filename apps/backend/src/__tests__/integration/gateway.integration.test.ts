@@ -92,7 +92,9 @@ vi.mock('../../lib/conversationCache.js', () => ({
 
 // Allow every event through — rate limiting is tested independently.
 vi.mock('../../services/rateLimit.js', () => ({
-  checkRateLimit: vi.fn().mockResolvedValue({ allowed: true }),
+  checkSocketEventRateLimit: vi
+    .fn()
+    .mockResolvedValue({ allowed: true, limit: 10, remaining: 10, resetSeconds: 1, used: 0 }),
   checkPayloadSize: vi.fn().mockReturnValue({ valid: true, size: 0 }),
   recordViolation: vi.fn().mockReturnValue(0),
   clearViolations: vi.fn(),

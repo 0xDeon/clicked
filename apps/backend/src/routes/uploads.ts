@@ -6,6 +6,8 @@ import { db } from '../db/index.js';
 import { files, conversationMembers } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { generatePresignedPut, generateStorageKey } from '../lib/storage.js';
+import { defaultIdentifier, rateLimit } from '../middleware/rateLimit.js';
+import { consumeRateLimit } from '../services/rateLimiter.js';
 
 export const uploadsRouter: IRouter = Router();
 
@@ -36,7 +38,7 @@ const RequestSlotSchema = z.object({
 });
 
 // POST /uploads — request a presigned upload slot
-uploadsRouter.post('/', async (req: AuthRequest, res) => {
+uploadsRouter.post('/', rateLimit('upload_slot'), async (req: AuthRequest, res) => {
   const userId = req.auth!.userId;
 
   const parsed = RequestSlotSchema.safeParse(req.body);
@@ -62,6 +64,22 @@ uploadsRouter.post('/', async (req: AuthRequest, res) => {
 
   if (!membership) {
     res.status(403).json({ error: 'Not a member of this conversation' });
+    return;
+  }
+
+  // Daily volume quota (#375). Charged in bytes rather than requests: the
+  // per-minute slot limit says nothing about a caller requesting twenty
+  // hundred-megabyte slots an hour, which is the shape that actually fills
+  // object storage. Charged only after membership passes, so a rejected
+  // request never spends someone else's budget.
+  const quota = await consumeRateLimit('upload_bytes_daily', defaultIdentifier(req), size);
+  if (!quota.allowed) {
+    res.setHeader('Retry-After', String(quota.resetSeconds));
+    res.status(429).json({
+      error: 'Daily upload quota exceeded',
+      bucket: 'upload_bytes_daily',
+      retryAfterSeconds: quota.resetSeconds,
+    });
     return;
   }
 

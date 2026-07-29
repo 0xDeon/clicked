@@ -4,11 +4,12 @@ import { eq, and, isNull } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { pushSubscriptions } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
+import { rateLimit } from '../middleware/rateLimit.js';
 
 export const pushRouter: IRouter = Router();
 pushRouter.use(requireAuth);
 
-pushRouter.post('/subscriptions', async (req: AuthRequest, res) => {
+pushRouter.post('/subscriptions', rateLimit('push_subscribe'), async (req: AuthRequest, res) => {
   const deviceId = req.auth!.deviceId;
   const { endpoint, keys } = req.body;
 

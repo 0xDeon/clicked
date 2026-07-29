@@ -5,6 +5,7 @@ import { db } from '../db/index.js';
 import { messages, conversationMembers, files } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { generatePresignedGet } from '../lib/storage.js';
+import { rateLimit } from '../middleware/rateLimit.js';
 
 export const filesRouter: IRouter = Router();
 filesRouter.use(requireAuth);
@@ -12,7 +13,7 @@ filesRouter.use(requireAuth);
 // ── GET /files/:fileId ─────────────────────────────────────────────────────────
 // Issues a short-lived presigned GET URL so the client can download ciphertext
 // and decrypt it locally (#166).  Access is gated on conversation membership.
-filesRouter.get('/:fileId', async (req: AuthRequest, res) => {
+filesRouter.get('/:fileId', rateLimit('file_download'), async (req: AuthRequest, res) => {
   const userId = req.auth!.userId;
   const fileId = req.params['fileId'] as string;
 

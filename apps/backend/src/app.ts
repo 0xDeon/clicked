@@ -17,6 +17,7 @@ import { pushRouter } from './routes/push.js';
 import { syncRouter } from './routes/sync.js';
 import { userDevicesRouter } from './routes/userDevices.js';
 import { requireAuth, type AuthRequest } from './middleware/auth.js';
+import { ipIdentifier, rateLimit } from './middleware/rateLimit.js';
 
 const packageJson = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
@@ -49,6 +50,11 @@ app.get('/health', async (_req, res) => {
     });
   }
 });
+
+// Catch-all per-IP ceiling (#375). Sits below every per-endpoint bucket and
+// exists to bound a caller hammering endpoints that have no specific limit.
+// Mounted after /health so orchestrator probes are never rate limited.
+app.use(rateLimit('global_ip', { identifier: ipIdentifier }));
 
 app.use('/auth', authRouter);
 app.use('/conversations', conversationsRouter);
