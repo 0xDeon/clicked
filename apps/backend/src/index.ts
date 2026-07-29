@@ -8,6 +8,12 @@ import { db } from './db/index.js';
 import { conversationMembers, users, devices } from './db/schema.js';
 import { publishEphemeral } from './services/resumeStream.js';
 import { socketAuthMiddleware, type AuthSocket } from './middleware/socketAuth.js';
+import { socketTransportSecurityMiddleware } from './middleware/socketSecurity.js';
+import {
+  allowedOrigins,
+  assertTransportSecurityConfig,
+  isOriginAllowed,
+} from './lib/transportSecurity.js';
 import { registerMessagingHandlers } from './socket/messaging.js';
 import { app } from './app.js';
 import { redis as appRedis } from './lib/redis.js';
@@ -56,11 +62,20 @@ dotenv.config();
 // Validate required environment variables at boot. Exits with code 1 and
 // logs the offending vars if anything is missing or malformed.
 loadEnv();
+
+// Refuse to boot a non-dev gateway that would accept plaintext transport (#374).
+assertTransportSecurityConfig();
+
 export const objectStore = getObjectStore();
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: '*' },
+  cors: {
+    origin: (origin, callback) => {
+      callback(null, isOriginAllowed(origin ?? undefined));
+    },
+    credentials: allowedOrigins().length > 0,
+  },
 });
 
 let isShuttingDown = false;
@@ -110,6 +125,9 @@ async function recordPresenceForCoMembers(
   );
 }
 
+// Transport + origin policy runs first: an insecure or disallowed handshake is
+// dropped before any token parsing or database lookup (#374).
+io.use(socketTransportSecurityMiddleware);
 io.use(socketAuthMiddleware);
 
 io.on('connection', async (socket: AuthSocket) => {

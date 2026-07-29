@@ -16,7 +16,10 @@ import { filesRouter } from './routes/files.js';
 import { pushRouter } from './routes/push.js';
 import { syncRouter } from './routes/sync.js';
 import { userDevicesRouter } from './routes/userDevices.js';
+import { securityRouter } from './routes/security.js';
 import { requireAuth, type AuthRequest } from './middleware/auth.js';
+import { enforceOriginPolicy, enforceTransportSecurity } from './middleware/transportSecurity.js';
+import { allowedOrigins, isOriginAllowed, trustProxyHops } from './lib/transportSecurity.js';
 
 const packageJson = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
@@ -24,7 +27,21 @@ const packageJson = JSON.parse(
 
 export const app: Express = express();
 
-app.use(cors());
+// TLS is terminated at the edge in every non-local deployment, so `req.secure`
+// must be allowed to consult X-Forwarded-Proto from the trusted hops only
+// (#374). TRUST_PROXY=0 disables it for a directly-exposed gateway.
+app.set('trust proxy', trustProxyHops());
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      callback(null, isOriginAllowed(origin ?? undefined));
+    },
+    credentials: allowedOrigins().length > 0,
+  }),
+);
+app.use(enforceTransportSecurity);
+app.use(enforceOriginPolicy);
 app.use(express.json());
 if (process.env['NODE_ENV'] !== 'test') {
   app.use(morgan('dev'));
@@ -61,6 +78,7 @@ app.use('/files', filesRouter);
 app.use('/push', pushRouter);
 app.use('/sync', syncRouter);
 app.use('/user-devices', userDevicesRouter);
+app.use('/security', securityRouter);
 
 app.get('/me', requireAuth, (req, res) => {
   res.json({ user: (req as AuthRequest).auth });
