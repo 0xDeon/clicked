@@ -25,13 +25,10 @@ export const VerifySchema = z
      * Validated for correct base64 and exact byte length before any crypto operation.
      */
     identityPublicKey: IdentityPublicKeySchema,
-    device: DeviceSchema.partial().optional(),
+    device: DeviceSchema,
   })
   .superRefine((value, ctx) => {
-    if (
-      value.device?.identityPublicKey &&
-      value.device.identityPublicKey !== value.identityPublicKey
-    ) {
+    if (value.device.identityPublicKey !== value.identityPublicKey) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['device', 'identityPublicKey'],
