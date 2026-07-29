@@ -5,15 +5,21 @@ export const ChallengeSchema = z.object({
   walletAddress: z.string().min(1, 'walletAddress is required'),
 });
 
-export const DeviceSchema = z.object({
-  deviceName: z
-    .string()
-    .min(1, 'deviceName is required')
-    .max(100, 'deviceName must be at most 100 characters'),
-  platform: z.enum(['web', 'ios', 'android']),
-  identityPublicKey: IdentityPublicKeySchema,
-  registrationId: z.number().int().nonnegative().optional(),
-});
+// `.strict()`: device registration only ever carries public identity
+// material — an unrecognized field (e.g. a client attaching session or
+// private-key state) must fail validation (400) rather than be silently
+// stripped and ignored.
+export const DeviceSchema = z
+  .object({
+    deviceName: z
+      .string()
+      .min(1, 'deviceName is required')
+      .max(100, 'deviceName must be at most 100 characters'),
+    platform: z.enum(['web', 'ios', 'android']),
+    identityPublicKey: IdentityPublicKeySchema,
+    registrationId: z.number().int().nonnegative().optional(),
+  })
+  .strict();
 
 export const VerifySchema = z
   .object({
@@ -27,6 +33,7 @@ export const VerifySchema = z
     identityPublicKey: IdentityPublicKeySchema,
     device: DeviceSchema.partial().optional(),
   })
+  .strict()
   .superRefine((value, ctx) => {
     if (
       value.device?.identityPublicKey &&

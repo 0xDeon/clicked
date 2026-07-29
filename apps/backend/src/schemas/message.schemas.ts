@@ -10,20 +10,29 @@ import { z } from 'zod';
  * union schemas.
  */
 
-export const EnvelopeSchema = z.object({
-  recipientDeviceId: z.string().uuid('recipientDeviceId must be a valid UUID'),
-  ciphertext: z.string().min(1, 'envelope ciphertext is required'),
-});
+// `.strict()` on both schemas: a message envelope only ever carries a
+// recipient device id and opaque ciphertext. An unrecognized field (e.g. a
+// client attaching `ratchetState` or `privateKey`) must fail validation
+// (400) instead of being silently stripped — the server never stores or
+// relays Signal session/ratchet/private-key state.
+export const EnvelopeSchema = z
+  .object({
+    recipientDeviceId: z.string().uuid('recipientDeviceId must be a valid UUID'),
+    ciphertext: z.string().min(1, 'envelope ciphertext is required'),
+  })
+  .strict();
 
-export const SendMessageSchema = z.object({
-  conversationId: z.string().uuid('conversationId must be a valid UUID'),
-  messageId: z.string().uuid('messageId must be a valid UUID'),
-  contentType: z.string().trim().toLowerCase().optional().default('text'),
-  ciphertext: z.string().optional(),
-  envelopes: z.array(EnvelopeSchema).optional(),
-  /** UUID of an already-uploaded file; required when contentType is file/image/video/audio */
-  fileId: z.string().uuid('fileId must be a valid UUID').optional(),
-});
+export const SendMessageSchema = z
+  .object({
+    conversationId: z.string().uuid('conversationId must be a valid UUID'),
+    messageId: z.string().uuid('messageId must be a valid UUID'),
+    contentType: z.string().trim().toLowerCase().optional().default('text'),
+    ciphertext: z.string().optional(),
+    envelopes: z.array(EnvelopeSchema).optional(),
+    /** UUID of an already-uploaded file; required when contentType is file/image/video/audio */
+    fileId: z.string().uuid('fileId must be a valid UUID').optional(),
+  })
+  .strict();
 
 export type SendMessageBody = z.infer<typeof SendMessageSchema>;
 export type EnvelopeBody = z.infer<typeof EnvelopeSchema>;

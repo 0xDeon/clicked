@@ -30,10 +30,12 @@ devicesRouter.use(requireAuth);
 // publicKey and signature fields are validated via the shared key validator
 // (src/lib/keys.ts) enforcing correct base64 and exact byte lengths.
 
-const UploadPreKeysSchema = z.object({
-  signedPreKey: SignedPreKeyEntrySchema,
-  oneTimePreKeys: z.array(PreKeyEntrySchema).min(1, 'At least one one-time prekey is required'),
-});
+const UploadPreKeysSchema = z
+  .object({
+    signedPreKey: SignedPreKeyEntrySchema,
+    oneTimePreKeys: z.array(PreKeyEntrySchema).min(1, 'At least one one-time prekey is required'),
+  })
+  .strict();
 
 const RegisterDeviceSchema = DeviceSchema;
 
