@@ -35,6 +35,33 @@ vi.mock('../lib/redis.js', () => ({
   convCacheKey: (userId: string) => `conversations:${userId}`,
 }));
 
+// Membership changes now run inside a transaction together with their
+// group-control event (#369), so the mock db hands out a transaction handle
+// that behaves like the top-level one. Sequencing itself is covered by
+// groupControl.test.ts; here it is stubbed so these tests stay about routing.
+const mockTransaction = vi.fn((fn: (tx: unknown) => unknown) =>
+  fn({ delete: mockDelete, insert: mockInsert, update: mockUpdate }),
+);
+
+const mockAppendGroupControlEvent = vi.fn(async () => ({
+  event: { conversationId: 'conv-1', epoch: 1, sequence: 1, eventType: 'member_added' },
+  systemMessage: null,
+}));
+const mockBroadcastGroupControlEvent = vi.fn();
+const mockGetGroupState = vi.fn();
+const mockReadGroupControlEvents = vi.fn();
+
+vi.mock('../services/groupControl.js', () => ({
+  appendGroupControlEvent: mockAppendGroupControlEvent,
+  broadcastGroupControlEvent: mockBroadcastGroupControlEvent,
+  getGroupState: mockGetGroupState,
+  readGroupControlEvents: mockReadGroupControlEvents,
+  serializeGroupControlEvent: (event: unknown) => event,
+  DEFAULT_GROUP_CONTROL_PAGE_SIZE: 100,
+  MAX_GROUP_CONTROL_PAGE_SIZE: 500,
+  MAX_GROUP_CONTROL_PAYLOAD_BYTES: 65536,
+}));
+
 vi.mock('../db/index.js', () => ({
   db: {
     query: {
@@ -44,6 +71,7 @@ vi.mock('../db/index.js', () => ({
     delete: mockDelete,
     insert: mockInsert,
     update: mockUpdate,
+    transaction: mockTransaction,
   },
 }));
 
@@ -93,6 +121,12 @@ function makeApp() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks keeps implementations, so restate the group-control default
+  // rather than letting one test's mockResolvedValue leak into the next.
+  mockAppendGroupControlEvent.mockResolvedValue({
+    event: { conversationId: 'conv-1', epoch: 1, sequence: 1, eventType: 'member_added' },
+    systemMessage: null,
+  });
 });
 
 describe('GET /conversations/:id', () => {
@@ -295,7 +329,20 @@ describe('POST /conversations/:id/members', () => {
       conversationId: 'conv-1',
       userId: 'user-2',
       joinedAt: joinedAt.toISOString(),
+      // The join is sequenced, so the caller learns the new epoch (#369).
+      epoch: 1,
+      sequence: 1,
     });
+    expect(mockAppendGroupControlEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: 'conv-1',
+        eventType: 'member_added',
+        actorUserId: 'user-1',
+        targetUserId: 'user-2',
+      }),
+      expect.anything(),
+    );
+    expect(mockBroadcastGroupControlEvent).toHaveBeenCalled();
   });
 });
 
@@ -442,5 +489,167 @@ describe('DELETE /conversations/:id/leave', () => {
     expect(res.status).toBe(204);
     expect(mockDelete).toHaveBeenCalledWith(conversationMembersTable);
     expect(deleteWhere).toHaveBeenCalled();
+    expect(mockAppendGroupControlEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: 'conv-1',
+        eventType: 'member_left',
+        actorUserId: 'user-1',
+      }),
+      expect.anything(),
+    );
+    expect(mockBroadcastGroupControlEvent).toHaveBeenCalled();
+  });
+
+  it('does not sequence an event when the conversation itself is deleted', async () => {
+    const deleteWhere = vi.fn().mockResolvedValue(undefined);
+    mockDelete.mockReturnValue({ where: deleteWhere });
+    mockFindConversation.mockResolvedValue({ id: 'conv-1', type: 'group' });
+    mockFindMember.mockResolvedValue({ id: 'member-1' });
+    mockFindMany.mockResolvedValue([{ userId: 'user-1' }]);
+
+    await request(makeApp()).delete('/conversations/conv-1/leave');
+
+    // Nothing survives to reconcile against, so no epoch bump is recorded.
+    expect(mockAppendGroupControlEvent).not.toHaveBeenCalled();
+  });
+});
+
+// ── Group control endpoints (#369) ───────────────────────────────────────────
+
+describe('GET /conversations/:id/epoch', () => {
+  it('returns 403 for a non-member', async () => {
+    mockFindMember.mockResolvedValue(undefined);
+
+    const res = await request(makeApp()).get('/conversations/conv-1/epoch');
+
+    expect(res.status).toBe(403);
+  });
+
+  it('reports the current epoch and latest sequence', async () => {
+    mockFindMember.mockResolvedValue({ id: 'member-1' });
+    mockGetGroupState.mockResolvedValue({ epoch: 4, latestSequence: 7 });
+
+    const res = await request(makeApp()).get('/conversations/conv-1/epoch');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ conversationId: 'conv-1', epoch: 4, latestSequence: 7 });
+  });
+
+  it('returns 404 when the conversation is gone', async () => {
+    mockFindMember.mockResolvedValue({ id: 'member-1' });
+    mockGetGroupState.mockResolvedValue(null);
+
+    const res = await request(makeApp()).get('/conversations/conv-1/epoch');
+
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('GET /conversations/:id/group-control', () => {
+  const events = [
+    { id: 'evt-3', sequence: 3, epoch: 3, eventType: 'member_added' },
+    { id: 'evt-4', sequence: 4, epoch: 4, eventType: 'commit' },
+  ];
+
+  it('returns 403 for a non-member', async () => {
+    mockFindMember.mockResolvedValue(undefined);
+
+    const res = await request(makeApp()).get('/conversations/conv-1/group-control');
+
+    expect(res.status).toBe(403);
+  });
+
+  it('AC1 — returns the missed events in order with a cursor for the next page', async () => {
+    mockFindMember.mockResolvedValue({ id: 'member-1' });
+    mockGetGroupState.mockResolvedValue({ epoch: 5, latestSequence: 5 });
+    mockReadGroupControlEvents.mockResolvedValue({ events, hasMore: true });
+
+    const res = await request(makeApp()).get(
+      '/conversations/conv-1/group-control?sinceSequence=2&limit=2',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.events.map((e: { sequence: number }) => e.sequence)).toEqual([3, 4]);
+    expect(res.body.currentEpoch).toBe(5);
+    expect(res.body.latestSequence).toBe(5);
+    expect(res.body.nextSequence).toBe(4);
+    expect(res.body.hasMore).toBe(true);
+    expect(mockReadGroupControlEvents).toHaveBeenCalledWith({
+      conversationId: 'conv-1',
+      sinceSequence: 2,
+      limit: 2,
+    });
+  });
+
+  it('keeps the cursor where it was when nothing new arrived', async () => {
+    mockFindMember.mockResolvedValue({ id: 'member-1' });
+    mockGetGroupState.mockResolvedValue({ epoch: 5, latestSequence: 5 });
+    mockReadGroupControlEvents.mockResolvedValue({ events: [], hasMore: false });
+
+    const res = await request(makeApp()).get('/conversations/conv-1/group-control?sinceSequence=5');
+
+    expect(res.body.nextSequence).toBe(5);
+    expect(res.body.hasMore).toBe(false);
+  });
+
+  it('rejects a negative or non-numeric cursor', async () => {
+    mockFindMember.mockResolvedValue({ id: 'member-1' });
+
+    for (const cursor of ['-1', 'abc']) {
+      const res = await request(makeApp()).get(
+        `/conversations/conv-1/group-control?sinceSequence=${cursor}`,
+      );
+      expect(res.status).toBe(400);
+    }
+  });
+});
+
+describe('POST /conversations/:id/group-control', () => {
+  it('rejects a missing or empty payload', async () => {
+    const res = await request(makeApp()).post('/conversations/conv-1/group-control').send({});
+
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a payload beyond the size cap', async () => {
+    const res = await request(makeApp())
+      .post('/conversations/conv-1/group-control')
+      .send({ payload: 'x'.repeat(65537) });
+
+    expect(res.status).toBe(413);
+  });
+
+  it('returns 403 for a non-member', async () => {
+    mockFindMember.mockResolvedValue(undefined);
+
+    const res = await request(makeApp())
+      .post('/conversations/conv-1/group-control')
+      .send({ payload: 'opaque-commit' });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('sequences a member commit and broadcasts it', async () => {
+    mockFindMember.mockResolvedValue({ id: 'member-1' });
+    mockAppendGroupControlEvent.mockResolvedValue({
+      event: { conversationId: 'conv-1', epoch: 6, sequence: 6, eventType: 'commit' },
+      systemMessage: null,
+    });
+
+    const res = await request(makeApp())
+      .post('/conversations/conv-1/group-control')
+      .send({ payload: 'opaque-commit' });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ epoch: 6, sequence: 6, eventType: 'commit' });
+    expect(mockAppendGroupControlEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: 'conv-1',
+        eventType: 'commit',
+        actorUserId: 'user-1',
+        payload: 'opaque-commit',
+      }),
+    );
+    expect(mockBroadcastGroupControlEvent).toHaveBeenCalled();
   });
 });

@@ -25,6 +25,9 @@ export const KNOWN_EVENT_TYPES = new Set([
   'ephemeral_replay',
   'resume_complete',
   'device_envelope',
+  // Group epoch + membership reconciliation (#369).
+  'group_system_event',
+  'epoch_changed',
   'error',
 ]);
 

@@ -43,6 +43,10 @@ export const conversations = pgTable('conversations', {
   type: conversationTypeEnum('type').notNull().default('dm'),
   name: text('name'),
   avatarUrl: text('avatar_url'),
+  // Group epoch (#369). Incremented by every group-control event; the row is
+  // also the serialization point for sequencing those events, so a concurrent
+  // join and leave can never be assigned the same sequence number.
+  epoch: integer('epoch').notNull().default(0),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
@@ -347,6 +351,65 @@ export const pushSubscriptions = pgTable('push_subscriptions', {
 export type PushSubscription = typeof pushSubscriptions.$inferSelect;
 export type NewPushSubscription = typeof pushSubscriptions.$inferInsert;
 
+// ─── Group control messages (#369) ────────────────────────────────────────────
+//
+// The ordered, gap-free log of everything that changes a group's membership or
+// its epoch: joins, leaves, removals, and client-submitted MLS commits.
+//
+// Chat messages are ordered by (createdAt, id) — good enough for a timeline,
+// but useless for group state, where a client that applies two commits in the
+// wrong order derives a different key schedule and can no longer decrypt.
+// Group control therefore gets its own strictly monotonic per-conversation
+// `sequence`, and "catch up" is `sequence > mine`, which cannot silently skip
+// an event the way a timestamp cursor can.
+//
+// `epoch` is the value *after* the event was applied, so a client can compare
+// its own epoch against the newest row and know exactly how far behind it is.
+// The `messageId` links to the `content_type='system'` message emitted for the
+// same event, so the timeline and the control log never disagree.
+//
+// `payload` is opaque to the server: an MLS commit or welcome blob, stored and
+// relayed byte-for-byte. The server sequences group control, it does not
+// interpret it.
+
+export const groupControlEventTypeEnum = pgEnum('group_control_event_type', [
+  'member_added',
+  'member_removed',
+  'member_left',
+  'commit',
+]);
+
+export type GroupControlEventType = (typeof groupControlEventTypeEnum.enumValues)[number];
+
+export const groupControlEvents = pgTable(
+  'group_control_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    /** Strictly increasing from 1, gap-free within a conversation. */
+    sequence: integer('sequence').notNull(),
+    /** Group epoch after this event was applied. */
+    epoch: integer('epoch').notNull(),
+    eventType: groupControlEventTypeEnum('event_type').notNull(),
+    actorUserId: uuid('actor_user_id').references(() => users.id, { onDelete: 'set null' }),
+    targetUserId: uuid('target_user_id').references(() => users.id, { onDelete: 'set null' }),
+    /** The system message emitted for this event, when one was created. */
+    messageId: uuid('message_id').references(() => messages.id, { onDelete: 'set null' }),
+    /** Opaque client-supplied MLS commit/welcome material. Never parsed here. */
+    payload: text('payload'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    // Both the gap-free guarantee and the catch-up read path.
+    uniqueIndex('group_control_conversation_sequence_idx').on(table.conversationId, table.sequence),
+  ],
+);
+
+export type GroupControlEvent = typeof groupControlEvents.$inferSelect;
+export type NewGroupControlEvent = typeof groupControlEvents.$inferInsert;
+
 // ─── Relations ────────────────────────────────────────────────────────────────
 
 export const usersRelations = relations(users, ({ many }) => ({
@@ -368,6 +431,17 @@ export const conversationsRelations = relations(conversations, ({ many }) => ({
   transfers: many(tokenTransfers),
   treasuryProposals: many(treasuryProposals),
   files: many(files),
+  groupControlEvents: many(groupControlEvents),
+}));
+
+export const groupControlEventsRelations = relations(groupControlEvents, ({ one }) => ({
+  conversation: one(conversations, {
+    fields: [groupControlEvents.conversationId],
+    references: [conversations.id],
+  }),
+  actor: one(users, { fields: [groupControlEvents.actorUserId], references: [users.id] }),
+  target: one(users, { fields: [groupControlEvents.targetUserId], references: [users.id] }),
+  message: one(messages, { fields: [groupControlEvents.messageId], references: [messages.id] }),
 }));
 
 export const filesRelations = relations(files, ({ one, many }) => ({
