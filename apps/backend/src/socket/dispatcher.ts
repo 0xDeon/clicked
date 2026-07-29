@@ -7,6 +7,7 @@ import {
   createEnvelope,
   type EventEnvelope,
 } from '../lib/eventEnvelope.js';
+import { isReplay } from '../services/replay-protection.service.js';
 
 type Handler = (payload: Record<string, unknown>) => Promise<void>;
 
@@ -74,6 +75,20 @@ export class EventDispatcher {
             eventId: envelope.eventId,
           }),
         );
+        return;
+      }
+
+      // Replay protection: check if this event has been seen before for this device
+      const deviceId = this.socket.auth.deviceId;
+      const isReplayEvent = await isReplay(this.redis, deviceId, envelope.eventId);
+      if (isReplayEvent) {
+        console.debug('[replay-protection] Dropping replay event', {
+          deviceId,
+          eventId: envelope.eventId,
+          timestamp: new Date().toISOString(),
+        });
+        // Acknowledge the duplicate without reprocessing
+        this.socket.emit('dispatch_ack', { eventId: envelope.eventId, duplicate: true });
         return;
       }
 

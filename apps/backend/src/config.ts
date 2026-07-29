@@ -36,6 +36,13 @@ export const EnvSchema = z.object({
   OBJECT_STORE_SECRET_KEY: z.string().min(1, 'OBJECT_STORE_SECRET_KEY is required'),
   OBJECT_STORE_REGION: z.string().min(1, 'OBJECT_STORE_REGION is required'),
   OBJECT_STORE_FORCE_PATH_STYLE: booleanEnv,
+  REPLAY_PROTECTION_TTL_SECONDS: z.coerce
+    .number()
+    .int('REPLAY_PROTECTION_TTL_SECONDS must be an integer')
+    .min(1, 'REPLAY_PROTECTION_TTL_SECONDS must be at least 1')
+    .max(86400, 'REPLAY_PROTECTION_TTL_SECONDS must not exceed 86400')
+    .optional()
+    .default(300),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
