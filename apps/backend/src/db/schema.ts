@@ -246,6 +246,37 @@ export const devicePrekeys = pgTable(
   ],
 );
 
+// ─── Device key history (#379 — key-transparency) ────────────────────────────
+//
+// Append-only log of identity-key changes per device. Written whenever a
+// device's `identityPublicKey` changes (rotation or re-registration). Clients
+// use this log to detect silent key swaps and display safety-number warnings.
+// Never deleted — immutability is the whole point.
+
+export const deviceKeyHistory = pgTable(
+  'device_key_history',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    deviceId: uuid('device_id')
+      .notNull()
+      .references(() => devices.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    previousKey: text('previous_key'),
+    newKey: text('new_key').notNull(),
+    changeReason: text('change_reason'),
+    recordedAt: timestamp('recorded_at').notNull().defaultNow(),
+  },
+  (table) => [
+    index('device_key_history_device_idx').on(table.deviceId, table.recordedAt),
+    index('device_key_history_user_idx').on(table.userId, table.recordedAt),
+  ],
+);
+
+export type DeviceKeyHistory = typeof deviceKeyHistory.$inferSelect;
+export type NewDeviceKeyHistory = typeof deviceKeyHistory.$inferInsert;
+
 // ─── Token transfers (#46) ────────────────────────────────────────────────────
 //
 // One row per Soroban `transfer` event the listener (services/stellarListener.ts)
@@ -436,6 +467,12 @@ export const devicesRelations = relations(devices, ({ one, many }) => ({
   prekeys: many(devicePrekeys),
   messages: many(messages),
   pushSubscriptions: many(pushSubscriptions),
+  keyHistory: many(deviceKeyHistory),
+}));
+
+export const deviceKeyHistoryRelations = relations(deviceKeyHistory, ({ one }) => ({
+  device: one(devices, { fields: [deviceKeyHistory.deviceId], references: [devices.id] }),
+  user: one(users, { fields: [deviceKeyHistory.userId], references: [users.id] }),
 }));
 
 export const devicePrekeysRelations = relations(devicePrekeys, ({ one }) => ({

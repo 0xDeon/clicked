@@ -16,6 +16,7 @@ import { invalidateConversationCaches } from '../lib/conversationCache.js';
 import { serializeMessage } from '../lib/messages.js';
 import { getSocketServer } from '../lib/socket.js';
 import { MAX_MESSAGES_LIMIT, DEFAULT_MESSAGES_LIMIT } from '../constants.js';
+import { checkGroupInviteLimit } from '../services/rateLimit.js';
 
 export const conversationsRouter: IRouter = Router();
 
@@ -309,6 +310,13 @@ conversationsRouter.post('/:id/members', async (req: AuthRequest, res) => {
 
   if (existingMembership) {
     res.status(409).json({ error: 'User is already a member' });
+    return;
+  }
+
+  // #378: throttle group-invite spam (10 invites per user per hour by default)
+  const inviteCheck = await checkGroupInviteLimit(redis, requesterId);
+  if (!inviteCheck.allowed) {
+    res.status(429).json({ error: 'Too many group invites. Please try again later.' });
     return;
   }
 
