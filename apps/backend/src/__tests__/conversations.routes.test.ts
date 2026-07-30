@@ -12,6 +12,7 @@ const conversationMembersTable = {
 const mockFindConversation = vi.fn();
 const mockFindMember = vi.fn();
 const mockFindMany = vi.fn();
+const mockFindUser = vi.fn();
 const mockDelete = vi.fn();
 const mockReturning = vi.fn();
 const mockValues = vi.fn(() => ({ returning: mockReturning }));
@@ -35,15 +36,24 @@ vi.mock('../lib/redis.js', () => ({
   convCacheKey: (userId: string) => `conversations:${userId}`,
 }));
 
+const mockGroupBy = vi.fn().mockResolvedValue([]);
+const mockWhere = vi.fn(() => ({ groupBy: mockGroupBy }));
+const mockFrom = vi.fn(() => ({ where: mockWhere }));
+const mockSelect = vi.fn(() => ({ from: mockFrom }));
+const mockExecute = vi.fn().mockResolvedValue([]);
+
 vi.mock('../db/index.js', () => ({
   db: {
     query: {
       conversations: { findFirst: mockFindConversation },
       conversationMembers: { findFirst: mockFindMember, findMany: mockFindMany },
+      users: { findFirst: mockFindUser },
     },
     delete: mockDelete,
     insert: mockInsert,
     update: mockUpdate,
+    select: mockSelect,
+    execute: mockExecute,
   },
 }));
 
@@ -60,7 +70,14 @@ vi.mock('../db/schema.js', () => ({
   },
   messageEnvelopes: { recipientDeviceId: 'recipientDeviceId' },
   tokenTransfers: {},
+  devices: {},
+  users: {},
 }));
+
+const sqlJoinMock = vi.fn();
+const sqlMock = vi.fn();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(sqlMock as any).join = sqlJoinMock;
 
 vi.mock('drizzle-orm', () => ({
   and: vi.fn((...args: unknown[]) => args.filter(Boolean)),
@@ -69,7 +86,8 @@ vi.mock('drizzle-orm', () => ({
   ne: vi.fn((col: unknown, val: unknown) => ({ col, val, op: 'ne' })),
   desc: vi.fn(),
   lt: vi.fn(),
-  sql: vi.fn(),
+  sql: sqlMock,
+  count: vi.fn(),
 }));
 
 vi.mock('../middleware/auth.js', () => ({
@@ -93,6 +111,70 @@ function makeApp() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe('GET /conversations', () => {
+  it('does not leak unserialized relation fields', async () => {
+    const conversation = {
+      id: 'conv-1',
+      type: 'group',
+      name: 'General',
+      avatarUrl: null,
+      createdAt: new Date().toISOString(),
+      // This is the field that should not be leaked
+      members: [
+        {
+          id: 'member-1',
+          conversationId: 'conv-1',
+          userId: 'user-1',
+          user: {
+            id: 'user-1',
+            username: 'alice',
+            avatarUrl: null,
+            wallets: [],
+          },
+        },
+      ],
+      messages: [
+        {
+          id: 'msg-1',
+          conversationId: 'conv-1',
+          senderId: 'user-1',
+          ciphertext: 'encrypted-hello',
+          deletedAt: null,
+          sender: {
+            id: 'user-1',
+            username: 'alice',
+            avatarUrl: null,
+          },
+        },
+      ],
+    };
+
+    // Mock the database response for the main query
+    mockFindMany.mockResolvedValue([
+      {
+        conversationId: 'conv-1',
+        isMuted: false,
+        isArchived: false,
+        conversation: conversation,
+      },
+    ]);
+
+    const res = await request(makeApp()).get('/conversations');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    const conv = res.body[0];
+    expect(conv.id).toBe('conv-1');
+    expect(conv.messages).toHaveLength(1);
+
+    // Assert that the unserialized `members` field is not present
+    expect(conv.members).toBeUndefined();
+
+    const message = conv.messages[0];
+    expect(message.ciphertext).toBe('encrypted-hello');
+  });
 });
 
 describe('GET /conversations/:id', () => {
@@ -263,11 +345,26 @@ describe('POST /conversations/:id/members', () => {
     expect(mockInsert).not.toHaveBeenCalled();
   });
 
+  it('returns 403 when the target user is not accepting group invites', async () => {
+    mockFindConversation.mockResolvedValue({ id: 'conv-1', type: 'group' });
+    mockFindMember.mockResolvedValueOnce({ id: 'member-1' }).mockResolvedValueOnce(undefined);
+    mockFindUser.mockResolvedValue({ allowGroupInvites: false });
+
+    const res = await request(makeApp())
+      .post('/conversations/conv-1/members')
+      .send({ userId: 'user-2' });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: 'User is not accepting group invites' });
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
   it('adds a member to a group conversation and broadcasts member_joined', async () => {
     const joinedAt = new Date('2026-05-31T11:00:00.000Z');
 
     mockFindConversation.mockResolvedValue({ id: 'conv-1', type: 'group' });
     mockFindMember.mockResolvedValueOnce({ id: 'member-1' }).mockResolvedValueOnce(undefined);
+    mockFindUser.mockResolvedValue({ allowGroupInvites: true });
     mockReturning.mockResolvedValue([
       {
         id: 'member-2',

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { IRouter } from 'express';
-import { asc, and, count, desc, eq, inArray, lt, or, sql, ne } from 'drizzle-orm';
+import { asc, and, count, desc, eq, inArray, isNotNull, lt, notInArray, or, sql, ne } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import {
   conversationMembers,
@@ -9,11 +9,12 @@ import {
   tokenTransfers,
   messageEnvelopes,
   devices,
+  users,
 } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { redis, CONV_CACHE_TTL, convCacheKey } from '../lib/redis.js';
 import { invalidateConversationCaches } from '../lib/conversationCache.js';
-import { serializeMessage } from '../lib/messages.js';
+import { serializeMessage, type MessageLike } from '../lib/messages.js';
 import { getSocketServer } from '../lib/socket.js';
 import { MAX_MESSAGES_LIMIT, DEFAULT_MESSAGES_LIMIT } from '../constants.js';
 import { actorFromRequest, recordAuditEvent } from '../services/auditLog.js';
@@ -44,17 +45,26 @@ const getConversationRelations = (deviceId: string) => ({
   },
 });
 
-type ConversationPayload = {
+type ConversationPayload = Conversation & {
+  messages?: MessageLike[];
+  members?: unknown[]; // from relation
+};
+
+type SerializedConversationPayload = {
   messages?: Array<ReturnType<typeof serializeMessage>>;
   [key: string]: unknown;
 };
 
-function serializeConversation<T extends ConversationPayload>(conversation: T): T {
+function serializeConversation(
+  conversation: ConversationPayload,
+): SerializedConversationPayload {
   return {
-    ...conversation,
-    messages: (conversation.messages ?? []).map((message) =>
-      serializeMessage(message as any),
-    ) as any,
+    id: conversation.id,
+    type: conversation.type,
+    name: conversation.name,
+    avatarUrl: conversation.avatarUrl,
+    createdAt: conversation.createdAt,
+    messages: (conversation.messages ?? []).map(serializeMessage),
   };
 }
 
@@ -166,7 +176,7 @@ conversationsRouter.get('/', async (req: AuthRequest, res) => {
   const unreadMap = new Map(unreadRows.map((r) => [r.conversationId, r.unreadCount]));
 
   const result = memberships.map((m) => ({
-    ...m.conversation,
+    ...serializeConversation(m.conversation),
     isMuted: m.isMuted,
     isArchived: m.isArchived,
     messageCount: countMap.get(m.conversationId) ?? 0,
@@ -310,6 +320,16 @@ conversationsRouter.post('/:id/members', async (req: AuthRequest, res) => {
 
   if (existingMembership) {
     res.status(409).json({ error: 'User is already a member' });
+    return;
+  }
+
+  const targetUser = await db.query.users.findFirst({
+    where: eq(users.id, newUserId),
+    columns: { allowGroupInvites: true },
+  });
+
+  if (targetUser && !targetUser.allowGroupInvites) {
+    res.status(403).json({ error: 'User is not accepting group invites' });
     return;
   }
 
@@ -484,6 +504,23 @@ conversationsRouter.get('/:id/messages', async (req: AuthRequest, res) => {
     return;
   }
 
+  // #340 — Resolve each edit chain to its newest version server-side.
+  // Editing a message inserts a *new* row whose `editsMessageId` points back
+  // at the row it replaces (see `messages.editsMessageId` in db/schema.ts),
+  // so a chain of edits is a backward-linked list: newest -> ... -> original.
+  // The set of every id referenced by some other row's `editsMessageId` is
+  // exactly the set of "superseded" (non-latest) versions — excluding them
+  // collapses any chain, however long, down to just its tip in one extra
+  // query, with no recursive CTE needed. Older versions are left in the
+  // table untouched; they're just excluded from this default list response.
+  const supersededRows = await db
+    .select({ id: messages.editsMessageId })
+    .from(messages)
+    .where(and(eq(messages.conversationId, conversationId), isNotNull(messages.editsMessageId)));
+  const supersededIds = supersededRows
+    .map((row) => row.id)
+    .filter((id): id is string => id !== null);
+
   // Resolve cursor: look up the `(createdAt, id)` of the "before" message.
   // `id` breaks ties for same-millisecond inserts — createdAt alone can
   // silently skip or duplicate rows across pages under concurrent writes.
@@ -500,17 +537,23 @@ conversationsRouter.get('/:id/messages', async (req: AuthRequest, res) => {
     cursor = ref;
   }
 
+  const conversationScope = and(
+    eq(messages.conversationId, conversationId),
+    cursor
+      ? or(
+          lt(messages.createdAt, cursor.createdAt),
+          and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id)),
+        )
+      : undefined,
+    // Only apply the NOT IN filter when there's something to exclude —
+    // an empty array here is a no-op in Postgres/drizzle, but skipping it
+    // entirely avoids relying on that edge-case behavior.
+    supersededIds.length > 0 ? notInArray(messages.id, supersededIds) : undefined,
+  );
+
   // Fetch one extra to determine whether there is a next page
   const rows = await db.query.messages.findMany({
-    where: cursor
-      ? and(
-          eq(messages.conversationId, conversationId),
-          or(
-            lt(messages.createdAt, cursor.createdAt),
-            and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id)),
-          ),
-        )
-      : eq(messages.conversationId, conversationId),
+    where: conversationScope,
     orderBy: [desc(messages.createdAt), desc(messages.id)],
     limit: limit + 1,
     with: {

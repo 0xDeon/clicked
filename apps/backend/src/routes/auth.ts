@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Router } from 'express';
 import type { Request, Response, IRouter } from 'express';
-import rateLimit, { type RateLimitRequestHandler } from 'express-rate-limit';
+import type { RequestHandler } from 'express';
 import { Keypair } from '@stellar/stellar-sdk';
 import { db } from '../db/index.js';
 import { users, wallets, devices } from '../db/schema.js';
@@ -10,6 +10,7 @@ import { createNonce, consumeNonce } from '../lib/nonce.js';
 import { signToken } from '../lib/jwt.js';
 import { validate } from '../middleware/validate.js';
 import { recordAuditEvent, requestContext } from '../services/auditLog.js';
+import { ipIdentifier, rateLimit } from '../middleware/rateLimit.js';
 import {
   ChallengeSchema,
   VerifySchema,
@@ -19,22 +20,15 @@ import {
 
 export const authRouter: IRouter = Router();
 
-const rateLimitedResponse = { error: 'Too many requests' };
-
-export const challengeLimiter: RateLimitRequestHandler = rateLimit({
-  windowMs: 60 * 1000,
-  limit: 10,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: rateLimitedResponse,
+// Both limiters are keyed on the client IP — there is no authenticated
+// identity yet — and are counted in Redis so the budget is shared across
+// every gateway node instead of being multiplied by the node count (#375).
+export const challengeLimiter: RequestHandler = rateLimit('auth_challenge', {
+  identifier: ipIdentifier,
 });
 
-export const verifyLimiter: RateLimitRequestHandler = rateLimit({
-  windowMs: 60 * 1000,
-  limit: 5,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: rateLimitedResponse,
+export const verifyLimiter: RequestHandler = rateLimit('auth_verify', {
+  identifier: ipIdentifier,
 });
 
 // Step 1: client requests a challenge nonce for a wallet address

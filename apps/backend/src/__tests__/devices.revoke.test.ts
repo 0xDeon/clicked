@@ -38,6 +38,7 @@ vi.mock('../db/index.js', () => ({
 vi.mock('../db/schema.js', () => ({
   devices: { id: 'id', userId: 'userId', revokedAt: 'revokedAt' },
   devicePrekeys: { deviceId: 'deviceId' },
+  wallets: { userId: 'userId', address: 'address', isPrimary: 'isPrimary' },
   conversationMembers: { userId: 'userId', conversationId: 'conversationId' },
   messages: {},
 }));
