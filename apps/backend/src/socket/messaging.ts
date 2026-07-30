@@ -348,163 +348,135 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       content: string;
       ciphertext?: string;
       contentType: 'file' | 'image' | 'video' | 'audio';
-      envelopes?: Array<{ recipientDeviceId: string; ciphertext: string }>;
-    }) => {
-      const { conversationId, messageId, fileId, content, ciphertext, contentType, envelopes } =
-        payload;
-      const deviceId = socket.auth!.deviceId;
-      const effectiveCiphertext = ciphertext ?? content;
+      messageId?: string;
+    };
 
-      if (!effectiveCiphertext?.trim()) {
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'Content (envelope ciphertext) must not be empty',
-        });
-        return;
-      }
-
-      const validContentTypes = ['file', 'image', 'video', 'audio'] as const;
-      if (!validContentTypes.includes(contentType)) {
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'contentType must be one of: file, image, video, audio',
-        });
-        return;
-      }
-
-      if (!Array.isArray(envelopes) || envelopes.length === 0) {
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'envelopes are required for file messages (they carry the encrypted file key)',
-        });
-        return;
-      }
-
-      const membership = await db.query.conversationMembers.findFirst({
-        where: and(
-          eq(conversationMembers.conversationId, conversationId),
-          eq(conversationMembers.userId, userId),
-        ),
+    if (!messageId) {
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'messageId is required',
       });
+      return;
+    }
 
-      if (!membership) {
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'Not a member of this conversation',
-        });
-        return;
-      }
-
-      const file = await db.query.files.findFirst({
-        where: eq(files.id, fileId),
+    if (!content?.trim()) {
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'Content (envelope ciphertext) must not be empty',
       });
+      return;
+    }
 
-      if (!file) {
-        socket.emit('error', { event: 'send_file_message', message: 'File not found' });
-        return;
-      }
+    const validContentTypes = ['file', 'image', 'video', 'audio'] as const;
+    if (!validContentTypes.includes(contentType)) {
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'contentType must be one of: file, image, video, audio',
+      });
+      return;
+    }
 
-      if (file.status !== 'ready') {
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'File is not ready for use',
-        });
-        return;
-      }
+    const membership = await db.query.conversationMembers.findFirst({
+      where: and(
+        eq(conversationMembers.conversationId, conversationId),
+        eq(conversationMembers.userId, userId),
+      ),
+    });
 
-      if (file.conversationId !== conversationId) {
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'File does not belong to this conversation',
-        });
-        return;
-      }
+    if (!membership) {
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'Not a member of this conversation',
+      });
+      return;
+    }
 
-      if (file.uploaderId !== userId) {
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'Access denied: you are not the uploader of this file',
-        });
-        return;
-      }
+    const existing = await db.query.messages.findFirst({
+      where: eq(messages.id, messageId),
+      columns: { createdAt: true },
+    });
 
-      // Idempotency: a client-supplied messageId that already exists is
-      // re-acked instead of re-inserted, exactly as in send_message.
-      if (messageId) {
-        const existing = await db.query.messages.findFirst({
-          where: eq(messages.id, messageId),
-          columns: { createdAt: true },
-        });
+    if (existing) {
+      socket.emit('message_ack', { messageId, createdAt: existing.createdAt });
+      return;
+    }
 
-        if (existing) {
-          socket.emit('message_ack', { messageId, createdAt: existing.createdAt });
-          return;
-        }
-      }
+    const file = await db.query.files.findFirst({
+      where: eq(files.id, fileId),
+    });
 
-      // Enforce full sibling-device coverage (#188).
-      const missingSiblings = await findMissingSiblingDeviceIds(userId, deviceId, envelopes);
-      if (missingSiblings.length > 0) {
-        socket.emit('error', {
-          event: 'device_set_mismatch',
-          message: `Missing envelopes for ${missingSiblings.length} sibling device(s)`,
-          missingDeviceIds: missingSiblings,
-        });
-        return;
-      }
+    if (!file) {
+      socket.emit('error', { event: 'send_file_message', message: 'File not found' });
+      return;
+    }
 
-      let message;
-      let recipientDeviceIds: string[] = [];
-      try {
-        message = await db.transaction(async (tx) => {
-          const [insertedMessage] = await tx
-            .insert(messages)
-            .values({
-              ...(messageId ? { id: messageId } : {}),
-              conversationId,
-              senderId: userId,
-              senderDeviceId: deviceId,
-              ciphertext: effectiveCiphertext.trim(),
-              contentType,
-              fileId,
-            })
-            .returning();
+    if (file.status !== 'ready') {
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'File is not ready for use',
+      });
+      return;
+    }
 
-          // Envelopes must land in the same transaction as the message row so
-          // a file message can never be committed without its per-device keys.
-          recipientDeviceIds = await insertMessageEnvelopes(
-            tx,
-            messageId ?? insertedMessage!.id,
-            envelopes,
-          );
+    if (file.conversationId !== conversationId) {
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'File does not belong to this conversation',
+      });
+      return;
+    }
 
-          return insertedMessage;
-        });
-      } catch (error) {
-        console.error('Transaction failed for file message:', error);
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'Failed to persist file message',
-        });
-        return;
-      }
+    if (file.uploaderId !== userId) {
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'Access denied: you are not the uploader of this file',
+      });
+      return;
+    }
 
-      if (message) {
-        socket.emit('message_ack', { messageId: message.id, createdAt: message.createdAt });
-        await deliverMessage(io, message, conversationId);
+    let message;
+    try {
+      message = await db.transaction(async (tx) => {
+        const [insertedMessage] = await tx
+          .insert(messages)
+          .values({
+            id: messageId,
+            conversationId,
+            senderId: userId,
+            ciphertext: content.trim(),
+            contentType,
+            fileId,
+          })
+          .returning();
 
-        const members = await db.query.conversationMembers.findMany({
-          where: eq(conversationMembers.conversationId, conversationId),
-          columns: { userId: true },
-        });
-        await invalidateConversationCaches(members.map((member) => member.userId));
+        return insertedMessage;
+      });
+    } catch (error) {
+      console.error('Transaction failed for file message:', error);
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'Failed to persist file message',
+      });
+      return;
+    }
 
-        // Same push mechanism as send_message: one coalesced, rate-limited
-        // push per device that has an envelope and is not currently connected.
-        void dispatchOfflinePush(conversationId, message.id, recipientDeviceIds);
-      }
-    },
-  );
+    if (message) {
+      socket.emit('message_ack', { messageId, createdAt: message.createdAt });
+      io.to(conversationId).emit('new_message', message);
+
+      const members = await db.query.conversationMembers.findMany({
+        where: eq(conversationMembers.conversationId, conversationId),
+        columns: { userId: true },
+      });
+      await invalidateConversationCaches(members.map((member) => member.userId));
+
+      sendPushForMessage({
+        conversationId,
+        messageId: message.id,
+        senderId: userId,
+      });
+    }
+  });
 
   // ── message_history ────────────────────────────────────────────────────────
   dispatcher.register('message_history', async (payload) => {

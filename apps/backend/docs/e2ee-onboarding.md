@@ -205,6 +205,36 @@ Important ordering guarantee:
 
 - a client must not attempt `POST /devices/:id/prekeys` until it has successfully completed `POST /auth/verify` and extracted the authenticated device id from the returned JWT context
 
+## Replay protection model
+
+Clicked applies replay defenses at three layers so retries stay safe while stale
+or duplicated payloads are rejected:
+
+1. **Auth nonce (`POST /auth/challenge` → `POST /auth/verify`)**
+   - each challenge nonce is bound to the wallet address that requested it
+   - the nonce is single-use and expires after 5 minutes
+   - `POST /auth/verify` consumes the nonce before signature verification, so a
+     captured auth payload cannot be replayed after the first successful submit
+2. **Socket dispatch envelopes (`dispatch`)**
+   - every envelope must include a unique `eventId` and a client `timestamp`
+   - the backend stores each accepted `eventId` for 24 hours and drops later
+     duplicates without re-running the handler
+   - the backend rejects envelopes older than 5 minutes or more than 30 seconds
+     in the future to narrow the replay window for intercepted payloads
+3. **Message persistence (`messageId`)**
+   - `POST /messages`, `send_message`, `edit_message`, and `send_file_message`
+     require a client-generated `messageId`
+   - if the same `messageId` arrives again, the backend treats it as an
+     idempotent retry and returns the original ack/created timestamp instead of
+     inserting a duplicate row
+
+Operational guidance:
+
+- retries must reuse the original `eventId`/`messageId`
+- new user actions must generate fresh ids
+- client clocks should stay reasonably accurate; overly stale or future-dated
+  dispatch envelopes are rejected even if their signature/auth data is valid
+
 ## How the device id is obtained after verify
 
 `POST /auth/verify` returns only:
