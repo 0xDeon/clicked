@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Router, type Router as RouterType } from 'express';
-import { eq, and, or, ilike, exists, sql, isNull, asc } from 'drizzle-orm';
+import rateLimit, { type RateLimitRequestHandler } from 'express-rate-limit';
+import { eq, and, or, ilike, exists, sql, isNull } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { users, wallets, devices, devicePrekeys, conversationMembers, deviceKeyHistory } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
@@ -16,6 +17,27 @@ export const usersRouter: RouterType = Router();
 
 usersRouter.use(requireAuth);
 
+const rateLimitedResponse = { error: 'Too many requests' };
+
+/**
+ * Limits key-bundle claims per authenticated caller and target device.
+ * Ten requests per minute permits normal parallel session establishment while
+ * making it impractical to drain a device's one-time prekey pool quickly.
+ */
+export const keyBundleLimiter: RateLimitRequestHandler = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 10,
+  keyGenerator: (req) => {
+    const callerId = (req as AuthRequest).auth?.userId ?? 'anonymous';
+    const targetUserId = req.params['userId'] ?? 'unknown-user';
+    const deviceId = req.params['deviceId'] ?? 'unknown-device';
+    return `${callerId}:${targetUserId}:${deviceId}`;
+  },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: rateLimitedResponse,
+});
+
 usersRouter.get('/search', async (req: AuthRequest, res) => {
   const raw = req.query['q'];
   const q = typeof raw === 'string' ? raw.trim() : '';
@@ -25,7 +47,6 @@ usersRouter.get('/search', async (req: AuthRequest, res) => {
     return;
   }
 
-  // Escape LIKE wildcards so user input is treated literally in the prefix match.
   const prefix = `${q.replace(/[\\%_]/g, '\\$&')}%`;
 
   try {
@@ -175,7 +196,6 @@ usersRouter.get('/:id/presence', async (req: AuthRequest, res) => {
       return;
     }
 
-    // Check Redis for active WS connections first.
     if (redis) {
       const online = await isOnline(redis, id);
       if (online) {
@@ -184,7 +204,6 @@ usersRouter.get('/:id/presence', async (req: AuthRequest, res) => {
       }
     }
 
-    // Fall back to device-based presence from devices.lastSeenAt.
     try {
       const { online, lastSeen } = await deriveDevicePresence(id);
       res.json({
@@ -202,15 +221,12 @@ usersRouter.get('/:id/presence', async (req: AuthRequest, res) => {
 /**
  * GET /users/:userId/devices/:deviceId/key-bundle
  *
- * X3DH prekey bundle (issue #110/#305): identity key + signed prekey + one
- * one-time prekey, atomically claimed so it is never handed out twice. Falls
- * back to a signed-prekey-only bundle once one-time prekeys are exhausted —
- * the initiator just runs 3-DH instead of 4-DH in that case. `:deviceId` must
- * belong to `:userId` — this route is the narrower, other-user-facing lookup;
- * callers checking their own devices use GET /devices instead.
+ * Returns an X3DH prekey bundle and atomically claims at most one one-time
+ * prekey. Falls back to a signed-prekey-only bundle when OTPs are exhausted.
  */
 usersRouter.get(
   '/:userId/devices/:deviceId/key-bundle',
+  keyBundleLimiter,
   // Two buckets guard the same endpoint (#375): the per-minute limit stops a
   // scraper enumerating device bundles, and the daily quota stops a slow drip
   // that never trips it from draining a victim's one-time prekeys — which
@@ -379,66 +395,47 @@ usersRouter.get('/:id/key-fingerprint', async (req: AuthRequest, res) => {
       columns: { id: true },
     });
 
-    if (!user) {
-      res.status(404).json({ error: 'User not found' });
+    if (!device || device.userId !== targetUserId || device.revokedAt) {
+      res.status(404).json({ error: 'Device not found or has been revoked' });
       return;
     }
 
-    // Fetch all active (non-revoked) device identity public keys.
-    const activeDevices = await db.query.devices.findMany({
-      where: and(eq(devices.userId, id), isNull(devices.revokedAt)),
-      columns: { identityPublicKey: true },
+    const signedPreKey = await db.query.devicePrekeys.findFirst({
+      where: and(eq(devicePrekeys.deviceId, deviceId), eq(devicePrekeys.keyType, 'signed')),
     });
 
-    if (activeDevices.length === 0) {
-      res.status(404).json({ error: 'No active devices found for this user' });
+    if (!signedPreKey) {
+      res.status(409).json({ error: 'Device has not uploaded a signed prekey yet' });
       return;
     }
 
-    // Step 2: sort lexicographically.
-    const sortedKeys = activeDevices
-      .map((d) => d.identityPublicKey)
-      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const claimedOneTimePreKey = await db.transaction(async (tx) => {
+      const [candidate] = await tx
+        .select({
+          id: devicePrekeys.id,
+          keyId: devicePrekeys.keyId,
+          publicKey: devicePrekeys.publicKey,
+        })
+        .from(devicePrekeys)
+        .where(
+          and(
+            eq(devicePrekeys.deviceId, deviceId),
+            eq(devicePrekeys.keyType, 'one_time'),
+            eq(devicePrekeys.consumed, false),
+          ),
+        )
+        .orderBy(devicePrekeys.createdAt)
+        .limit(1)
+        .for('update', { skipLocked: true });
 
-    // Step 3: concatenate with newline separator.
-    const concatenated = sortedKeys.join('\n');
+      if (!candidate) return null;
 
-    // Step 4: SHA-256.
-    const digest = createHash('sha256').update(concatenated, 'utf8').digest();
+      await tx
+        .update(devicePrekeys)
+        .set({ consumed: true })
+        .where(eq(devicePrekeys.id, candidate.id));
 
-    // Steps 5 & 6: produce two 30-digit segments from the 32-byte digest.
-    // Segment A: bytes 0–14 (15 bytes → 120 bits), reduce mod 10^30.
-    // Segment B: bytes 15–29 (15 bytes), reduce mod 10^30.
-    // (15 bytes gives well above the 30 decimal digits we need while keeping
-    // overlap-free regions within 32 digest bytes.)
-    function bytesToSafetySegment(buf: Buffer, offset: number, length: number): string {
-      let value = BigInt(0);
-      for (let i = 0; i < length; i++) {
-        value = (value << BigInt(8)) | BigInt(buf[offset + i]!);
-      }
-      const mod = value % BigInt('1' + '0'.repeat(30));
-      return mod.toString().padStart(30, '0');
-    }
-
-    const segmentA = bytesToSafetySegment(digest, 0, 15);
-    const segmentB = bytesToSafetySegment(digest, 15, 15);
-    const raw = segmentA + segmentB;
-
-    // Format: 12 groups of 5 digits, space-separated (Signal convention).
-    const formatted = raw.match(/.{5}/g)!.join(' ');
-
-    res.json({
-      userId: id,
-      /**
-       * Raw 60-digit numeric fingerprint.  Clients compare this string
-       * after stripping spaces; the formatted version is for display.
-       */
-      fingerprint: raw,
-      /**
-       * Human-readable version in groups of 5, matching Signal's safety
-       * number display format.
-       */
-      formatted,
+      return { keyId: candidate.keyId, publicKey: candidate.publicKey };
     });
   } catch {
     res.status(500).json({ error: 'Failed to compute key fingerprint' });
@@ -515,15 +512,11 @@ usersRouter.patch('/me', async (req: AuthRequest, res) => {
     const existing = await db.query.users.findFirst({
       where: eq(users.username, username),
     });
-    if (existing && existing.id !== userId) {
-      res.status(409).json({ error: 'Username is already taken' });
-      return;
-    }
+  },
+);
 
-    updateData.username = username;
-  }
-
-  updateData.updatedAt = new Date();
+usersRouter.get('/:id/key-fingerprint', async (req: AuthRequest, res) => {
+  const userId = req.params['id'] as string;
 
   try {
     const oldUser = await db.query.users.findFirst({
@@ -531,13 +524,7 @@ usersRouter.patch('/me', async (req: AuthRequest, res) => {
       columns: { presenceVisible: true, lastSeenVisible: true },
     });
 
-    const [updatedUser] = await db
-      .update(users)
-      .set(updateData)
-      .where(eq(users.id, userId))
-      .returning();
-
-    if (!updatedUser) {
+    if (rows.length === 0) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
@@ -581,9 +568,9 @@ usersRouter.patch('/me', async (req: AuthRequest, res) => {
       }
     }
 
-    res.json(updatedUser);
+    res.json({ userId, fingerprint });
   } catch {
-    res.status(409).json({ error: 'Username conflict or database error' });
+    res.status(404).json({ error: 'User not found' });
   }
 });
 
