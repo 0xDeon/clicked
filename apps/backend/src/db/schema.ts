@@ -246,6 +246,51 @@ export const devicePrekeys = pgTable(
   ],
 );
 
+// ─── MLS key packages (#365) ─────────────────────────────────────────────────
+//
+// Every device publishes a stock of MLS KeyPackages so any group member can add
+// it to a group without the device being online. A KeyPackage is *public* key
+// material only — the matching HPKE init private key never leaves the device,
+// so nothing secret is stored here.
+//
+// A KeyPackage is single-use by spec: reusing one across two Add proposals
+// breaks forward secrecy for the joining device. `consumed` therefore flips to
+// true inside the same transaction that hands the package out (never deleted,
+// so audit history survives), mirroring how one-time prekeys are claimed in
+// `device_prekeys`.
+//
+// `packageHash` is the SHA-256 of the base64 package. It exists because the
+// package itself can be up to 4 KiB — too large for a btree unique index — but
+// idempotent re-uploads still need a conflict target for dedupe.
+
+export const mlsKeyPackages = pgTable(
+  'mls_key_packages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    deviceId: uuid('device_id')
+      .notNull()
+      .references(() => devices.id, { onDelete: 'cascade' }),
+    // IANA MLS cipher suite id (e.g. 1 = MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519).
+    // A device may publish packages for several suites; group adds must match.
+    cipherSuite: integer('cipher_suite').notNull(),
+    // Base64 of the TLS-serialised MLS KeyPackage. Public material only.
+    keyPackage: text('key_package').notNull(),
+    // SHA-256 (hex) of `keyPackage` — dedupe key, see note above.
+    packageHash: text('package_hash').notNull(),
+    expiresAt: timestamp('expires_at'),
+    consumed: boolean('consumed').notNull().default(false),
+    consumedAt: timestamp('consumed_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('mls_key_packages_device_hash_idx').on(table.deviceId, table.packageHash),
+    // Fast claim of the next available package for a device + suite.
+    index('mls_key_packages_available_idx')
+      .on(table.deviceId, table.cipherSuite, table.createdAt)
+      .where(sql`${table.consumed} = false`),
+  ],
+);
+
 // ─── Token transfers (#46) ────────────────────────────────────────────────────
 //
 // One row per Soroban `transfer` event the listener (services/stellarListener.ts)
@@ -434,12 +479,17 @@ export const tokenTransfersRelations = relations(tokenTransfers, ({ one }) => ({
 export const devicesRelations = relations(devices, ({ one, many }) => ({
   user: one(users, { fields: [devices.userId], references: [users.id] }),
   prekeys: many(devicePrekeys),
+  mlsKeyPackages: many(mlsKeyPackages),
   messages: many(messages),
   pushSubscriptions: many(pushSubscriptions),
 }));
 
 export const devicePrekeysRelations = relations(devicePrekeys, ({ one }) => ({
   device: one(devices, { fields: [devicePrekeys.deviceId], references: [devices.id] }),
+}));
+
+export const mlsKeyPackagesRelations = relations(mlsKeyPackages, ({ one }) => ({
+  device: one(devices, { fields: [mlsKeyPackages.deviceId], references: [devices.id] }),
 }));
 
 export const pushSubscriptionsRelations = relations(pushSubscriptions, ({ one }) => ({
@@ -483,3 +533,5 @@ export type Device = typeof devices.$inferSelect;
 export type NewDevice = typeof devices.$inferInsert;
 export type DevicePrekey = typeof devicePrekeys.$inferSelect;
 export type NewDevicePrekey = typeof devicePrekeys.$inferInsert;
+export type MlsKeyPackage = typeof mlsKeyPackages.$inferSelect;
+export type NewMlsKeyPackage = typeof mlsKeyPackages.$inferInsert;
