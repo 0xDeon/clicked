@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Router, type Router as RouterType } from 'express';
-import { eq, and, or, ilike, exists, sql, isNull } from 'drizzle-orm';
+import { eq, and, or, ilike, exists, sql, isNull, count } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { users, wallets, devices, devicePrekeys, conversationMembers } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
@@ -8,6 +8,7 @@ import { redis } from '../lib/redis.js';
 import { isOnline, deriveDevicePresence } from '../services/presence.js';
 import { getSocketServer } from '../lib/socket.js';
 import { conversationRoom } from '../services/roomManager.js';
+import { signalPrekeysLowIfNeeded } from '../services/prekeyLowSignal.js';
 
 export const usersRouter: RouterType = Router();
 
@@ -217,7 +218,7 @@ usersRouter.get('/:userId/devices/:deviceId/key-bundle', async (req: AuthRequest
     return;
   }
 
-  const claimedOneTimePreKey = await db.transaction(async (tx) => {
+  const claimed = await db.transaction(async (tx) => {
     const [candidate] = await tx
       .select({
         id: devicePrekeys.id,
@@ -243,8 +244,32 @@ usersRouter.get('/:userId/devices/:deviceId/key-bundle', async (req: AuthRequest
       .set({ consumed: true })
       .where(eq(devicePrekeys.id, candidate.id));
 
-    return { keyId: candidate.keyId, publicKey: candidate.publicKey };
+    // Counted inside the claiming transaction so `remaining` reflects this
+    // consumption and cannot race a concurrent fetch into a wrong value.
+    const [remainingRow] = await tx
+      .select({ total: count() })
+      .from(devicePrekeys)
+      .where(
+        and(
+          eq(devicePrekeys.deviceId, deviceId),
+          eq(devicePrekeys.keyType, 'one_time'),
+          eq(devicePrekeys.consumed, false),
+        ),
+      );
+
+    return {
+      oneTimePreKey: { keyId: candidate.keyId, publicKey: candidate.publicKey },
+      remaining: remainingRow?.total ?? 0,
+    };
   });
+
+  const claimedOneTimePreKey = claimed?.oneTimePreKey ?? null;
+
+  // Fire-and-forget: the device that owns this bundle is told to replenish
+  // once per threshold crossing. Never blocks or fails the bundle response.
+  if (claimed) {
+    void signalPrekeysLowIfNeeded(deviceId, claimed.remaining);
+  }
 
   res.json({
     deviceId: device.id,

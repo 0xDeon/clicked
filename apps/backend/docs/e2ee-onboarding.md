@@ -505,6 +505,50 @@ Required guarantees for this path:
 - signed prekey must still be present if the device remains reachable for session bootstrap
 - client must treat this as lower-entropy/fallback first-contact establishment and should trigger recipient prekey replenishment UX when possible
 
+### C) Low-prekey warning before exhaustion
+
+Waiting for exhaustion means every sender in the meantime is downgraded to
+3-DH, so the backend warns the owning device *before* it runs dry.
+
+Two surfaces expose this:
+
+1. `GET /devices` returns `oneTimePreKeysRemaining` per device — a count of
+   unconsumed one-time prekeys, `0` when the device has none. Poll-free clients
+   can read this at startup to decide whether to top up.
+2. A `prekeys_low` Socket.IO event is emitted after a bundle fetch drops a
+   device below the threshold (default `20`, overridable with the
+   `PREKEY_LOW_THRESHOLD` env var).
+
+Event payload:
+
+```json
+{
+  "deviceId": "uuid",
+  "oneTimePreKeysRemaining": 19,
+  "threshold": 20
+}
+```
+
+Delivery and debounce semantics:
+
+- emitted only to the `device:{deviceId}` room — the owning device, on whichever
+  gateway holds its socket. No other device on the account sees it, since only
+  the owner can generate replacement prekeys.
+- fired **at most once per threshold crossing**. A device that keeps serving
+  bundles while below the threshold is told once, not once per fetch.
+- the signal re-arms when `POST /devices/:id/prekeys` brings the device back to
+  or above the threshold, so a later crossing warns again. Revoking a device
+  also re-arms it (its prekeys are deleted).
+- a device that is offline when the threshold is crossed misses the event; it
+  should read `oneTimePreKeysRemaining` from `GET /devices` on reconnect.
+
+Client behavior:
+
+- on `prekeys_low`, generate and upload a fresh batch via
+  `POST /devices/:id/prekeys`, respecting the `200` cap
+- the upload response echoes `oneTimePreKeysRemaining` so the client can confirm
+  it is back above the threshold without a follow-up `GET /devices`
+
 ## End-to-end ordering contract
 
 For compatibility with the current implementation, clients should rely on this ordering:
@@ -534,8 +578,10 @@ For compatibility with the current implementation, clients should rely on this o
 - device registration/listing/revocation/prekey upload: `apps/backend/src/routes/devices.ts`
 - recipient key-bundle fetch: `apps/backend/src/routes/users.ts` (`GET /users/:userId/devices/:deviceId/key-bundle`)
 - E2EE-related schema: `apps/backend/src/db/schema.ts` (`devices`, `devicePrekeys`)
+- low-prekey signal + debounce latch: `apps/backend/src/services/prekeyLowSignal.ts`
 - prekey route tests: `apps/backend/src/__tests__/devices.prekeys.test.ts`
 - key-bundle route tests: `apps/backend/src/__tests__/users.bundle.test.ts`
+- low-prekey signal tests: `apps/backend/src/__tests__/prekeysLow.test.ts`
 
 ## Gaps to close for full first-DM support
 
