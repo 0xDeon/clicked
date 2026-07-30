@@ -20,6 +20,11 @@ type UserProfile = {
   username: string | null;
   avatarUrl: string | null;
   wallets: Wallet[];
+  presenceVisible: boolean;
+  lastSeenVisible: boolean;
+  sendReadReceipts: boolean;
+  allowDirectMessages: boolean;
+  allowGroupInvites: boolean;
 };
 
 const USERNAME_PATTERN = /^[a-zA-Z0-9_]{3,30}$/;
@@ -80,6 +85,11 @@ export default function ProfilePage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [showSuccessToast, setShowSuccessToast] = useState(false);
+  const [presenceVisible, setPresenceVisible] = useState(false);
+  const [lastSeenVisible, setLastSeenVisible] = useState(false);
+  const [sendReadReceipts, setSendReadReceipts] = useState(false);
+  const [allowDirectMessages, setAllowDirectMessages] = useState(true);
+  const [allowGroupInvites, setAllowGroupInvites] = useState(false);
 
   const fetchProfile = useCallback(async () => {
     if (!token) {
@@ -103,6 +113,11 @@ export default function ProfilePage() {
       setProfile(data);
       setUsername(data.username ?? '');
       setAvatarUrl(data.avatarUrl ?? '');
+      setPresenceVisible(data.presenceVisible);
+      setLastSeenVisible(data.lastSeenVisible);
+      setSendReadReceipts(data.sendReadReceipts);
+      setAllowDirectMessages(data.allowDirectMessages);
+      setAllowGroupInvites(data.allowGroupInvites);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : 'Failed to load user profile.');
     } finally {
@@ -170,6 +185,11 @@ export default function ProfilePage() {
         body: JSON.stringify({
           username: nextUsername,
           avatarUrl: nextAvatarUrl || null,
+          presenceVisible,
+          lastSeenVisible,
+          sendReadReceipts,
+          allowDirectMessages,
+          allowGroupInvites,
         }),
       });
       const data = await response.json().catch(() => null);
@@ -185,6 +205,11 @@ export default function ProfilePage() {
               ...currentProfile,
               username: nextUsername,
               avatarUrl: nextAvatarUrl || null,
+              presenceVisible,
+              lastSeenVisible,
+              sendReadReceipts,
+              allowDirectMessages,
+              allowGroupInvites,
             }
           : currentProfile,
       );
@@ -242,7 +267,7 @@ export default function ProfilePage() {
       <div className="mb-8">
         <h2 className="text-3xl font-bold tracking-tight">Profile Settings</h2>
         <p className="mt-1 text-sm text-[var(--foreground)]/45">
-          Manage your username, avatar, and connected Stellar wallets.
+          Manage your username, avatar, privacy preferences, and connected Stellar wallets.
         </p>
       </div>
 
@@ -344,6 +369,76 @@ export default function ProfilePage() {
                   {fieldErrors.avatarUrl}
                 </p>
               ) : null}
+            </div>
+
+            <div className="space-y-4 rounded-lg border border-[var(--border)] bg-[var(--background)]/30 p-4">
+              <div>
+                <h4 className="text-sm font-semibold text-[var(--foreground)]">Privacy controls</h4>
+                <p className="mt-1 text-xs text-[var(--foreground)]/45">
+                  Keep metadata private by default and opt into what other people can see.
+                </p>
+              </div>
+
+              {[
+                {
+                  id: 'presenceVisible',
+                  label: 'Show online presence',
+                  description: 'Let other users see when you are currently online.',
+                  checked: presenceVisible,
+                  onChange: setPresenceVisible,
+                },
+                {
+                  id: 'lastSeenVisible',
+                  label: 'Share last seen',
+                  description: 'Expose your last active timestamp when you are offline.',
+                  checked: lastSeenVisible,
+                  onChange: setLastSeenVisible,
+                },
+                {
+                  id: 'sendReadReceipts',
+                  label: 'Send read receipts',
+                  description: 'Allow the server to fan out read receipts after you open messages.',
+                  checked: sendReadReceipts,
+                  onChange: setSendReadReceipts,
+                },
+                {
+                  id: 'allowDirectMessages',
+                  label: 'Allow direct messages',
+                  description: 'Permit new one-to-one conversations to be created with your account.',
+                  checked: allowDirectMessages,
+                  onChange: setAllowDirectMessages,
+                },
+                {
+                  id: 'allowGroupInvites',
+                  label: 'Allow group invites',
+                  description: 'Permit other members to add you to group conversations.',
+                  checked: allowGroupInvites,
+                  onChange: setAllowGroupInvites,
+                },
+              ].map((setting) => (
+                <label
+                  key={setting.id}
+                  htmlFor={setting.id}
+                  className="flex items-start justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--card)]/40 px-4 py-3"
+                >
+                  <div>
+                    <p className="text-sm font-medium text-[var(--foreground)]">{setting.label}</p>
+                    <p className="mt-1 text-xs text-[var(--foreground)]/45">
+                      {setting.description}
+                    </p>
+                  </div>
+                  <input
+                    id={setting.id}
+                    type="checkbox"
+                    checked={setting.checked}
+                    onChange={(event) => {
+                      setting.onChange(event.target.checked);
+                      setFieldErrors((errors) => ({ ...errors, form: undefined }));
+                    }}
+                    className="mt-1 h-4 w-4 rounded border-[var(--border)] bg-[var(--background)] text-[var(--accent)]"
+                  />
+                </label>
+              ))}
             </div>
 
             {fieldErrors.form ? (

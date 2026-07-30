@@ -20,6 +20,8 @@ import {
   setOnline,
   unregisterPresenceSocket,
   deriveDevicePresence,
+  scheduleOfflineBroadcast,
+  cancelPendingOfflineBroadcast,
 } from './services/presence.js';
 import { startHeartbeatTimer, clearHeartbeatTimer } from './services/heartbeat.js';
 import { isDeviceRevoked, startDeviceRevocationListener } from './services/deviceRevocation.js';
@@ -186,20 +188,26 @@ io.on('connection', async (socket: AuthSocket) => {
     await registerPresenceSocket(appRedis, userId, deviceId, socket.id);
     await cleanupStaleSockets(io, appRedis, userId, socket.id);
 
+    // #345 — a device reconnecting cancels any offline broadcast still
+    // pending from a very recent disconnect (same user, any device). When
+    // that happens the reconnect is invisible to observers too: no
+    // offline/online pair, since nothing was ever announced offline.
+    const cancelledPendingOffline = cancelPendingOfflineBroadcast(userId);
+
     const becameOnline = await setOnline(appRedis, userId, deviceId);
     const connectUser = await db.query.users.findFirst({
       where: eq(users.id, userId),
-      columns: { presenceVisible: true },
+      columns: { presenceVisible: true, lastSeenVisible: true },
     });
     const presenceVisible = connectUser?.presenceVisible ?? true;
-    if (becameOnline && presenceVisible) {
+    if (becameOnline && presenceVisible && !cancelledPendingOffline) {
       for (const m of memberships) {
         io.to(conversationRoom(m.conversationId)).emit('user_online', { userId });
         io.to(conversationRoom(m.conversationId)).emit('presence_update', {
           userId,
           online: true,
           status: 'online',
-          lastSeen: Date.now(),
+          ...(lastSeenVisible ? { lastSeen: Date.now() } : {}),
         });
         // Also emit to direct conversation room for backward compatibility
         io.to(m.conversationId).emit('user_online', { userId });
@@ -207,7 +215,7 @@ io.on('connection', async (socket: AuthSocket) => {
           userId,
           online: true,
           status: 'online',
-          lastSeen: Date.now(),
+          ...(lastSeenVisible ? { lastSeen: Date.now() } : {}),
         });
       }
       await recordPresenceForCoMembers(
@@ -285,38 +293,45 @@ io.on('connection', async (socket: AuthSocket) => {
       if (fullyOffline) {
         const user = await db.query.users.findFirst({
           where: eq(users.id, userId),
-          columns: { presenceVisible: true },
+          columns: { presenceVisible: true, lastSeenVisible: true },
         });
         const presenceVisible = user?.presenceVisible ?? true;
+        const lastSeenVisible = user?.lastSeenVisible ?? false;
 
         if (presenceVisible) {
-          const memberships = await db.query.conversationMembers.findMany({
-            where: eq(conversationMembers.userId, userId),
-            columns: { conversationId: true },
+          // #345 — defer the broadcast by the configured grace window instead
+          // of announcing offline immediately. A reconnect within the window
+          // cancels this via cancelPendingOfflineBroadcast() in the connect
+          // handler above, so a brief blip never produces an offline/online pair.
+          scheduleOfflineBroadcast(userId, async () => {
+            const memberships = await db.query.conversationMembers.findMany({
+              where: eq(conversationMembers.userId, userId),
+              columns: { conversationId: true },
+            });
+
+            const { lastSeen } = await deriveDevicePresence(userId);
+
+            for (const m of memberships) {
+              io.to(conversationRoom(m.conversationId)).emit('user_offline', { userId });
+              io.to(conversationRoom(m.conversationId)).emit('presence_update', {
+                userId,
+                online: false,
+                ...(lastSeen ? { lastSeen } : {}),
+              });
+              // Also emit to direct conversation room for backward compatibility
+              io.to(m.conversationId).emit('user_offline', { userId });
+              io.to(m.conversationId).emit('presence_update', {
+                userId,
+                online: false,
+                ...(lastSeen ? { lastSeen } : {}),
+              });
+            }
+            await recordPresenceForCoMembers(
+              userId,
+              false,
+              memberships.map((m) => m.conversationId),
+            );
           });
-
-          const { lastSeen } = await deriveDevicePresence(userId);
-
-          for (const m of memberships) {
-            io.to(conversationRoom(m.conversationId)).emit('user_offline', { userId });
-            io.to(conversationRoom(m.conversationId)).emit('presence_update', {
-              userId,
-              online: false,
-              ...(lastSeen ? { lastSeen } : {}),
-            });
-            // Also emit to direct conversation room for backward compatibility
-            io.to(m.conversationId).emit('user_offline', { userId });
-            io.to(m.conversationId).emit('presence_update', {
-              userId,
-              online: false,
-              ...(lastSeen ? { lastSeen } : {}),
-            });
-          }
-          await recordPresenceForCoMembers(
-            userId,
-            false,
-            memberships.map((m) => m.conversationId),
-          );
         }
       }
     }

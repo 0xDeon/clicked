@@ -4,6 +4,7 @@ import { EventEmitter } from 'events';
 // ── Mock DB ────────────────────────────────────────────────────────────────
 
 const mockFindFirst = vi.fn();
+const mockUserFindFirst = vi.fn();
 const mockUpdate = vi.fn();
 
 const mockFindMany = vi.fn();
@@ -13,6 +14,7 @@ vi.mock('../db/index.js', () => ({
     query: {
       conversationMembers: { findFirst: mockFindFirst, findMany: mockFindMany },
       messages: { findFirst: mockFindFirst },
+      users: { findFirst: mockUserFindFirst },
     },
     update: mockUpdate,
   },
@@ -22,6 +24,7 @@ vi.mock('../db/schema.js', () => ({
   conversationMembers: {},
   conversations: {},
   messages: {},
+  users: {},
 }));
 
 // Keep these unit tests isolated from the CI Redis service so the
@@ -109,6 +112,7 @@ describe('message_read socket event', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFindMany.mockResolvedValue([]);
+    mockUserFindFirst.mockResolvedValue({ sendReadReceipts: true });
   });
 
   it('persists last_read_message_id and broadcasts read_receipt', async () => {
@@ -137,6 +141,36 @@ describe('message_read socket event', () => {
     expect(mockUpdate).toHaveBeenCalled();
     expect(setFn).toHaveBeenCalledWith({ lastReadMessageId });
     expect(io.to).toHaveBeenCalledWith(conversationId);
+  });
+
+  it('suppresses read_receipt fan-out when the user disables read receipts', async () => {
+    const userId = 'user-hidden';
+    const conversationId = 'conv-privacy';
+    const lastReadMessageId = 'msg-privacy';
+
+    mockFindFirst
+      .mockResolvedValueOnce({ id: 'membership-1', userId, conversationId })
+      .mockResolvedValueOnce({ id: lastReadMessageId, conversationId });
+    mockUserFindFirst.mockResolvedValueOnce({ sendReadReceipts: false });
+
+    const setFn = vi.fn().mockReturnThis();
+    const whereFn = vi.fn().mockResolvedValue(undefined);
+    mockUpdate.mockReturnValue({ set: setFn });
+    setFn.mockReturnValue({ where: whereFn });
+
+    const socket = makeSocket(userId);
+    const io = makeIo();
+
+    const { registerMessagingHandlers } = await import('../socket/messaging.js');
+    registerMessagingHandlers(io as never, socket as never);
+
+    const handler = (socket as EventEmitter).listeners('message_read')[0] as (
+      p: unknown,
+    ) => Promise<void>;
+    await handler({ conversationId, lastReadMessageId });
+
+    expect(mockUpdate).toHaveBeenCalled();
+    expect(io.to).not.toHaveBeenCalled();
   });
 
   it('emits error when caller is not a conversation member', async () => {

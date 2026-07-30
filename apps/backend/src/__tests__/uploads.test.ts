@@ -22,6 +22,7 @@ const mockMemberFindFirst = vi.fn();
 const mockFileFindFirst = vi.fn();
 const mockInsert = vi.fn();
 const mockUpdate = vi.fn();
+const mockVerifyFileIntegrity = vi.fn();
 
 vi.mock('../db/index.js', () => ({
   db: {
@@ -52,10 +53,8 @@ vi.mock('../lib/storage.js', () => ({
   generateStorageKey: vi.fn(() => 'uploads/conv-123/abc123def456'),
 }));
 
-const mockHeadObject = vi.fn();
-
-vi.mock('../lib/objectStore.js', () => ({
-  getObjectStore: () => ({ headObject: mockHeadObject }),
+vi.mock('../lib/fileIntegrity.js', () => ({
+  verifyFileIntegrity: mockVerifyFileIntegrity,
 }));
 
 vi.mock('../middleware/auth.js', () => ({
@@ -98,6 +97,14 @@ function mockInsertReturning(fileId = 'file-uuid-001') {
   });
 }
 
+function mockSuccessfulIntegrityCheck() {
+  mockVerifyFileIntegrity.mockResolvedValue({
+    valid: true,
+    expectedHash: 'abc123',
+    computedHash: 'abc123',
+  });
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('POST /uploads — issue #226', () => {
@@ -105,6 +112,7 @@ describe('POST /uploads — issue #226', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockSuccessfulIntegrityCheck();
     app = await buildApp();
   });
 
@@ -199,6 +207,7 @@ describe('POST /uploads/:fileId/confirm', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockSuccessfulIntegrityCheck();
     app = await buildApp();
   });
 
@@ -207,8 +216,7 @@ describe('POST /uploads/:fileId/confirm', () => {
       id: 'file-001',
       uploaderId: 'user-abc',
       status: 'pending',
-      storageKey: 'uploads/conv-123/abc123def456',
-      size: 1024,
+      sha256: 'abc123',
     });
     mockHeadObject.mockResolvedValueOnce({ exists: true, size: 1024 });
     mockUpdate.mockReturnValueOnce({
@@ -216,7 +224,7 @@ describe('POST /uploads/:fileId/confirm', () => {
       where: vi.fn().mockResolvedValueOnce(undefined),
     });
 
-    const res = await request(app).post('/uploads/file-001/confirm');
+    const res = await request(app).post('/uploads/file-001/confirm').send({ sha256: 'abc123' });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ fileId: 'file-001', status: 'ready' });
     expect(mockHeadObject).toHaveBeenCalledWith('uploads/conv-123/abc123def456');
@@ -233,8 +241,9 @@ describe('POST /uploads/:fileId/confirm', () => {
       id: 'file-001',
       uploaderId: 'someone-else',
       status: 'pending',
+      sha256: 'abc123',
     });
-    const res = await request(app).post('/uploads/file-001/confirm');
+    const res = await request(app).post('/uploads/file-001/confirm').send({ sha256: 'abc123' });
     expect(res.status).toBe(403);
   });
 
@@ -243,8 +252,9 @@ describe('POST /uploads/:fileId/confirm', () => {
       id: 'file-001',
       uploaderId: 'user-abc',
       status: 'ready',
+      sha256: 'abc123',
     });
-    const res = await request(app).post('/uploads/file-001/confirm');
+    const res = await request(app).post('/uploads/file-001/confirm').send({ sha256: 'abc123' });
     expect(res.status).toBe(409);
   });
 
@@ -253,56 +263,70 @@ describe('POST /uploads/:fileId/confirm', () => {
       id: 'file-001',
       uploaderId: 'user-abc',
       status: 'deleted',
+      sha256: 'abc123',
     });
-    const res = await request(app).post('/uploads/file-001/confirm');
+    const res = await request(app).post('/uploads/file-001/confirm').send({ sha256: 'abc123' });
     expect(res.status).toBe(409);
   });
 
-  it('returns 422 with an "object not found" error when the object is missing from storage', async () => {
+  it('returns 422 when sha256 is missing on confirm', async () => {
     mockFileFindFirst.mockResolvedValueOnce({
       id: 'file-001',
       uploaderId: 'user-abc',
       status: 'pending',
-      storageKey: 'uploads/conv-123/missing',
-      size: 1024,
+      sha256: 'abc123',
     });
-    mockHeadObject.mockResolvedValueOnce({ exists: false });
 
-    const res = await request(app).post('/uploads/file-001/confirm');
+    const res = await request(app).post('/uploads/file-001/confirm').send({});
     expect(res.status).toBe(422);
-    expect(res.body.error).toMatch(/not found/i);
-    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(res.body).toMatchObject({ error: 'sha256 is required' });
   });
 
-  it('returns 422 with a "size mismatch" error when the object size does not match the declared size', async () => {
+  it('returns 422 when sha256 does not match the pending file', async () => {
     mockFileFindFirst.mockResolvedValueOnce({
       id: 'file-001',
       uploaderId: 'user-abc',
       status: 'pending',
-      storageKey: 'uploads/conv-123/mismatch',
-      size: 1024,
+      sha256: 'abc123',
     });
-    mockHeadObject.mockResolvedValueOnce({ exists: true, size: 2048 });
 
-    const res = await request(app).post('/uploads/file-001/confirm');
+    const res = await request(app).post('/uploads/file-001/confirm').send({ sha256: 'mismatch' });
     expect(res.status).toBe(422);
-    expect(res.body.error).toMatch(/size mismatch/i);
-    expect(res.body).toMatchObject({ expectedSize: 1024, actualSize: 2048 });
-    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(res.body).toMatchObject({ error: 'sha256 mismatch' });
   });
 
-  it('does not flip status to ready when verification fails', async () => {
+  it('returns 422 and marks file deleted when storage hash verification fails', async () => {
+    const setSpy = vi.fn().mockReturnThis();
+    const whereSpy = vi.fn().mockResolvedValueOnce(undefined);
+
     mockFileFindFirst.mockResolvedValueOnce({
       id: 'file-001',
       uploaderId: 'user-abc',
       status: 'pending',
-      storageKey: 'uploads/conv-123/missing',
-      size: 1024,
+      sha256: 'abc123',
+      storageKey: 'uploads/conv-123/abc123def456',
     });
-    mockHeadObject.mockResolvedValueOnce({ exists: false });
+    mockVerifyFileIntegrity.mockResolvedValueOnce({
+      valid: false,
+      error: 'Hash mismatch',
+      expectedHash: 'abc123',
+      computedHash: 'wrong',
+    });
+    mockUpdate.mockReturnValueOnce({
+      set: setSpy,
+      where: whereSpy,
+    });
 
-    await request(app).post('/uploads/file-001/confirm');
-    expect(mockUpdate).not.toHaveBeenCalled();
+    const res = await request(app).post('/uploads/file-001/confirm').send({ sha256: 'abc123' });
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe('File integrity verification failed');
+    expect(setSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'deleted',
+        deletedAt: expect.any(Date),
+      }),
+    );
   });
 });
 
@@ -311,6 +335,7 @@ describe('Thumbnail handling — issue #230', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockSuccessfulIntegrityCheck();
     app = await buildApp();
   });
 

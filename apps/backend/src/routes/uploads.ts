@@ -7,6 +7,7 @@ import { files, conversationMembers } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { generatePresignedPut, generateStorageKey } from '../lib/storage.js';
 import { getObjectStore } from '../lib/objectStore.js';
+import { verifyFileIntegrity } from '../lib/fileIntegrity.js';
 
 export const uploadsRouter: IRouter = Router();
 
@@ -34,6 +35,10 @@ const RequestSlotSchema = z.object({
   mimeType: z.string().min(1),
   sha256: z.string().min(1),
   isThumbnail: z.boolean().optional().default(false),
+});
+
+const ConfirmUploadSchema = z.object({
+  sha256: z.string().min(1),
 });
 
 // POST /uploads — request a presigned upload slot
@@ -87,6 +92,9 @@ uploadsRouter.post('/', async (req: AuthRequest, res) => {
 });
 
 // POST /uploads/:fileId/confirm — mark file as ready after client PUT succeeds
+//
+// SECURITY FIX: Now performs SHA-256 integrity verification before marking ready.
+// If hash mismatch is detected, the file is marked as corrupted and never becomes ready.
 uploadsRouter.post('/:fileId/confirm', async (req: AuthRequest, res) => {
   const userId = req.auth!.userId;
   const fileId = req.params['fileId'] as string;

@@ -9,6 +9,27 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { loadEnv, type Env } from '../config.js';
+import { getLocalObjectStore } from './localObjectStore.js';
+
+/** Shape shared by the real S3-backed `ObjectStore` and the dev-only `LocalDiskObjectStore` (#330). */
+export interface ObjectStoreLike {
+  putObject(
+    key: string,
+    body: NonNullable<PutObjectCommandInput['Body']>,
+    contentType?: string,
+  ): Promise<void>;
+  // Loose on purpose: the real S3 SDK response and the fs-backed store's
+  // plain `{ Body, ContentType }` shape differ in exact optionality, and
+  // nothing in this codebase consumes `getObject()` polymorphically today.
+  getObject(key: string): Promise<unknown>;
+  deleteObject(key: string): Promise<void>;
+  getPresignedPutUrl(
+    key: string,
+    contentType: string | undefined,
+    ttlSeconds: number,
+  ): Promise<string>;
+  getPresignedGetUrl(key: string, ttlSeconds: number): Promise<string>;
+}
 
 export type ObjectStoreConfig = Pick<
   Env,
@@ -37,7 +58,7 @@ export function createObjectStoreClient(config: ObjectStoreConfig): S3Client {
   });
 }
 
-export class ObjectStore {
+export class ObjectStore implements ObjectStoreLike {
   constructor(
     private readonly client: S3Client,
     private readonly bucket: string,
@@ -135,11 +156,24 @@ export function createObjectStore(config: ObjectStoreConfig): ObjectStore {
 // (index.ts -> app.ts -> routes -> lib/storage.ts -> index.ts) and ensures
 // there's exactly one S3 client/bucket pair for the whole process (#161/#168
 // previously had three independent, inconsistently-configured ones).
-let singleton: ObjectStore | null = null;
+//
+// Outside production this resolves to a `LocalDiskObjectStore` (#330) instead
+// of a real S3 client, so dev/test/CI never need a reachable S3/MinIO
+// endpoint — every caller of `getObjectStore()` (storage.ts, fileCleanup.ts)
+// transparently gets a real, working local implementation.
+let singleton: ObjectStoreLike | null = null;
 
-export function getObjectStore(): ObjectStore {
+export function getObjectStore(): ObjectStoreLike {
   if (!singleton) {
-    singleton = createObjectStore(loadEnv());
+    singleton =
+      process.env['NODE_ENV'] === 'production'
+        ? createObjectStore(loadEnv())
+        : getLocalObjectStore();
   }
   return singleton;
+}
+
+/** Test-only: clears the memoized singleton so env changes take effect. */
+export function resetObjectStoreForTests(): void {
+  singleton = null;
 }

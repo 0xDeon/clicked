@@ -3,9 +3,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { API_BASE_URL } from '@/lib/api';
 
-// Loaded at build time — must be set in the environment.
-const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ?? '';
-
 // Web Push requires the VAPID key as a Uint8Array in base64url encoding.
 function vapidKeyToUint8Array(base64url: string): Uint8Array<ArrayBuffer> {
   const padding = '='.repeat((4 - (base64url.length % 4)) % 4);
@@ -16,6 +13,26 @@ function vapidKeyToUint8Array(base64url: string): Uint8Array<ArrayBuffer> {
     bytes[i] = raw.charCodeAt(i);
   }
   return bytes;
+}
+
+/**
+ * Issue #349 — the VAPID public key comes from the backend, not a build-time
+ * env var. It must match the private key the backend signs pushes with;
+ * configuring it separately on the frontend risks silent drift between the
+ * two. Returns null (and lets the caller skip push registration) whenever
+ * the backend has no key configured or the request fails.
+ */
+export async function fetchVapidPublicKey(token: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/push/vapid-public-key`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { configured: boolean; vapidPublicKey: string | null };
+    return data.configured && data.vapidPublicKey ? data.vapidPublicKey : null;
+  } catch {
+    return null;
+  }
 }
 
 async function postSubscription(sub: PushSubscription, token: string): Promise<void> {
@@ -44,6 +61,7 @@ export type PushSubscriptionState = {
 
 export function usePushSubscription(token: string | null): PushSubscriptionState {
   const [registration, setRegistration] = useState<ServiceWorkerRegistration | null>(null);
+  const [vapidPublicKey, setVapidPublicKey] = useState<string | null>(null);
   const [permission, setPermission] = useState<NotificationPermission>(() => {
     if (typeof window !== 'undefined' && 'Notification' in window) {
       return Notification.permission;
@@ -72,9 +90,23 @@ export function usePushSubscription(token: string | null): PushSubscriptionState
     };
   }, []);
 
+  // Fetch the backend-configured VAPID public key once a token is available.
+  useEffect(() => {
+    if (!token) return;
+
+    let active = true;
+    fetchVapidPublicKey(token).then((key) => {
+      if (active) setVapidPublicKey(key);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [token]);
+
   // Re-use an existing subscription if one already exists.
   useEffect(() => {
-    if (!registration || !token || !VAPID_PUBLIC_KEY) return;
+    if (!registration || !token || !vapidPublicKey) return;
     if (Notification.permission !== 'granted') return;
 
     let active = true;
@@ -88,10 +120,10 @@ export function usePushSubscription(token: string | null): PushSubscriptionState
     return () => {
       active = false;
     };
-  }, [registration, token]);
+  }, [registration, token, vapidPublicKey]);
 
   const requestSubscription = useCallback(async () => {
-    if (!registration || !token || !VAPID_PUBLIC_KEY) return;
+    if (!registration || !token || !vapidPublicKey) return;
 
     const result = await Notification.requestPermission();
     setPermission(result);
@@ -102,13 +134,13 @@ export function usePushSubscription(token: string | null): PushSubscriptionState
     if (!sub) {
       sub = await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: vapidKeyToUint8Array(VAPID_PUBLIC_KEY),
+        applicationServerKey: vapidKeyToUint8Array(vapidPublicKey),
       });
     }
 
     await postSubscription(sub, token);
     setSubscribed(true);
-  }, [registration, token]);
+  }, [registration, token, vapidPublicKey]);
 
   return { permission, subscribed, requestSubscription };
 }

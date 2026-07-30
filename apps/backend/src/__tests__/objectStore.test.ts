@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   DeleteObjectCommand,
   GetObjectCommand,
@@ -6,7 +6,13 @@ import {
   HeadObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
-import { createObjectStore, createObjectStoreClient } from '../lib/objectStore.js';
+import {
+  createObjectStore,
+  createObjectStoreClient,
+  getObjectStore,
+  resetObjectStoreForTests,
+} from '../lib/objectStore.js';
+import { LocalDiskObjectStore } from '../lib/localObjectStore.js';
 
 const config = {
   OBJECT_STORE_ENDPOINT: 'http://localhost:9000',
@@ -119,5 +125,36 @@ describe('ObjectStore', () => {
 
       await expect(store.headObject('uploads/conv-1/key')).rejects.toThrow('network error');
     });
+  });
+});
+
+describe('getObjectStore() environment selection (#330)', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    resetObjectStoreForTests();
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    resetObjectStoreForTests();
+  });
+
+  it('resolves to the local-disk store outside production', () => {
+    process.env['NODE_ENV'] = 'test';
+    expect(getObjectStore()).toBeInstanceOf(LocalDiskObjectStore);
+  });
+
+  it('resolves to the real S3-backed store in production', () => {
+    process.env['NODE_ENV'] = 'production';
+    // getObjectStore() validates the full env via loadEnv() in production —
+    // supply everything EnvSchema requires, not just OBJECT_STORE_*.
+    process.env['REDIS_URL'] = 'redis://localhost:6379';
+    process.env['PORT'] = '3001';
+    process.env['TOKEN_TRANSFER_CONTRACT_ID'] = 'CONTRACT123';
+
+    const store = getObjectStore();
+    expect(store).not.toBeInstanceOf(LocalDiskObjectStore);
+    expect(store.constructor.name).toBe('ObjectStore');
   });
 });
