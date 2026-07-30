@@ -518,7 +518,10 @@ async function emitDeviceChangeEvent(userId: string, change: 'device_added' | 'd
             conversationId: m.conversationId,
             senderId: userId,
             contentType: 'system',
-            ciphertext: JSON.stringify({ userId, change }),
+            // System metadata is plaintext and structured — it belongs in
+            // `systemPayload`, not in the E2EE `ciphertext` column.
+            ciphertext: null,
+            systemPayload: { userId, change },
           })
           .returning();
         return insertedMessage;

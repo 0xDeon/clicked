@@ -5,6 +5,11 @@ export type MessageLike = {
   contentType: string;
   createdAt: Date;
   ciphertext?: string | null;
+  /**
+   * Structured, server-generated metadata for `contentType === 'system'` rows.
+   * Always null for every other content type.
+   */
+  systemPayload?: { userId: string; change: string } | null;
   deletedAt?: Date | null;
   envelopes?: Array<{ ciphertext: string }>;
   [key: string]: any;
@@ -19,6 +24,16 @@ export function serializeMessage<T extends MessageLike>(
   const { deletedAt, envelopes, ciphertext: baseCiphertext, ...rest } = message;
 
   if (deletedAt) {
+    return {
+      ...rest,
+      ciphertext: null,
+    };
+  }
+
+  // System messages carry their content in `systemPayload`, never in
+  // `ciphertext`. They are always readable by every client, so they must not
+  // be flagged `unavailable` just because `ciphertext` is null.
+  if (message.contentType === 'system') {
     return {
       ...rest,
       ciphertext: null,

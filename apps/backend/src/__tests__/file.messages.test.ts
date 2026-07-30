@@ -35,10 +35,7 @@ const mockMemberFindFirst = vi.fn();
 const mockMemberFindMany = vi.fn();
 const mockMessageFindFirst = vi.fn();
 const mockFileFindFirst = vi.fn();
-const mockMessageFindFirst = vi.fn();
 const mockDevicesFindMany = vi.fn();
-const mockInsert = vi.fn();
-const mockFindMany = vi.fn();
 const mockUpdate = vi.fn();
 
 /** Every insert(table).values(rows) call, so envelope rows can be asserted. */
@@ -192,9 +189,6 @@ const MESSAGE_ID = 'msg-client-supplied';
 // treats it as an opaque string. The file's symmetric encryption key must
 // NEVER appear here — it only ever lives inside `envelopes[].ciphertext`.
 const ENVELOPE_CIPHERTEXT = 'encrypted:{"fileId":"file-abc","fileName":"photo.jpg"}';
-const FILE_KEY_ENVELOPES = [
-  { recipientDeviceId: RECIPIENT_DEVICE_ID, ciphertext: 'sealed:SUPER_SECRET_KEY_NEVER_STORED' },
-];
 
 function readyFile(
   overrides: Partial<{
@@ -378,11 +372,14 @@ describe('send_file_message — per-device envelopes (#337)', () => {
     const io = makeIo();
     const handler = await getHandler(socket, io);
 
+    // A non-empty envelopes array satisfies the file-key requirement, but it
+    // doesn't cover the sender's sibling device — that's still a mismatch.
     await handler({
       conversationId: CONVERSATION_ID,
       fileId: FILE_ID,
       content: ENVELOPE_CIPHERTEXT,
       contentType: 'image',
+      envelopes: [{ recipientDeviceId: 'device-unrelated', ciphertext: 'cipher-for-unrelated' }],
     });
 
     const errors = socket.emitted.filter((e) => e.event === 'error');
@@ -391,7 +388,7 @@ describe('send_file_message — per-device envelopes (#337)', () => {
     expect(mockInsert).not.toHaveBeenCalled();
   });
 
-  it('does not require envelopes for revoked sibling devices', async () => {
+  it('does not require sibling coverage for revoked sibling devices', async () => {
     // fetchSiblingDeviceIds filters revoked devices at the DB level, so a
     // sender whose only other device is revoked sees no siblings at all.
     mockDevicesFindMany.mockResolvedValue([]);
@@ -489,50 +486,23 @@ describe('send_file_message — delivery pipeline (#337)', () => {
 });
 
 describe('send_file_message — validation and access control', () => {
-  it('rejects when sender is not a member of the conversation', async () => {
-    mockMemberFindFirst.mockResolvedValue(undefined);
-
-    await handler(basePayload({ messageId: '' }));
-
-    expect(socket.emit).toHaveBeenCalledWith(
-      'error',
-      expect.objectContaining({
-        event: 'send_file_message',
-        message: expect.stringContaining('messageId'),
-      }),
-    );
-    expect(mockInsert).not.toHaveBeenCalled();
-  });
-
   it('rejects when envelopes are missing (the file key has nowhere safe to travel)', async () => {
-    mockMemberFindFirst.mockResolvedValueOnce({
-      id: 'm1',
-      userId: SENDER_ID,
-      conversationId: CONVERSATION_ID,
-    });
-
     const socket = makeSocket(SENDER_ID);
     const io = makeIo();
     const handler = await getHandler(socket, io);
 
     await handler({
       conversationId: CONVERSATION_ID,
+      fileId: FILE_ID,
+      content: ENVELOPE_CIPHERTEXT,
+      contentType: 'image',
     });
-    mockFileFindFirst.mockResolvedValueOnce(readyFile());
-    // fetchSiblingDeviceIds finds one sibling device the payload didn't cover.
-    mockDevicesFindMany.mockResolvedValueOnce([{ id: 'device-sibling', userId: SENDER_ID }]);
-
-    const socket = makeSocket(SENDER_ID);
-    const io = makeIo();
-    const handler = await getHandler(socket, io);
-
-    await handler(basePayload());
 
     expect(socket.emit).toHaveBeenCalledWith(
       'error',
       expect.objectContaining({
-        event: 'device_set_mismatch',
-        missingDeviceIds: ['device-sibling'],
+        event: 'send_file_message',
+        message: expect.stringContaining('envelopes are required'),
       }),
     );
     expect(mockInsert).not.toHaveBeenCalled();
@@ -545,7 +515,13 @@ describe('send_file_message — validation and access control', () => {
     const io = makeIo();
     const handler = await getHandler(socket, io);
 
-    await handler(basePayload());
+    await handler({
+      conversationId: CONVERSATION_ID,
+      fileId: FILE_ID,
+      content: ENVELOPE_CIPHERTEXT,
+      contentType: 'image',
+      envelopes: [{ recipientDeviceId: 'device-recipient', ciphertext: 'sealed-file-key' }],
+    });
 
     expect(socket.emit).toHaveBeenCalledWith(
       'error',

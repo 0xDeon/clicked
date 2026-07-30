@@ -129,26 +129,30 @@ export const messages = pgTable(
     }),
     contentType: text('content_type').notNull().default('text'),
     ciphertext: text('ciphertext'),
+    // Structured, server-generated metadata for `content_type = 'system'` rows
+    // (device add/revoke, membership changes). Kept separate from `ciphertext`
+    // so genuine E2EE ciphertext — opaque, per-device-encrypted — is never
+    // conflated with plaintext system metadata. Null for every non-system row;
+    // enforced by `messages_system_payload_check` below.
+    systemPayload: jsonb('system_payload').$type<{ userId: string; change: string } | null>(),
     fileId: uuid('file_id').references(() => files.id, { onDelete: 'set null' }),
     editsMessageId: uuid('edits_message_id').references((): AnyPgColumn => messages.id, {
       onDelete: 'set null',
     }),
-    // Structured payload for system events (member joined/left, device
-    // added/revoked, conversation renamed, MLS epoch change, etc). These are
-    // routing/UX metadata, not secret — unlike `ciphertext`, this is stored
-    // in the clear. Only ever set when contentType='system'; enforced below.
-    // System rows are ordinary rows in this table, so they fall out of the
-    // existing (conversationId, createdAt) ordering/index for free — no
-    // separate interleaving logic needed.
-    systemPayload: jsonb('system_payload'),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     deletedAt: timestamp('deleted_at'),
   },
   (table) => [
     index('messages_conversation_created_idx').on(table.conversationId, table.createdAt),
+    // System messages carry structured metadata, never ciphertext; everything
+    // else carries ciphertext (or an envelope), never a system payload.
+    // Supersedes the looser `messages_system_payload_only_on_system_type`
+    // constraint (#398), which only forbade a payload on non-system rows —
+    // it didn't require a system row to actually have one, or forbid a
+    // system row from also carrying ciphertext.
     check(
-      'messages_system_payload_only_on_system_type',
-      sql`${table.contentType} = 'system' OR ${table.systemPayload} IS NULL`,
+      'messages_system_payload_check',
+      sql`${table.contentType} <> 'system' OR (${table.ciphertext} IS NULL AND ${table.systemPayload} IS NOT NULL)`,
     ),
   ],
 );

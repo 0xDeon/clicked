@@ -58,6 +58,8 @@ type Message = {
   content?: string | null;
   ciphertext?: string | null;
   contentType?: string | null;
+  /** Structured metadata for system messages; null for every other type. */
+  systemPayload?: { userId?: string; change?: string } | null;
   createdAt: string;
   sender?: Sender;
   unavailable?: boolean;
@@ -163,10 +165,22 @@ function writeVerification(userId: string, fingerprint: string) {
   return record;
 }
 
+const SYSTEM_EVENT_LABELS: Record<string, string> = {
+  device_added: 'A new device was added',
+  device_revoked: 'A device was revoked',
+};
+
+function systemMessageBody(message: Message) {
+  const change = message.systemPayload?.change;
+  if (change) return SYSTEM_EVENT_LABELS[change] ?? 'System event';
+  return message.content ?? 'System event';
+}
+
 function messageBody(message: Message) {
   if (message.unavailable) return 'Encrypted message unavailable on this device';
-  if (message.contentType === 'system')
-    return message.content ?? message.ciphertext ?? 'System event';
+  // System messages carry structured metadata in `systemPayload`; `ciphertext`
+  // is always null for them and must never be rendered as body text.
+  if (message.contentType === 'system') return systemMessageBody(message);
   if (message.contentType === 'file' && message.filePayload) {
     return `📎 ${message.filePayload.fileName}`;
   }
