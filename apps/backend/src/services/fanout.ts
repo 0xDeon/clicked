@@ -95,3 +95,52 @@ export async function fanoutMessage(
 
   return { ok: true, message };
 }
+
+// ─── Group MLS fan-out (#370) ──────────────────────────────────────────────────
+//
+// For group conversations using MLS the sender produces a single ciphertext
+// (encrypted to the MLS group key) rather than one envelope per recipient
+// device.  The server stores that ciphertext in `messages.ciphertext` and
+// delivers the same row to every active member device via their socket room.
+// No `messageEnvelopes` rows are created — MLS epoch keys handle per-device
+// decryption client-side.
+
+export interface GroupMlsFanoutSuccess {
+  ok: true;
+  message: Message;
+}
+
+export interface GroupMlsFanoutNotMember {
+  ok: false;
+  error: 'not_member';
+}
+
+export type GroupMlsFanoutResult = GroupMlsFanoutSuccess | GroupMlsFanoutNotMember;
+
+/**
+ * Persists a group MLS message and returns it for socket broadcast.
+ *
+ * @param newMessage - Message row to insert; `ciphertext` must be the MLS
+ *   group ciphertext (non-null). No per-device envelopes are inserted.
+ * @param senderId - The user sending; must be a current conversation member.
+ */
+export async function fanoutGroupMlsMessage(
+  newMessage: NewMessage,
+  senderId: string,
+): Promise<GroupMlsFanoutResult> {
+  const membership = await db.query.conversationMembers.findFirst({
+    where: and(
+      eq(conversationMembers.conversationId, newMessage.conversationId),
+      eq(conversationMembers.userId, senderId),
+    ),
+    columns: { id: true },
+  });
+
+  if (!membership) {
+    return { ok: false, error: 'not_member' };
+  }
+
+  const [message] = await db.insert(messages).values(newMessage).returning();
+
+  return { ok: true, message: message! };
+}

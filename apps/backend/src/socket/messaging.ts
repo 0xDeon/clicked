@@ -29,6 +29,7 @@ import { conversationRoom } from '../services/roomManager.js';
 import { handleHeartbeat } from '../services/heartbeat.js';
 import { cleanupStaleSockets } from '../services/presence.js';
 import { EventDispatcher } from './dispatcher.js';
+import { checkFirstContactLimit } from '../services/rateLimit.js';
 
 const PAGE_SIZE = 30;
 
@@ -881,6 +882,18 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     }
 
     const allMembers = Array.from(new Set([userId, ...requestedMembers]));
+
+    // #378: throttle first-contact DM spam (e.g. mass unsolicited DMs)
+    if (type === 'dm') {
+      const dmCheck = await checkFirstContactLimit(redis, userId);
+      if (!dmCheck.allowed) {
+        socket.emit('error', {
+          event: 'create_conversation',
+          message: 'Too many new conversations. Please wait before starting another.',
+        });
+        return;
+      }
+    }
 
     const [conversation] = await db.insert(conversations).values({ type, name }).returning();
 

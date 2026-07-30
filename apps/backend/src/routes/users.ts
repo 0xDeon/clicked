@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { Router, type Router as RouterType } from 'express';
-import { eq, and, or, ilike, exists, sql, isNull } from 'drizzle-orm';
+import { eq, and, or, ilike, exists, sql, isNull, asc } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { users, wallets, devices, devicePrekeys, conversationMembers } from '../db/schema.js';
+import { users, wallets, devices, devicePrekeys, conversationMembers, deviceKeyHistory } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { redis } from '../lib/redis.js';
@@ -585,4 +585,41 @@ usersRouter.patch('/me', async (req: AuthRequest, res) => {
   } catch {
     res.status(409).json({ error: 'Username conflict or database error' });
   }
+});
+
+// ── GET /users/:id/key-history (#379) ─────────────────────────────────────────
+// Returns the append-only device-key-change log for any user so that clients
+// can detect silent key swaps and display safety-number warnings.
+usersRouter.get('/:id/key-history', async (req: AuthRequest, res) => {
+  const targetUserId = req.params['id'];
+
+  if (!targetUserId) {
+    res.status(400).json({ error: 'User id is required' });
+    return;
+  }
+
+  const target = await db.query.users.findFirst({
+    where: eq(users.id, targetUserId),
+    columns: { id: true },
+  });
+
+  if (!target) {
+    res.status(404).json({ error: 'User not found' });
+    return;
+  }
+
+  const history = await db.query.deviceKeyHistory.findMany({
+    where: eq(deviceKeyHistory.userId, targetUserId),
+    orderBy: [asc(deviceKeyHistory.recordedAt)],
+    columns: {
+      id: true,
+      deviceId: true,
+      previousKey: true,
+      newKey: true,
+      changeReason: true,
+      recordedAt: true,
+    },
+  });
+
+  res.json({ userId: targetUserId, keyHistory: history });
 });
