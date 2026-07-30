@@ -334,15 +334,39 @@ conversationsRouter.post('/:id/members', async (req: AuthRequest, res) => {
   }
 
   try {
-    const [newMembership] = await db
-      .insert(conversationMembers)
-      .values({ conversationId, userId: newUserId })
-      .returning();
+    // The membership row and its group-control event are written together
+    // (#369). A member committed without the epoch bump that announces them
+    // would leave every other client unaware of someone who can now decrypt —
+    // exactly the divergence the control log exists to prevent.
+    const result = await db.transaction(async (tx) => {
+      const [newMembership] = await tx
+        .insert(conversationMembers)
+        .values({ conversationId, userId: newUserId })
+        .returning();
 
-    if (!newMembership) {
+      if (!newMembership) {
+        return null;
+      }
+
+      const appended = await appendGroupControlEvent(
+        {
+          conversationId,
+          eventType: 'member_added',
+          actorUserId: requesterId,
+          targetUserId: newUserId,
+        },
+        tx,
+      );
+
+      return { newMembership, appended };
+    });
+
+    if (!result) {
       res.status(500).json({ error: 'Failed to add conversation member' });
       return;
     }
+
+    const { newMembership, appended } = result;
 
     const members = await db.query.conversationMembers.findMany({
       where: eq(conversationMembers.conversationId, conversationId),
@@ -356,6 +380,9 @@ conversationsRouter.post('/:id/members', async (req: AuthRequest, res) => {
       conversationId,
     });
 
+    // Fanned out only once the transaction has committed, so a client that
+    // reacts to the event always finds the member already present.
+    broadcastGroupControlEvent(appended);
     // Group membership defines who can decrypt what from here on, so the
     // change is a security event for both parties: the requester who made it
     // and the account that was added (#376).
@@ -373,6 +400,8 @@ conversationsRouter.post('/:id/members', async (req: AuthRequest, res) => {
       conversationId: newMembership.conversationId,
       userId: newMembership.userId,
       joinedAt: newMembership.joinedAt,
+      epoch: appended.event.epoch,
+      sequence: appended.event.sequence,
     });
   } catch {
     res.status(409).json({ error: 'Database conflict or validation error' });
@@ -781,10 +810,21 @@ conversationsRouter.delete('/:id/leave', async (req: AuthRequest, res) => {
     columns: { userId: true },
   });
 
-  if (members.length === 1) {
+  const isLastMember = members.length === 1;
+
+  if (isLastMember) {
+    // The conversation row — and with it the whole control log — goes away,
+    // so there is nobody left to reconcile and nothing to reconcile against.
     await db.delete(conversations).where(eq(conversations.id, conversationId));
-  } else {
-    await db
+    await invalidateConversationCaches(members.map((member) => member.userId));
+    res.status(204).send();
+    return;
+  }
+
+  // Departure and its epoch bump commit together, so remaining members can
+  // never observe a membership set that no control event accounts for (#369).
+  const appended = await db.transaction(async (tx) => {
+    await tx
       .delete(conversationMembers)
       .where(
         and(
@@ -792,10 +832,21 @@ conversationsRouter.delete('/:id/leave', async (req: AuthRequest, res) => {
           eq(conversationMembers.userId, userId),
         ),
       );
-  }
+
+    return appendGroupControlEvent(
+      {
+        conversationId,
+        eventType: 'member_left',
+        actorUserId: userId,
+        targetUserId: userId,
+      },
+      tx,
+    );
+  });
 
   await invalidateConversationCaches(members.map((member) => member.userId));
 
+  broadcastGroupControlEvent(appended);
   void recordAuditEvent({
     action: 'group_member_removed',
     ...actorFromRequest(req),
@@ -811,6 +862,163 @@ conversationsRouter.delete('/:id/leave', async (req: AuthRequest, res) => {
   });
 
   res.status(204).send();
+});
+
+// ── Group control log (#369) ─────────────────────────────────────────────────
+//
+// The ordered sequence of everything that changed group membership or the
+// epoch. A client that missed commits — offline, or reconnected mid-change —
+// replays from its last applied sequence and converges on the current epoch.
+
+// GET /conversations/:id/epoch — cheap "am I behind?" check.
+conversationsRouter.get('/:id/epoch', async (req: AuthRequest, res) => {
+  const userId = req.auth!.userId;
+  const conversationId = req.params['id'] as string | undefined;
+
+  if (!conversationId) {
+    res.status(400).json({ error: 'Conversation id is required' });
+    return;
+  }
+
+  const membership = await db.query.conversationMembers.findFirst({
+    where: and(
+      eq(conversationMembers.conversationId, conversationId),
+      eq(conversationMembers.userId, userId),
+    ),
+  });
+
+  if (!membership) {
+    res.status(403).json({ error: 'Not a member of this conversation' });
+    return;
+  }
+
+  const state = await getGroupState(conversationId);
+
+  if (!state) {
+    res.status(404).json({ error: 'Conversation not found' });
+    return;
+  }
+
+  res.json({ conversationId, ...state });
+});
+
+// GET /conversations/:id/group-control?sinceSequence=&limit=
+// Ordered, gap-free catch-up. `sinceSequence` is exclusive, so replaying with
+// the same cursor never re-applies an event the client already has.
+conversationsRouter.get('/:id/group-control', async (req: AuthRequest, res) => {
+  const userId = req.auth!.userId;
+  const conversationId = req.params['id'] as string | undefined;
+
+  if (!conversationId) {
+    res.status(400).json({ error: 'Conversation id is required' });
+    return;
+  }
+
+  const rawSince = req.query['sinceSequence'];
+  const sinceSequence = rawSince === undefined ? 0 : Number.parseInt(String(rawSince), 10);
+
+  if (!Number.isFinite(sinceSequence) || sinceSequence < 0) {
+    res.status(400).json({ error: 'sinceSequence must be a non-negative integer' });
+    return;
+  }
+
+  const rawLimit = Number.parseInt(req.query['limit'] as string, 10);
+  const limit =
+    Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(rawLimit, MAX_GROUP_CONTROL_PAGE_SIZE)
+      : DEFAULT_GROUP_CONTROL_PAGE_SIZE;
+
+  const membership = await db.query.conversationMembers.findFirst({
+    where: and(
+      eq(conversationMembers.conversationId, conversationId),
+      eq(conversationMembers.userId, userId),
+    ),
+  });
+
+  if (!membership) {
+    res.status(403).json({ error: 'Not a member of this conversation' });
+    return;
+  }
+
+  const state = await getGroupState(conversationId);
+
+  if (!state) {
+    res.status(404).json({ error: 'Conversation not found' });
+    return;
+  }
+
+  const { events, hasMore } = await readGroupControlEvents({
+    conversationId,
+    sinceSequence,
+    limit,
+  });
+
+  const lastSequence = events[events.length - 1]?.sequence ?? sinceSequence;
+
+  res.json({
+    conversationId,
+    // Where the group is now, so a client knows whether this page finished
+    // the catch-up even before it looks at `hasMore`.
+    currentEpoch: state.epoch,
+    latestSequence: state.latestSequence,
+    events: events.map(serializeGroupControlEvent),
+    // Feed straight back as `sinceSequence` for the next page.
+    nextSequence: lastSequence,
+    hasMore,
+  });
+});
+
+// POST /conversations/:id/group-control — submit an MLS commit for sequencing.
+// The payload is opaque: the server orders group control, it does not
+// interpret it.
+conversationsRouter.post('/:id/group-control', async (req: AuthRequest, res) => {
+  const userId = req.auth!.userId;
+  const conversationId = req.params['id'] as string | undefined;
+
+  if (!conversationId) {
+    res.status(400).json({ error: 'Conversation id is required' });
+    return;
+  }
+
+  const { payload } = req.body as { payload?: unknown };
+
+  if (typeof payload !== 'string' || payload.length === 0) {
+    res.status(400).json({ error: 'payload must be a non-empty string' });
+    return;
+  }
+
+  if (Buffer.byteLength(payload, 'utf8') > MAX_GROUP_CONTROL_PAYLOAD_BYTES) {
+    res.status(413).json({
+      error: `payload exceeds ${MAX_GROUP_CONTROL_PAYLOAD_BYTES} bytes`,
+    });
+    return;
+  }
+
+  const membership = await db.query.conversationMembers.findFirst({
+    where: and(
+      eq(conversationMembers.conversationId, conversationId),
+      eq(conversationMembers.userId, userId),
+    ),
+  });
+
+  if (!membership) {
+    res.status(403).json({ error: 'Not a member of this conversation' });
+    return;
+  }
+
+  try {
+    const appended = await appendGroupControlEvent({
+      conversationId,
+      eventType: 'commit',
+      actorUserId: userId,
+      payload,
+    });
+    broadcastGroupControlEvent(appended);
+
+    res.status(201).json(serializeGroupControlEvent(appended.event));
+  } catch {
+    res.status(500).json({ error: 'Failed to append group control event' });
+  }
 });
 
 // ── GET /conversations/:id/devices ─────────────────────────────────────────────

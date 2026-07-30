@@ -47,6 +47,10 @@ export const conversations = pgTable('conversations', {
   type: conversationTypeEnum('type').notNull().default('dm'),
   name: text('name'),
   avatarUrl: text('avatar_url'),
+  // Group epoch (#369). Incremented by every group-control event; the row is
+  // also the serialization point for sequencing those events, so a concurrent
+  // join and leave can never be assigned the same sequence number.
+  epoch: integer('epoch').notNull().default(0),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
@@ -457,6 +461,17 @@ export const conversationsRelations = relations(conversations, ({ many }) => ({
   transfers: many(tokenTransfers),
   treasuryProposals: many(treasuryProposals),
   files: many(files),
+  groupControlEvents: many(groupControlEvents),
+}));
+
+export const groupControlEventsRelations = relations(groupControlEvents, ({ one }) => ({
+  conversation: one(conversations, {
+    fields: [groupControlEvents.conversationId],
+    references: [conversations.id],
+  }),
+  actor: one(users, { fields: [groupControlEvents.actorUserId], references: [users.id] }),
+  target: one(users, { fields: [groupControlEvents.targetUserId], references: [users.id] }),
+  message: one(messages, { fields: [groupControlEvents.messageId], references: [messages.id] }),
 }));
 
 export const filesRelations = relations(files, ({ one, many }) => ({
