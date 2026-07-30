@@ -4,6 +4,7 @@ import { eq, and, or, ilike, exists, sql, isNull } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { users, wallets, devices, devicePrekeys, conversationMembers } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
+import { rateLimit } from '../middleware/rateLimit.js';
 import { redis } from '../lib/redis.js';
 import { isOnline, deriveDevicePresence } from '../services/presence.js';
 import { getSocketServer } from '../lib/socket.js';
@@ -207,27 +208,65 @@ usersRouter.get('/:id/presence', async (req: AuthRequest, res) => {
  * belong to `:userId` — this route is the narrower, other-user-facing lookup;
  * callers checking their own devices use GET /devices instead.
  */
-usersRouter.get('/:userId/devices/:deviceId/key-bundle', async (req: AuthRequest, res) => {
-  const targetUserId = req.params['userId'] as string;
-  const deviceId = req.params['deviceId'] as string;
+usersRouter.get(
+  '/:userId/devices/:deviceId/key-bundle',
+  // Two buckets guard the same endpoint (#375): the per-minute limit stops a
+  // scraper enumerating device bundles, and the daily quota stops a slow drip
+  // that never trips it from draining a victim's one-time prekeys — which
+  // would silently downgrade every new session with that device from 4-DH to
+  // 3-DH. Charged to the caller, not the target, so one abusive account cannot
+  // deny service to everyone fetching that device.
+  rateLimit(['key_bundle', 'key_bundle_daily']),
+  async (req: AuthRequest, res) => {
+    const targetUserId = req.params['userId'] as string;
+    const deviceId = req.params['deviceId'] as string;
 
-  const device = await db.query.devices.findFirst({
-    where: eq(devices.id, deviceId),
-  });
+    const device = await db.query.devices.findFirst({
+      where: eq(devices.id, deviceId),
+    });
 
-  if (!device || device.userId !== targetUserId || device.revokedAt) {
-    res.status(404).json({ error: 'Device not found or has been revoked' });
-    return;
-  }
+    if (!device || device.userId !== targetUserId || device.revokedAt) {
+      res.status(404).json({ error: 'Device not found or has been revoked' });
+      return;
+    }
 
-  const signedPreKey = await db.query.devicePrekeys.findFirst({
-    where: and(eq(devicePrekeys.deviceId, deviceId), eq(devicePrekeys.keyType, 'signed')),
-  });
+    const signedPreKey = await db.query.devicePrekeys.findFirst({
+      where: and(eq(devicePrekeys.deviceId, deviceId), eq(devicePrekeys.keyType, 'signed')),
+    });
 
-  if (!signedPreKey) {
-    res.status(409).json({ error: 'Device has not uploaded a signed prekey yet' });
-    return;
-  }
+    if (!signedPreKey) {
+      res.status(409).json({ error: 'Device has not uploaded a signed prekey yet' });
+      return;
+    }
+
+    const claimedOneTimePreKey = await db.transaction(async (tx) => {
+      const [candidate] = await tx
+        .select({
+          id: devicePrekeys.id,
+          keyId: devicePrekeys.keyId,
+          publicKey: devicePrekeys.publicKey,
+        })
+        .from(devicePrekeys)
+        .where(
+          and(
+            eq(devicePrekeys.deviceId, deviceId),
+            eq(devicePrekeys.keyType, 'one_time'),
+            eq(devicePrekeys.consumed, false),
+          ),
+        )
+        .orderBy(devicePrekeys.createdAt)
+        .limit(1)
+        .for('update', { skipLocked: true });
+
+      if (!candidate) return null;
+
+      await tx
+        .update(devicePrekeys)
+        .set({ consumed: true })
+        .where(eq(devicePrekeys.id, candidate.id));
+
+      return { keyId: candidate.keyId, publicKey: candidate.publicKey };
+    });
 
   const claimedOneTimePreKey = await db.transaction(async (tx) => {
     const [candidate] = await tx

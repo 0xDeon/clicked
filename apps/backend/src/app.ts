@@ -66,6 +66,11 @@ app.get('/health', async (_req, res) => {
   }
 });
 
+// Catch-all per-IP ceiling (#375). Sits below every per-endpoint bucket and
+// exists to bound a caller hammering endpoints that have no specific limit.
+// Mounted after /health so orchestrator probes are never rate limited.
+app.use(rateLimit('global_ip', { identifier: ipIdentifier }));
+
 app.use('/auth', authRouter);
 app.use('/conversations', conversationsRouter);
 app.use('/devices', devicesRouter);

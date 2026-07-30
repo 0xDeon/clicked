@@ -1,13 +1,13 @@
-import type { Redis } from 'ioredis';
-
-function getRateLimitPerSec(): number {
-  const val = process.env['SOCKET_RATE_LIMIT_PER_SEC'];
-  if (val) {
-    const parsed = parseInt(val, 10);
-    if (!isNaN(parsed) && parsed > 0) return parsed;
-  }
-  return 10;
-}
+/**
+ * Socket-level abuse controls: payload size, per-event rate limits and
+ * repeat-violation tracking.
+ *
+ * Rate limiting itself lives in `services/rateLimiter.ts` and its budget in
+ * `config/rateLimits.ts` (#375). This module only decides *what* to charge for
+ * a given socket event.
+ */
+import { socketEventBucket } from '../config/rateLimits.js';
+import { consumeRateLimit, type RateLimitResult } from '../services/rateLimiter.js';
 
 function getMaxPayloadSize(): number {
   const val = process.env['MAX_PAYLOAD_SIZE'];
@@ -29,19 +29,19 @@ function getMaxEnvelopeSize(): number {
 
 const violationCount = new Map<string, number>();
 
-export async function checkRateLimit(
-  redis: Redis | null,
-  socketId: string,
-): Promise<{ allowed: boolean; count: number }> {
-  const limit = getRateLimitPerSec();
-  if (!redis) return { allowed: true, count: 0 };
-
-  const key = `rl:socket:${socketId}`;
-  const count = await redis.incr(key);
-  if (count === 1) {
-    await redis.expire(key, 1);
-  }
-  return { allowed: count <= limit, count };
+/**
+ * Charge a socket event against its bucket.
+ *
+ * The subject is the device, not the socket id: a socket id is minted fresh on
+ * every reconnect, so a client that gets throttled could previously reset its
+ * budget just by cycling the connection. The device id survives reconnects and
+ * is bound to the verified token, so it cannot be spoofed from a payload.
+ */
+export async function checkSocketEventRateLimit(
+  event: string,
+  deviceId: string,
+): Promise<RateLimitResult> {
+  return consumeRateLimit(socketEventBucket(event), `device:${deviceId}`);
 }
 
 export function checkPayloadSize(data: unknown): { valid: boolean; size: number } {

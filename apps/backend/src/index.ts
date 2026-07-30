@@ -33,7 +33,7 @@ import { startHeartbeatTimer, clearHeartbeatTimer } from './services/heartbeat.j
 import { isDeviceRevoked, startDeviceRevocationListener } from './services/deviceRevocation.js';
 import {
   checkPayloadSize,
-  checkRateLimit,
+  checkSocketEventRateLimit,
   clearViolations,
   recordViolation,
 } from './services/rateLimit.js';
@@ -169,11 +169,18 @@ io.on('connection', async (socket: AuthSocket) => {
       return;
     }
 
-    // Per-socket rate limiting (configurable via SOCKET_RATE_LIMIT_PER_SEC env).
-    const { allowed } = await checkRateLimit(appRedis, socket.id);
+    // Per-event rate limiting, counted in Redis so the budget is shared across
+    // gateway nodes and survives a reconnect (see config/rateLimits.ts).
+    const { allowed, limit, resetSeconds } = await checkSocketEventRateLimit(event, deviceId);
     if (!allowed) {
       const violations = recordViolation(socket.id);
-      socket.emit('error', { event: 'rate_limited', message: 'Rate limit exceeded' });
+      socket.emit('error', {
+        event: 'rate_limited',
+        message: 'Rate limit exceeded',
+        limitedEvent: event,
+        limit,
+        retryAfterSeconds: resetSeconds,
+      });
       if (violations >= 3) {
         socket.disconnect(true);
       }

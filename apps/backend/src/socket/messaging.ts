@@ -1037,18 +1037,19 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       return;
     }
 
-    if (redis) {
-      const rlKey = `rl:ask_assistant:${userId}`;
-      const count = await redis.incr(rlKey);
-
-      if (count === 1) {
-        await redis.expire(rlKey, 60);
-      }
-
-      if (count > 5) {
-        socket.emit('error', { event: 'rate_limited', message: 'Rate limit exceeded' });
-        return;
-      }
+    // Budget lives in config/rateLimits.ts with every other limit (#375).
+    // Charged per user rather than per device: the cost being protected is the
+    // downstream AI call, which one account can run up from any device.
+    const assistantLimit = await consumeRateLimit('socket_ask_assistant', `user:${userId}`);
+    if (!assistantLimit.allowed) {
+      socket.emit('error', {
+        event: 'rate_limited',
+        message: 'Rate limit exceeded',
+        limitedEvent: 'ask_assistant',
+        limit: assistantLimit.limit,
+        retryAfterSeconds: assistantLimit.resetSeconds,
+      });
+      return;
     }
 
     try {
