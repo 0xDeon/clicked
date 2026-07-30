@@ -26,7 +26,21 @@ const packageJson = JSON.parse(
 
 export const app: Express = express();
 
-app.use(cors());
+// TLS is terminated at the edge in every non-local deployment, so `req.secure`
+// must be allowed to consult X-Forwarded-Proto from the trusted hops only
+// (#374). TRUST_PROXY=0 disables it for a directly-exposed gateway.
+app.set('trust proxy', trustProxyHops());
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      callback(null, isOriginAllowed(origin ?? undefined));
+    },
+    credentials: allowedOrigins().length > 0,
+  }),
+);
+app.use(enforceTransportSecurity);
+app.use(enforceOriginPolicy);
 app.use(express.json());
 if (process.env['NODE_ENV'] !== 'test') {
   app.use(morgan('dev'));
@@ -63,6 +77,7 @@ app.use('/files', filesRouter);
 app.use('/push', pushRouter);
 app.use('/sync', syncRouter);
 app.use('/user-devices', userDevicesRouter);
+app.use('/security', securityRouter);
 
 // #393 — Prometheus scrape endpoint. Never includes message content: only
 // counters/histograms defined in lib/metrics.ts, which take no ciphertext
