@@ -1,5 +1,5 @@
 import type { Server } from 'socket.io';
-import { and, eq, lt, desc, sql, inArray, isNull, ne, or } from 'drizzle-orm';
+import { and, eq, lt, desc, sql, or } from 'drizzle-orm';
 
 import { db } from '../db/index.js';
 import {
@@ -7,14 +7,17 @@ import {
   conversationMembers,
   messages,
   messageEnvelopes,
-  devices,
   files,
 } from '../db/schema.js';
 import type { AuthSocket } from '../middleware/socketAuth.js';
 import { invalidateConversationCaches } from '../lib/conversationCache.js';
 import { serializeMessage } from '../lib/messages.js';
 import { redis } from '../lib/redis.js';
-import { sendPushForMessage } from '../services/push.js';
+import {
+  buildBroadcastEnvelopes,
+  findMissingSiblingDeviceIds,
+  insertMessageEnvelopes,
+} from '../lib/messageFanout.js';
 import { validateMessagePayload } from '../lib/validateMessagePayload.js';
 import { dispatchOfflinePush, FILE_CONTENT_TYPES } from '../services/pushNotification.js';
 import { deliverMessage } from '../services/deliveryPipeline.js';
@@ -24,24 +27,6 @@ import { conversationRoom } from '../services/roomManager.js';
 import { EventDispatcher } from './dispatcher.js';
 
 const PAGE_SIZE = 30;
-
-/**
- * Returns the UUIDs of all active (non-revoked) devices that belong to
- * `userId` but are NOT the sending device (`senderDeviceId`). These are the
- * "sibling" devices that must each receive their own envelope so they can
- * decrypt the message locally. Issue #188.
- */
-async function fetchSiblingDeviceIds(userId: string, senderDeviceId: string): Promise<string[]> {
-  const siblings = await db.query.devices.findMany({
-    where: and(
-      eq(devices.userId, userId),
-      ne(devices.id, senderDeviceId),
-      isNull(devices.revokedAt),
-    ),
-    columns: { id: true },
-  });
-  return siblings.map((d) => d.id);
-}
 
 export function registerMessagingHandlers(io: Server, socket: AuthSocket): void {
   const userId = socket.auth!.userId;
@@ -168,18 +153,14 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     }
 
     // Enforce full sibling-device coverage (#188).
-    const siblingIds = await fetchSiblingDeviceIds(userId, deviceId);
-    if (siblingIds.length > 0) {
-      const providedIds = new Set(envelopes?.map((e) => e.recipientDeviceId) ?? []);
-      const missing = siblingIds.filter((id) => !providedIds.has(id));
-      if (missing.length > 0) {
-        socket.emit('error', {
-          event: 'device_set_mismatch',
-          message: `Missing envelopes for ${missing.length} sibling device(s)`,
-          missingDeviceIds: missing,
-        });
-        return;
-      }
+    const missingSiblings = await findMissingSiblingDeviceIds(userId, deviceId, envelopes);
+    if (missingSiblings.length > 0) {
+      socket.emit('error', {
+        event: 'device_set_mismatch',
+        message: `Missing envelopes for ${missingSiblings.length} sibling device(s)`,
+        missingDeviceIds: missingSiblings,
+      });
+      return;
     }
 
     let fileId: string | null = inputFileId || null;
@@ -216,28 +197,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
           })
           .returning();
 
-        if (envelopes && envelopes.length > 0) {
-          const deviceIds = envelopes.map((e) => e.recipientDeviceId);
-          const devicesList = await tx.query.devices.findMany({
-            where: inArray(devices.id, deviceIds),
-            columns: { id: true, userId: true },
-          });
-          const deviceToUser = new Map(devicesList.map((d) => [d.id, d.userId]));
-
-          const validEnvelopes = envelopes
-            .filter((env) => deviceToUser.has(env.recipientDeviceId))
-            .map((env) => ({
-              messageId,
-              recipientDeviceId: env.recipientDeviceId,
-              recipientUserId: deviceToUser.get(env.recipientDeviceId)!,
-              ciphertext: env.ciphertext,
-            }));
-
-          if (validEnvelopes.length > 0) {
-            await tx.insert(messageEnvelopes).values(validEnvelopes);
-            recipientDeviceIds = validEnvelopes.map((e) => e.recipientDeviceId);
-          }
-        }
+        recipientDeviceIds = await insertMessageEnvelopes(tx, messageId, envelopes);
 
         return insertedMessage!;
       });
@@ -315,18 +275,14 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     }
 
     // Enforce full sibling-device coverage (#188).
-    const siblingIds = await fetchSiblingDeviceIds(userId, deviceId);
-    if (siblingIds.length > 0) {
-      const providedIds = new Set(envelopes?.map((e) => e.recipientDeviceId) ?? []);
-      const missing = siblingIds.filter((id) => !providedIds.has(id));
-      if (missing.length > 0) {
-        socket.emit('error', {
-          event: 'device_set_mismatch',
-          message: `Missing envelopes for ${missing.length} sibling device(s)`,
-          missingDeviceIds: missing,
-        });
-        return;
-      }
+    const missingSiblings = await findMissingSiblingDeviceIds(userId, deviceId, envelopes);
+    if (missingSiblings.length > 0) {
+      socket.emit('error', {
+        event: 'device_set_mismatch',
+        message: `Missing envelopes for ${missingSiblings.length} sibling device(s)`,
+        missingDeviceIds: missingSiblings,
+      });
+      return;
     }
 
     const rootMessageId = original.editsMessageId ?? original.id;
@@ -348,27 +304,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
           })
           .returning();
 
-        if (envelopes && envelopes.length > 0) {
-          const deviceIds = envelopes.map((e) => e.recipientDeviceId);
-          const devicesList = await tx.query.devices.findMany({
-            where: inArray(devices.id, deviceIds),
-            columns: { id: true, userId: true },
-          });
-          const deviceToUser = new Map(devicesList.map((d) => [d.id, d.userId]));
-
-          const validEnvelopes = envelopes
-            .filter((env) => deviceToUser.has(env.recipientDeviceId))
-            .map((env) => ({
-              messageId,
-              recipientDeviceId: env.recipientDeviceId,
-              recipientUserId: deviceToUser.get(env.recipientDeviceId)!,
-              ciphertext: env.ciphertext,
-            }));
-
-          if (validEnvelopes.length > 0) {
-            await tx.insert(messageEnvelopes).values(validEnvelopes);
-          }
-        }
+        await insertMessageEnvelopes(tx, messageId, envelopes);
 
         return insertedMessage!;
       });
@@ -400,13 +336,19 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     'send_file_message',
     async (payload: {
       conversationId: string;
+      messageId?: string;
       fileId: string;
       content: string;
+      ciphertext?: string;
       contentType: 'file' | 'image' | 'video' | 'audio';
+      envelopes?: Array<{ recipientDeviceId: string; ciphertext: string }>;
     }) => {
-      const { conversationId, fileId, content, contentType } = payload;
+      const { conversationId, messageId, fileId, content, ciphertext, contentType, envelopes } =
+        payload;
+      const deviceId = socket.auth!.deviceId;
+      const effectiveCiphertext = ciphertext ?? content;
 
-      if (!content?.trim()) {
+      if (!effectiveCiphertext?.trim()) {
         socket.emit('error', {
           event: 'send_file_message',
           message: 'Content (envelope ciphertext) must not be empty',
@@ -471,19 +413,55 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         return;
       }
 
+      // Idempotency: a client-supplied messageId that already exists is
+      // re-acked instead of re-inserted, exactly as in send_message.
+      if (messageId) {
+        const existing = await db.query.messages.findFirst({
+          where: eq(messages.id, messageId),
+          columns: { createdAt: true },
+        });
+
+        if (existing) {
+          socket.emit('message_ack', { messageId, createdAt: existing.createdAt });
+          return;
+        }
+      }
+
+      // Enforce full sibling-device coverage (#188).
+      const missingSiblings = await findMissingSiblingDeviceIds(userId, deviceId, envelopes);
+      if (missingSiblings.length > 0) {
+        socket.emit('error', {
+          event: 'device_set_mismatch',
+          message: `Missing envelopes for ${missingSiblings.length} sibling device(s)`,
+          missingDeviceIds: missingSiblings,
+        });
+        return;
+      }
+
       let message;
+      let recipientDeviceIds: string[] = [];
       try {
         message = await db.transaction(async (tx) => {
           const [insertedMessage] = await tx
             .insert(messages)
             .values({
+              ...(messageId ? { id: messageId } : {}),
               conversationId,
               senderId: userId,
-              ciphertext: content.trim(),
+              senderDeviceId: deviceId,
+              ciphertext: effectiveCiphertext.trim(),
               contentType,
               fileId,
             })
             .returning();
+
+          // Envelopes must land in the same transaction as the message row so
+          // a file message can never be committed without its per-device keys.
+          recipientDeviceIds = await insertMessageEnvelopes(
+            tx,
+            messageId ?? insertedMessage!.id,
+            envelopes,
+          );
 
           return insertedMessage;
         });
@@ -497,7 +475,8 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       }
 
       if (message) {
-        io.to(conversationId).emit('new_message', message);
+        socket.emit('message_ack', { messageId: message.id, createdAt: message.createdAt });
+        await deliverMessage(io, message, conversationId);
 
         const members = await db.query.conversationMembers.findMany({
           where: eq(conversationMembers.conversationId, conversationId),
@@ -505,11 +484,9 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         });
         await invalidateConversationCaches(members.map((member) => member.userId));
 
-        sendPushForMessage({
-          conversationId,
-          messageId: message.id,
-          senderId: userId,
-        });
+        // Same push mechanism as send_message: one coalesced, rate-limited
+        // push per device that has an envelope and is not currently connected.
+        void dispatchOfflinePush(conversationId, message.id, recipientDeviceIds);
       }
     },
   );
@@ -981,6 +958,25 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         ON CONFLICT DO NOTHING
       `);
 
+      // Membership is resolved before the insert so the reply can be fanned
+      // out to every active device of every member (and reused afterwards for
+      // cache invalidation).
+      const members = await db.query.conversationMembers.findMany({
+        where: eq(conversationMembers.conversationId, conversationId),
+        columns: { userId: true },
+      });
+
+      // A server-authored reply has no per-recipient key material, so every
+      // device's envelope necessarily carries the same content — same as the
+      // shared column did before. What changes is the fan-out *shape*: the
+      // reply now flows through message_envelopes like every other message.
+      // The sender's own devices are included: the assistant reply must reach
+      // all of them, not just the device that asked.
+      const replyEnvelopes = await buildBroadcastEnvelopes(
+        members.map((member) => member.userId),
+        data.reply,
+      );
+
       const replyMessage = await db.transaction(async (tx) => {
         const [inserted] = await tx
           .insert(messages)
@@ -991,15 +987,15 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
             ciphertext: data.reply,
           })
           .returning();
+
+        await insertMessageEnvelopes(tx, inserted!.id, replyEnvelopes);
+
         return inserted;
       });
 
-      io.to(conversationId).volatile.emit('new_message', replyMessage);
-
-      const members = await db.query.conversationMembers.findMany({
-        where: eq(conversationMembers.conversationId, conversationId),
-        columns: { userId: true },
-      });
+      if (replyMessage) {
+        await deliverMessage(io, replyMessage, conversationId);
+      }
 
       await invalidateConversationCaches(members.map((member) => member.userId));
     } catch (err) {
