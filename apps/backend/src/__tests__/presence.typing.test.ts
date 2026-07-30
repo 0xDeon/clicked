@@ -167,6 +167,20 @@ function makeIo() {
   return io;
 }
 
+// Handlers now run exclusively through the enveloped 'dispatch' path (#342)
+// — there's no more raw socket.on(type, ...) listener to grab directly.
+let envelopeSeq = 0;
+async function dispatchEnvelope(socket: EventEmitter, type: string, payload: unknown) {
+  envelopeSeq += 1;
+  EventEmitter.prototype.emit.call(socket, 'dispatch', {
+    eventId: `test-evt-${envelopeSeq}`,
+    type,
+    timestamp: Date.now(),
+    payload,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 beforeEach(() => {
@@ -294,10 +308,7 @@ describe('typing events: auto-expiry and no DB writes', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('typing_start')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await handler({ conversationId });
+    await dispatchEnvelope(socket, 'typing_start', { conversationId });
 
     // Must NOT call db.update (no DB write for typing)
     expect(mockUpdate).not.toHaveBeenCalled();
@@ -315,10 +326,7 @@ describe('typing events: auto-expiry and no DB writes', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('typing_stop')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await handler({ conversationId });
+    await dispatchEnvelope(socket, 'typing_stop', { conversationId });
 
     expect(mockUpdate).not.toHaveBeenCalled();
   });
@@ -383,10 +391,7 @@ describe('typing events: privacy suppression for non-members', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('typing_start')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await handler({ conversationId });
+    await dispatchEnvelope(socket, 'typing_start', { conversationId });
 
     expect(socket.emit).toHaveBeenCalledWith(
       'error',
@@ -412,10 +417,7 @@ describe('typing events: privacy suppression for non-members', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('typing_stop')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await handler({ conversationId });
+    await dispatchEnvelope(socket, 'typing_stop', { conversationId });
 
     expect(socket.emit).toHaveBeenCalledWith(
       'error',

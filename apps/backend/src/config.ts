@@ -36,6 +36,11 @@ export const EnvSchema = z.object({
   OBJECT_STORE_SECRET_KEY: z.string().min(1, 'OBJECT_STORE_SECRET_KEY is required'),
   OBJECT_STORE_REGION: z.string().min(1, 'OBJECT_STORE_REGION is required'),
   OBJECT_STORE_FORCE_PATH_STYLE: booleanEnv,
+  IDEMPOTENCY_TTL_SECONDS: z.coerce
+    .number()
+    .int('IDEMPOTENCY_TTL_SECONDS must be an integer')
+    .positive('IDEMPOTENCY_TTL_SECONDS must be positive')
+    .optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
