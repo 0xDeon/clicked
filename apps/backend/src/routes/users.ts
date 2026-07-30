@@ -354,6 +354,9 @@ usersRouter.get(
     deviceId: device.id,
     identityPublicKey: device.identityPublicKey,
     registrationId: device.registrationId,
+    // Lets the initiating sender pick an encryption path this recipient
+    // device supports before running X3DH (#180-follow-on).
+    capabilities: normalizeCapabilities(device.capabilities),
     signedPreKey: {
       keyId: signedPreKey.keyId,
       publicKey: signedPreKey.publicKey,

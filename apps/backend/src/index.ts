@@ -45,6 +45,8 @@ import {
   runForever as runStellarListener,
 } from './services/stellarListener.js';
 import { startFileCleanupJob } from './services/fileCleanup.js';
+import { startDeviceGcJob } from './services/deviceGc.js';
+import { startEnvelopeGcJob } from './services/envelopeGc.js';
 import { loadEnv } from './config.js';
 import { getObjectStore } from './lib/objectStore.js';
 import { presenceChurnTotal, connectedSockets } from './lib/metrics.js';
@@ -426,6 +428,13 @@ void attachRedisAdapter();
 
 // #231 – start background file cleanup + push backoff re-enable job
 startFileCleanupJob();
+
+// Background GC: prune consumed/expired prekeys + MLS key packages, flag
+// long-revoked devices, and delete fully-delivered/expired message envelopes.
+// Retention windows are configurable via env (see services/deviceGc.ts and
+// services/envelopeGc.ts) so operators can tune them per deployment.
+startDeviceGcJob();
+startEnvelopeGcJob();
 
 // Subscribe to device_revoked:* channels so any gateway instance can
 // disconnect a revoked device's sockets within seconds, even when the

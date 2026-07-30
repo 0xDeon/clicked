@@ -106,6 +106,7 @@ devicesRouter.get('/', async (req: AuthRequest, res) => {
         platform: device.platform,
         lastSeenAt: device.lastSeenAt,
         revokedAt: device.revokedAt,
+        capabilities: normalizeCapabilities(device.capabilities),
         oneTimePreKeysRemaining: remainingByDevice.get(device.id) ?? 0,
         createdAt: device.createdAt,
         current: device.id === currentDeviceId,

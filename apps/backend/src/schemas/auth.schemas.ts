@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { IdentityPublicKeySchema } from '../lib/keys.js';
+import { DeviceCapabilitiesSchema } from '../lib/capabilities.js';
 
 export const ChallengeSchema = z.object({
   walletAddress: z.string().min(1, 'walletAddress is required'),
@@ -13,6 +14,10 @@ export const DeviceSchema = z.object({
   platform: z.enum(['web', 'ios', 'android']),
   identityPublicKey: IdentityPublicKeySchema,
   registrationId: z.number().int().nonnegative().optional(),
+  // Supported protocols/ciphersuites/file-transfer versions (#180-follow-on).
+  // Optional — omitting it defaults to the sealed_box-only baseline so older
+  // clients that predate this field keep working unchanged.
+  capabilities: DeviceCapabilitiesSchema.optional(),
 });
 
 export const VerifySchema = z

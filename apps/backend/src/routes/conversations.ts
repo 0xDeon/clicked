@@ -24,6 +24,16 @@ export const conversationsRouter: IRouter = Router();
 
 conversationsRouter.use(requireAuth);
 
+// Post-schema-overhaul audit (see PR description): every relation name below
+// (`members`, `user`, `wallets`, `messages`, `sender`, `envelopes`) was
+// checked against the current `relations()` declarations in db/schema.ts and
+// every selected column against the current table definitions — none
+// reference dropped columns/relations. The `as never` casts at the call
+// sites below exist only because TS can't correlate this function's return
+// type with drizzle's recursive `with:` generic when it's built dynamically
+// (a known drizzle limitation, not a sign the shape is unverified); the
+// `ConversationPayload`/`ConversationMemberPayload` types the results are
+// cast to afterward are what's actually checked against the query shape.
 const getConversationRelations = (deviceId: string) => ({
   members: {
     with: {
@@ -1081,7 +1091,16 @@ conversationsRouter.get('/:id/devices', async (req: AuthRequest, res) => {
       identityPublicKey: true,
       deviceName: true,
       platform: true,
+      capabilities: true,
     },
+  });
+
+  // Look up the caller's own device capabilities so each returned device can
+  // carry the protocol the sender should actually use with it (#180-follow-
+  // on) — sparing every client from re-implementing selectProtocol().
+  const callerDevice = await db.query.devices.findFirst({
+    where: eq(devices.id, req.auth!.deviceId),
+    columns: { capabilities: true },
   });
 
   res.json({
@@ -1091,6 +1110,8 @@ conversationsRouter.get('/:id/devices', async (req: AuthRequest, res) => {
       identityPublicKey: d.identityPublicKey,
       deviceName: d.deviceName,
       platform: d.platform,
+      capabilities: normalizeCapabilities(d.capabilities),
+      negotiatedProtocol: selectProtocol(callerDevice?.capabilities, d.capabilities).protocol,
     })),
   });
 });

@@ -10,9 +10,11 @@ import {
   jsonb,
   uniqueIndex,
   check,
+  jsonb,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
+import { DEFAULT_CAPABILITIES, type DeviceCapabilities } from '../lib/capabilities.js';
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -214,6 +216,18 @@ export const devices = pgTable(
     lastSeenAt: timestamp('last_seen_at'),
     pushEnabled: boolean('push_enabled').notNull().default(true),
     revokedAt: timestamp('revoked_at'),
+    // Set by the device-GC job once a revoked device has aged past
+    // DEVICE_STALE_AFTER_DAYS. Purely informational — flags the row for
+    // admin visibility/future hard-delete without destroying audit history.
+    staleFlaggedAt: timestamp('stale_flagged_at'),
+    // Supported protocols/ciphersuites/file-transfer versions this device
+    // advertises (lib/capabilities.ts). Defaults to the sealed_box-only
+    // baseline so rows written before this column existed, or clients that
+    // never send it, negotiate correctly rather than erroring — see
+    // lib/capabilities.ts `normalizeCapabilities`.
+    capabilities: jsonb('capabilities').$type<DeviceCapabilities>().notNull().default(
+      DEFAULT_CAPABILITIES,
+    ),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },
@@ -569,6 +583,7 @@ export const tokenTransfersRelations = relations(tokenTransfers, ({ one }) => ({
 export const devicesRelations = relations(devices, ({ one, many }) => ({
   user: one(users, { fields: [devices.userId], references: [users.id] }),
   prekeys: many(devicePrekeys),
+  mlsKeyPackages: many(mlsKeyPackages),
   messages: many(messages),
   pushSubscriptions: many(pushSubscriptions),
   keyHistory: many(deviceKeyHistory),
@@ -581,6 +596,10 @@ export const deviceKeyHistoryRelations = relations(deviceKeyHistory, ({ one }) =
 
 export const devicePrekeysRelations = relations(devicePrekeys, ({ one }) => ({
   device: one(devices, { fields: [devicePrekeys.deviceId], references: [devices.id] }),
+}));
+
+export const mlsKeyPackagesRelations = relations(mlsKeyPackages, ({ one }) => ({
+  device: one(devices, { fields: [mlsKeyPackages.deviceId], references: [devices.id] }),
 }));
 
 export const pushSubscriptionsRelations = relations(pushSubscriptions, ({ one }) => ({
@@ -624,3 +643,5 @@ export type Device = typeof devices.$inferSelect;
 export type NewDevice = typeof devices.$inferInsert;
 export type DevicePrekey = typeof devicePrekeys.$inferSelect;
 export type NewDevicePrekey = typeof devicePrekeys.$inferInsert;
+export type MlsKeyPackage = typeof mlsKeyPackages.$inferSelect;
+export type NewMlsKeyPackage = typeof mlsKeyPackages.$inferInsert;

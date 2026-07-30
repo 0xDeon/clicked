@@ -8,6 +8,7 @@ import { users, wallets, devices } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
 import { createNonce, consumeNonce } from '../lib/nonce.js';
 import { signToken } from '../lib/jwt.js';
+import { normalizeCapabilities } from '../lib/capabilities.js';
 import { validate } from '../middleware/validate.js';
 import { recordAuditEvent, requestContext } from '../services/auditLog.js';
 import { ipIdentifier, rateLimit } from '../middleware/rateLimit.js';
@@ -56,6 +57,7 @@ authRouter.post(
     const deviceName = device?.deviceName;
     const platform = device?.platform;
     const registrationId = device?.registrationId;
+    const capabilities = device?.capabilities;
 
     // Every failed sign-in is audited (#376). The wallet address is the only
     // identity available before verification succeeds, and it is a public
@@ -154,6 +156,9 @@ authRouter.post(
           ...(deviceName ? { deviceName } : {}),
           ...(platform ? { platform } : {}),
           ...(registrationId !== undefined ? { registrationId } : {}),
+          // A client re-verifying with a newer `capabilities` set is the
+          // "upgrade" path (#180-follow-on) — no re-registration needed.
+          ...(capabilities !== undefined ? { capabilities: normalizeCapabilities(capabilities) } : {}),
         })
         .where(eq(devices.id, deviceId));
     } else {
@@ -166,6 +171,7 @@ authRouter.post(
           platform: platform ?? null,
           registrationId: registrationId ?? null,
           lastSeenAt: new Date(),
+          ...(capabilities !== undefined ? { capabilities: normalizeCapabilities(capabilities) } : {}),
         })
         .returning({ id: devices.id });
       if (!newDevice) {
