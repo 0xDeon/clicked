@@ -4,6 +4,7 @@ export type MessageLike = {
   senderDeviceId?: string | null;
   contentType: string;
   createdAt: Date;
+  content?: unknown;
   ciphertext?: string | null;
   /**
    * Structured, server-generated metadata for `contentType === 'system'` rows.
@@ -12,16 +13,16 @@ export type MessageLike = {
   systemPayload?: { userId: string; change: string } | null;
   deletedAt?: Date | null;
   envelopes?: Array<{ ciphertext: string }>;
-  [key: string]: any;
+  [key: string]: unknown;
 };
 
 export function serializeMessage<T extends MessageLike>(
   message: T,
-): Omit<T, 'deletedAt' | 'envelopes' | 'ciphertext'> & {
+): Omit<T, 'deletedAt' | 'envelopes' | 'ciphertext' | 'content'> & {
   ciphertext: string | null;
   unavailable?: boolean;
 } {
-  const { deletedAt, envelopes, ciphertext: baseCiphertext, ...rest } = message;
+  const { deletedAt, envelopes, ciphertext: baseCiphertext, content, ...rest } = message;
 
   if (deletedAt) {
     return {

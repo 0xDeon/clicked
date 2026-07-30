@@ -14,7 +14,7 @@ import {
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { redis, CONV_CACHE_TTL, convCacheKey } from '../lib/redis.js';
 import { invalidateConversationCaches } from '../lib/conversationCache.js';
-import { serializeMessage } from '../lib/messages.js';
+import { serializeMessage, type MessageLike } from '../lib/messages.js';
 import { getSocketServer } from '../lib/socket.js';
 import { MAX_MESSAGES_LIMIT, DEFAULT_MESSAGES_LIMIT } from '../constants.js';
 
@@ -44,17 +44,26 @@ const getConversationRelations = (deviceId: string) => ({
   },
 });
 
-type ConversationPayload = {
+type ConversationPayload = Conversation & {
+  messages?: MessageLike[];
+  members?: unknown[]; // from relation
+};
+
+type SerializedConversationPayload = {
   messages?: Array<ReturnType<typeof serializeMessage>>;
   [key: string]: unknown;
 };
 
-function serializeConversation<T extends ConversationPayload>(conversation: T): T {
+function serializeConversation(
+  conversation: ConversationPayload,
+): SerializedConversationPayload {
   return {
-    ...conversation,
-    messages: (conversation.messages ?? []).map((message) =>
-      serializeMessage(message as any),
-    ) as any,
+    id: conversation.id,
+    type: conversation.type,
+    name: conversation.name,
+    avatarUrl: conversation.avatarUrl,
+    createdAt: conversation.createdAt,
+    messages: (conversation.messages ?? []).map(serializeMessage),
   };
 }
 
@@ -166,7 +175,7 @@ conversationsRouter.get('/', async (req: AuthRequest, res) => {
   const unreadMap = new Map(unreadRows.map((r) => [r.conversationId, r.unreadCount]));
 
   const result = memberships.map((m) => ({
-    ...m.conversation,
+    ...serializeConversation(m.conversation),
     isMuted: m.isMuted,
     isArchived: m.isArchived,
     messageCount: countMap.get(m.conversationId) ?? 0,
