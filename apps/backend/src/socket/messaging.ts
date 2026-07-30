@@ -8,6 +8,7 @@ import {
   messages,
   messageEnvelopes,
   files,
+  users,
 } from '../db/schema.js';
 import type { AuthSocket } from '../middleware/socketAuth.js';
 import { invalidateConversationCaches } from '../lib/conversationCache.js';
@@ -27,6 +28,44 @@ import { conversationRoom } from '../services/roomManager.js';
 import { EventDispatcher } from './dispatcher.js';
 
 const PAGE_SIZE = 30;
+
+/**
+ * Returns the UUIDs of all active (non-revoked) devices that belong to
+ * `userId` but are NOT the sending device (`senderDeviceId`). These are the
+ * "sibling" devices that must each receive their own envelope so they can
+ * decrypt the message locally. Issue #188.
+ */
+async function fetchSiblingDeviceIds(userId: string, senderDeviceId: string): Promise<string[]> {
+  const siblings = await db.query.devices.findMany({
+    where: and(
+      eq(devices.userId, userId),
+      ne(devices.id, senderDeviceId),
+      isNull(devices.revokedAt),
+    ),
+    columns: { id: true },
+  });
+  return siblings.map((d) => d.id);
+}
+
+async function findUsersBlockingConversationAccess(
+  type: 'dm' | 'group',
+  memberIds: string[],
+): Promise<string[]> {
+  if (memberIds.length === 0) return [];
+
+  const invitedUsers = await db.query.users.findMany({
+    where: inArray(users.id, memberIds),
+    columns: {
+      id: true,
+      allowDirectMessages: true,
+      allowGroupInvites: true,
+    },
+  });
+
+  return invitedUsers
+    .filter((user) => (type === 'dm' ? !user.allowDirectMessages : !user.allowGroupInvites))
+    .map((user) => user.id);
+}
 
 export function registerMessagingHandlers(io: Server, socket: AuthSocket): void {
   const userId = socket.auth!.userId;
@@ -606,6 +645,15 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         ),
       );
 
+    const receiptSettings = await db.query.users.findFirst({
+      where: eq(users.id, userId),
+      columns: { sendReadReceipts: true },
+    });
+
+    if (!receiptSettings?.sendReadReceipts) {
+      return;
+    }
+
     io.to(conversationId).volatile.emit('read_receipt', {
       conversationId,
       userId,
@@ -745,7 +793,22 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       memberIds: string[];
     };
 
-    const allMembers = Array.from(new Set([userId, ...memberIds]));
+    const requestedMembers = Array.from(new Set(memberIds.filter((memberId) => memberId !== userId)));
+    const blockedMemberIds = await findUsersBlockingConversationAccess(type, requestedMembers);
+
+    if (blockedMemberIds.length > 0) {
+      socket.emit('error', {
+        event: 'create_conversation',
+        message:
+          type === 'dm'
+            ? 'One or more recipients are not accepting direct messages'
+            : 'One or more recipients are not accepting group invites',
+        blockedUserIds: blockedMemberIds,
+      });
+      return;
+    }
+
+    const allMembers = Array.from(new Set([userId, ...requestedMembers]));
 
     const [conversation] = await db.insert(conversations).values({ type, name }).returning();
 

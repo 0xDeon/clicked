@@ -212,7 +212,7 @@ io.on('connection', async (socket: AuthSocket) => {
     const becameOnline = await setOnline(appRedis, userId, deviceId);
     const connectUser = await db.query.users.findFirst({
       where: eq(users.id, userId),
-      columns: { presenceVisible: true },
+      columns: { presenceVisible: true, lastSeenVisible: true },
     });
     const presenceVisible = connectUser?.presenceVisible ?? true;
     if (becameOnline && presenceVisible && !cancelledPendingOffline) {
@@ -222,7 +222,7 @@ io.on('connection', async (socket: AuthSocket) => {
           userId,
           online: true,
           status: 'online',
-          lastSeen: Date.now(),
+          ...(lastSeenVisible ? { lastSeen: Date.now() } : {}),
         });
         // Also emit to direct conversation room for backward compatibility
         io.to(m.conversationId).emit('user_online', { userId });
@@ -230,7 +230,7 @@ io.on('connection', async (socket: AuthSocket) => {
           userId,
           online: true,
           status: 'online',
-          lastSeen: Date.now(),
+          ...(lastSeenVisible ? { lastSeen: Date.now() } : {}),
         });
       }
       await recordPresenceForCoMembers(
@@ -316,9 +316,10 @@ io.on('connection', async (socket: AuthSocket) => {
       if (fullyOffline) {
         const user = await db.query.users.findFirst({
           where: eq(users.id, userId),
-          columns: { presenceVisible: true },
+          columns: { presenceVisible: true, lastSeenVisible: true },
         });
         const presenceVisible = user?.presenceVisible ?? true;
+        const lastSeenVisible = user?.lastSeenVisible ?? false;
 
         if (presenceVisible) {
           // #345 — defer the broadcast by the configured grace window instead

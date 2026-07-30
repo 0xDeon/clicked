@@ -9,6 +9,7 @@ import {
   tokenTransfers,
   messageEnvelopes,
   devices,
+  users,
 } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { redis, CONV_CACHE_TTL, convCacheKey } from '../lib/redis.js';
@@ -309,6 +310,16 @@ conversationsRouter.post('/:id/members', async (req: AuthRequest, res) => {
 
   if (existingMembership) {
     res.status(409).json({ error: 'User is already a member' });
+    return;
+  }
+
+  const targetUser = await db.query.users.findFirst({
+    where: eq(users.id, newUserId),
+    columns: { allowGroupInvites: true },
+  });
+
+  if (targetUser && !targetUser.allowGroupInvites) {
+    res.status(403).json({ error: 'User is not accepting group invites' });
     return;
   }
 
