@@ -7,6 +7,7 @@ import {
   pgEnum,
   index,
   integer,
+  jsonb,
   uniqueIndex,
   check,
   type AnyPgColumn,
@@ -17,11 +18,14 @@ export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
   username: text('username').unique(),
   avatarUrl: text('avatar_url'),
-  presenceVisible: boolean('presence_visible').notNull().default(true),
+  presenceVisible: boolean('presence_visible').notNull().default(false),
+  lastSeenVisible: boolean('last_seen_visible').notNull().default(false),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
   // Privacy setting: whether the user allows sending read receipts to others
-  sendReadReceipts: boolean('send_read_receipts').notNull().default(true),
+  sendReadReceipts: boolean('send_read_receipts').notNull().default(false),
+  allowDirectMessages: boolean('allow_direct_messages').notNull().default(true),
+  allowGroupInvites: boolean('allow_group_invites').notNull().default(false),
 });
 
 export const wallets = pgTable('wallets', {
@@ -125,6 +129,12 @@ export const messages = pgTable(
     }),
     contentType: text('content_type').notNull().default('text'),
     ciphertext: text('ciphertext'),
+    // Structured, server-generated metadata for `content_type = 'system'` rows
+    // (device add/revoke, membership changes). Kept separate from `ciphertext`
+    // so genuine E2EE ciphertext — opaque, per-device-encrypted — is never
+    // conflated with plaintext system metadata. Null for every non-system row;
+    // enforced by `messages_system_payload_check` below.
+    systemPayload: jsonb('system_payload').$type<{ userId: string; change: string } | null>(),
     fileId: uuid('file_id').references(() => files.id, { onDelete: 'set null' }),
     editsMessageId: uuid('edits_message_id').references((): AnyPgColumn => messages.id, {
       onDelete: 'set null',
@@ -132,7 +142,19 @@ export const messages = pgTable(
     createdAt: timestamp('created_at').notNull().defaultNow(),
     deletedAt: timestamp('deleted_at'),
   },
-  (table) => [index('messages_conversation_created_idx').on(table.conversationId, table.createdAt)],
+  (table) => [
+    index('messages_conversation_created_idx').on(table.conversationId, table.createdAt),
+    // System messages carry structured metadata, never ciphertext; everything
+    // else carries ciphertext (or an envelope), never a system payload.
+    // Supersedes the looser `messages_system_payload_only_on_system_type`
+    // constraint (#398), which only forbade a payload on non-system rows —
+    // it didn't require a system row to actually have one, or forbid a
+    // system row from also carrying ciphertext.
+    check(
+      'messages_system_payload_check',
+      sql`${table.contentType} <> 'system' OR (${table.ciphertext} IS NULL AND ${table.systemPayload} IS NOT NULL)`,
+    ),
+  ],
 );
 
 export const messageEnvelopes = pgTable(

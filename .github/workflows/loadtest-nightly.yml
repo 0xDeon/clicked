@@ -1,0 +1,121 @@
+# Issue #385 — nightly WebSocket gateway load/soak test.
+#
+# Boots postgres + redis + two backend instances (ports 3001/3002) sharing
+# the same Redis, so fan-out and presence churn cross node boundaries via
+# @socket.io/redis-adapter. Seeds fixture data directly through Drizzle,
+# then runs scripts/loadtest/run.ts, which exits non-zero if latency,
+# memory, or error-rate thresholds (or the regression baseline in
+# scripts/loadtest/baseline.json) are violated.
+#
+# Runs nightly only — this is a soak test, not a per-PR gate. Trigger
+# manually via workflow_dispatch to validate before merging test changes.
+
+name: Nightly Load Test
+
+on:
+  schedule:
+    - cron: '0 3 * * *' # 03:00 UTC nightly
+  workflow_dispatch:
+
+jobs:
+  loadtest:
+    name: WebSocket gateway load/soak test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: clicked
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d clicked"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://postgres:password@localhost:5432/clicked
+      REDIS_URL: redis://localhost:6379
+      JWT_SECRET: loadtest-secret
+      TOKEN_TRANSFER_CONTRACT_ID: loadtest-placeholder
+      OBJECT_STORE_ENDPOINT: http://localhost:9000
+      OBJECT_STORE_BUCKET: clicked
+      OBJECT_STORE_ACCESS_KEY: clicked
+      OBJECT_STORE_SECRET_KEY: clickedsecret
+      OBJECT_STORE_REGION: us-east-1
+      OBJECT_STORE_FORCE_PATH_STYLE: 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run DB migrations
+        run: pnpm db:migrate
+        working-directory: apps/backend
+
+      - name: Start backend node 1 (port 3001)
+        run: pnpm dev &
+        working-directory: apps/backend
+        env:
+          PORT: '3001'
+
+      - name: Start backend node 2 (port 3002)
+        run: pnpm dev &
+        working-directory: apps/backend
+        env:
+          PORT: '3002'
+
+      - name: Wait for both nodes to be healthy
+        run: |
+          for port in 3001 3002; do
+            for i in $(seq 1 30); do
+              if curl -sf "http://localhost:$port/health" > /dev/null; then
+                echo "node on $port healthy"
+                break
+              fi
+              sleep 1
+            done
+          done
+
+      - name: Seed load-test fixture (200 devices)
+        run: npx tsx scripts/loadtest/seed.ts --devices 200 > fixture.json
+
+      - name: Run load/soak test
+        run: >-
+          npx tsx scripts/loadtest/run.ts
+          --fixture fixture.json
+          --nodes http://localhost:3001,http://localhost:3002
+          --baseline scripts/loadtest/baseline.json
+          --out loadtest-result.json
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: loadtest-result
+          path: loadtest-result.json

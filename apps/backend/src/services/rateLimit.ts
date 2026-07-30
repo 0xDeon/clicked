@@ -18,6 +18,15 @@ function getMaxPayloadSize(): number {
   return 16384;
 }
 
+function getMaxEnvelopeSize(): number {
+  const val = process.env['MAX_ENVELOPE_SIZE'];
+  if (val) {
+    const parsed = parseInt(val, 10);
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+  }
+  return 4096;
+}
+
 const violationCount = new Map<string, number>();
 
 export async function checkRateLimit(
@@ -40,6 +49,28 @@ export function checkPayloadSize(data: unknown): { valid: boolean; size: number 
   const raw = JSON.stringify(data);
   const size = Buffer.byteLength(raw, 'utf8');
   return { valid: size <= maxSize, size };
+}
+
+/**
+ * Validates each envelope's ciphertext length individually, in addition to
+ * the total-payload cap enforced by checkPayloadSize. A fan-out to many
+ * recipient devices can stay under the aggregate cap while packing an
+ * oversized ciphertext into a single envelope, so each one needs its own
+ * check (#343).
+ */
+export function checkEnvelopeSizes(
+  envelopes: Array<{ recipientDeviceId: string; ciphertext: string }> | undefined,
+): { valid: boolean; oversizedDeviceId?: string; size?: number } {
+  if (!envelopes || envelopes.length === 0) return { valid: true };
+
+  const maxSize = getMaxEnvelopeSize();
+  for (const envelope of envelopes) {
+    const size = Buffer.byteLength(envelope.ciphertext ?? '', 'utf8');
+    if (size > maxSize) {
+      return { valid: false, oversizedDeviceId: envelope.recipientDeviceId, size };
+    }
+  }
+  return { valid: true };
 }
 
 export function recordViolation(socketId: string): number {

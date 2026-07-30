@@ -8,10 +8,16 @@ const mockUpdate = vi.fn();
 const mockDelete = vi.fn();
 const mockExecute = vi.fn();
 const mockFindMany = vi.fn();
+const mockConversationMembersFindMany = vi.fn();
+const mockDevicesFindMany = vi.fn();
 
 vi.mock('../db/index.js', () => ({
   db: {
-    query: { pushSubscriptions: { findMany: mockFindMany } },
+    query: {
+      pushSubscriptions: { findMany: mockFindMany },
+      conversationMembers: { findMany: mockConversationMembersFindMany },
+      devices: { findMany: mockDevicesFindMany },
+    },
     update: mockUpdate,
     delete: mockDelete,
     execute: mockExecute,
@@ -20,6 +26,12 @@ vi.mock('../db/index.js', () => ({
 
 vi.mock('../db/schema.js', () => ({
   pushSubscriptions: { id: 'id', deviceId: 'device_id', disabledAt: 'disabled_at' },
+  conversationMembers: {
+    conversationId: 'conversation_id',
+    userId: 'user_id',
+    isMuted: 'is_muted',
+  },
+  devices: { userId: 'user_id', pushEnabled: 'push_enabled', revokedAt: 'revoked_at' },
 }));
 
 vi.mock('drizzle-orm', () => ({
@@ -47,6 +59,12 @@ vi.mock('../services/deviceRevocation.js', () => ({
   isDeviceConnected: mockIsDeviceConnected,
 }));
 
+// ── presence mock ──────────────────────────────────────────────────────────────
+const mockIsOnline = vi.fn();
+vi.mock('../services/presence.js', () => ({
+  isOnline: mockIsOnline,
+}));
+
 process.env['VAPID_PUBLIC_KEY'] = 'test-public-key';
 process.env['VAPID_PRIVATE_KEY'] = 'test-private-key';
 
@@ -62,6 +80,30 @@ beforeEach(() => {
   mockSetFn.mockReturnValue({ where: mockWhereFn });
   mockDelete.mockReturnValue({ where: mockDeleteWhereFn });
   mockExecute.mockResolvedValue(undefined);
+
+  // Mock the database queries for pushFilter
+  mockConversationMembersFindMany.mockResolvedValue([
+    { userId: 'test-user-1', isMuted: false },
+    { userId: 'test-user-2', isMuted: false },
+  ]);
+
+  // Dynamic mock: return devices that match the recipientDeviceIds passed to the function
+  mockDevicesFindMany.mockImplementation(async () => {
+    // Return all possible test device IDs for this test run
+    return [
+      { id: 'test-device-1', userId: 'test-user-1' },
+      { id: 'test-device-2', userId: 'test-user-2' },
+      { id: 'test-device-3', userId: 'test-user-1' },
+      { id: 'test-device-4', userId: 'test-user-2' },
+      { id: 'test-device-5', userId: 'test-user-1' },
+      { id: 'test-device-6', userId: 'test-user-2' },
+      { id: 'test-device-7', userId: 'test-user-1' },
+      { id: 'test-device-8', userId: 'test-user-2' },
+    ];
+  });
+
+  // Mock presence.isOnline to return false (users are offline)
+  mockIsOnline.mockResolvedValue(false);
 });
 
 afterEach(() => {
@@ -71,7 +113,7 @@ afterEach(() => {
 // Use unique device IDs per test to avoid rate-limit state bleed between tests.
 let testDeviceCounter = 0;
 function uniqueDevice(): string {
-  return `dev-push-test-${++testDeviceCounter}`;
+  return `test-device-${++testDeviceCounter}`;
 }
 
 describe('#236 – dispatchOfflinePush', () => {
