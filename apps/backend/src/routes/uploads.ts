@@ -6,6 +6,7 @@ import { db } from '../db/index.js';
 import { files, conversationMembers } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { generatePresignedPut, generateStorageKey } from '../lib/storage.js';
+import { getGroupByConversation, isActiveMember } from '../services/mlsGroups.js';
 
 export const uploadsRouter: IRouter = Router();
 
@@ -65,6 +66,22 @@ uploadsRouter.post('/', async (req: AuthRequest, res) => {
     return;
   }
 
+  // ── MLS group uploads (#371) ────────────────────────────────────────────────
+  // The file is encrypted once to a random file key, and that key is delivered
+  // by putting it inside the MLS group message that references the file — so
+  // the uploading device has to be able to send into the group in the first
+  // place. `mlsEpoch` comes back with the slot so the client knows which epoch
+  // to encrypt that message to.
+  const group = await getGroupByConversation(conversationId);
+  const deviceId = req.auth!.deviceId as string | undefined;
+
+  if (group) {
+    if (!deviceId || !(await isActiveMember(group.id, deviceId))) {
+      res.status(403).json({ error: 'Device is not a member of this conversation MLS group' });
+      return;
+    }
+  }
+
   const storageKey = generateStorageKey(conversationId, sha256);
   const uploadUrl = await generatePresignedPut(storageKey, mimeType);
 
@@ -82,7 +99,7 @@ uploadsRouter.post('/', async (req: AuthRequest, res) => {
     })
     .returning({ id: files.id });
 
-  res.status(201).json({ fileId: file!.id, uploadUrl });
+  res.status(201).json({ fileId: file!.id, uploadUrl, mlsEpoch: group?.currentEpoch ?? null });
 });
 
 // POST /uploads/:fileId/confirm — mark file as ready after client PUT succeeds
