@@ -12,8 +12,15 @@
     {
       "idx": 1,
       "version": "7",
-      "when": 1785177624688,
-      "tag": "0001_add_messages_system_payload",
+      "when": 1785129818340,
+      "tag": "0001_add_system_payload_to_messages",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785412264325,
+      "tag": "0002_strengthen_system_payload_check",
       "breakpoints": true
     }
   ]

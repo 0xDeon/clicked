@@ -7,9 +7,9 @@ import {
   pgEnum,
   index,
   integer,
+  jsonb,
   uniqueIndex,
   check,
-  jsonb,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
@@ -143,6 +143,10 @@ export const messages = pgTable(
     index('messages_conversation_created_idx').on(table.conversationId, table.createdAt),
     // System messages carry structured metadata, never ciphertext; everything
     // else carries ciphertext (or an envelope), never a system payload.
+    // Supersedes the looser `messages_system_payload_only_on_system_type`
+    // constraint (#398), which only forbade a payload on non-system rows —
+    // it didn't require a system row to actually have one, or forbid a
+    // system row from also carrying ciphertext.
     check(
       'messages_system_payload_check',
       sql`${table.contentType} <> 'system' OR (${table.ciphertext} IS NULL AND ${table.systemPayload} IS NOT NULL)`,

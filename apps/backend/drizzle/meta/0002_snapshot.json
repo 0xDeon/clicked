@@ -1,6 +1,6 @@
 {
-  "id": "9ea97ad2-6999-44b6-a433-e809d3209adf",
-  "prevId": "d5682005-cccf-4e2e-992d-d66a5d6d3f4c",
+  "id": "c5f993d0-71a3-4040-bb92-b7a90bc11ca1",
+  "prevId": "9ea97ad2-6999-44b6-a433-e809d3209adf",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -737,6 +737,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "system_payload": {
+          "name": "system_payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
         "file_id": {
           "name": "file_id",
           "type": "uuid",
@@ -746,12 +752,6 @@
         "edits_message_id": {
           "name": "edits_message_id",
           "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "system_payload": {
-          "name": "system_payload",
-          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },
@@ -863,9 +863,9 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
-        "messages_system_payload_only_on_system_type": {
-          "name": "messages_system_payload_only_on_system_type",
-          "value": "\"messages\".\"content_type\" = 'system' OR \"messages\".\"system_payload\" IS NULL"
+        "messages_system_payload_check": {
+          "name": "messages_system_payload_check",
+          "value": "\"messages\".\"content_type\" <> 'system' OR (\"messages\".\"ciphertext\" IS NULL AND \"messages\".\"system_payload\" IS NOT NULL)"
         }
       },
       "isRLSEnabled": false

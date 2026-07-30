@@ -16,6 +16,7 @@ import { filesRouter } from './routes/files.js';
 import { pushRouter } from './routes/push.js';
 import { syncRouter } from './routes/sync.js';
 import { userDevicesRouter } from './routes/userDevices.js';
+import { localStorageRouter } from './routes/localStorage.js';
 import { requireAuth, type AuthRequest } from './middleware/auth.js';
 
 const packageJson = JSON.parse(
@@ -61,6 +62,13 @@ app.use('/files', filesRouter);
 app.use('/push', pushRouter);
 app.use('/sync', syncRouter);
 app.use('/user-devices', userDevicesRouter);
+
+// Dev/test-only: serves GET/PUT against the fs-backed local object store so
+// presigned URLs issued outside production are real, working URLs (#330).
+// Never mounted in production — real deployments only ever talk to S3.
+if (process.env['NODE_ENV'] !== 'production') {
+  app.use('/local-storage', localStorageRouter);
+}
 
 app.get('/me', requireAuth, (req, res) => {
   res.json({ user: (req as AuthRequest).auth });
