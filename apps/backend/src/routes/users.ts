@@ -8,6 +8,7 @@ import { redis } from '../lib/redis.js';
 import { isOnline, deriveDevicePresence } from '../services/presence.js';
 import { getSocketServer } from '../lib/socket.js';
 import { conversationRoom } from '../services/roomManager.js';
+import { prekeyConsumedTotal } from '../lib/metrics.js';
 
 export const usersRouter: RouterType = Router();
 
@@ -256,6 +257,10 @@ usersRouter.get('/:userId/devices/:deviceId/key-bundle', async (req: AuthRequest
 
     return { keyId: candidate.keyId, publicKey: candidate.publicKey };
   });
+
+  if (claimedOneTimePreKey) {
+    prekeyConsumedTotal.inc();
+  }
 
   res.json({
     deviceId: device.id,

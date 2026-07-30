@@ -41,6 +41,7 @@ import {
 import { startFileCleanupJob } from './services/fileCleanup.js';
 import { loadEnv } from './config.js';
 import { getObjectStore } from './lib/objectStore.js';
+import { presenceChurnTotal, connectedSockets } from './lib/metrics.js';
 import {
   conversationRoom,
   joinUserRoom,
@@ -115,6 +116,7 @@ io.on('connection', async (socket: AuthSocket) => {
 
   socket.data['userId'] = userId;
   socket.data['deviceId'] = deviceId;
+  connectedSockets.inc();
 
   // Start the server-side heartbeat watchdog (90 s timeout).
   startHeartbeatTimer(socket, userId, deviceId, appRedis, io);
@@ -246,6 +248,7 @@ io.on('connection', async (socket: AuthSocket) => {
 
   socket.on('disconnect', async (reason: string) => {
     console.log('User disconnected:', userId, reason);
+    connectedSockets.dec();
 
     clearHeartbeatTimer(socket.id);
 
@@ -289,6 +292,10 @@ io.on('connection', async (socket: AuthSocket) => {
       const fullyOffline = deviceHasNoSockets
         ? await setOffline(appRedis, userId, deviceId)
         : false;
+
+      if (fullyOffline) {
+        presenceChurnTotal.inc({ transition: 'offline' });
+      }
 
       if (fullyOffline) {
         const user = await db.query.users.findFirst({

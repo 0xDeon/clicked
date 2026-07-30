@@ -12,6 +12,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { pushSubscriptions } from '../db/schema.js';
 import { isDeviceConnected } from './deviceRevocation.js';
+import { pushResultTotal } from '../lib/metrics.js';
 import { redis } from '../lib/redis.js';
 
 const FILE_CONTENT_TYPES = new Set(['file', 'image', 'video', 'audio']);
@@ -149,6 +150,7 @@ async function sendWebPush(sub: SubRow, payload: string): Promise<void> {
       .where(eq(pushSubscriptions.id, sub.id));
 
     console.log(`[push] ok  → ${sub.endpoint.slice(0, 50)}`);
+    pushResultTotal.inc({ result: 'sent' });
   } catch (err: unknown) {
     const status = (err as { statusCode?: number }).statusCode;
 
@@ -156,6 +158,7 @@ async function sendWebPush(sub: SubRow, payload: string): Promise<void> {
       // Dead subscription – prune immediately (#237)
       console.log(`[push] prune ${status} → ${sub.endpoint.slice(0, 50)}`);
       await db.delete(pushSubscriptions).where(eq(pushSubscriptions.id, sub.id));
+      pushResultTotal.inc({ result: 'pruned' });
     } else {
       // Transient failure – back off by disabling for 5 min (#237)
       const retryAfter = new Date(Date.now() + 5 * 60 * 1_000);
@@ -164,6 +167,7 @@ async function sendWebPush(sub: SubRow, payload: string): Promise<void> {
         .update(pushSubscriptions)
         .set({ disabledAt: retryAfter })
         .where(eq(pushSubscriptions.id, sub.id));
+      pushResultTotal.inc({ result: 'backoff' });
     }
   }
 }
