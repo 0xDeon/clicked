@@ -2,6 +2,7 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  HeadObjectCommand,
   PutObjectCommand,
   S3Client,
   type PutObjectCommandInput,
@@ -80,6 +81,34 @@ export class ObjectStore implements ObjectStoreLike {
         ...(contentType ? { ContentType: contentType } : {}),
       }),
     );
+  }
+
+  /**
+   * Checks whether an object exists at `key` and returns its size. Used to
+   * verify an upload actually landed in the store before a file is marked
+   * ready (#346). Works against both MinIO (local/dev) and AWS S3/R2
+   * (production) — same HeadObject call either way.
+   */
+  async headObject(key: string): Promise<{ exists: boolean; size?: number }> {
+    try {
+      const result = await this.client.send(
+        new HeadObjectCommand({
+          Bucket: this.bucket,
+          Key: key,
+        }),
+      );
+      return result.ContentLength === undefined
+        ? { exists: true }
+        : { exists: true, size: result.ContentLength };
+    } catch (err) {
+      const name = (err as { name?: string })?.name;
+      const statusCode = (err as { $metadata?: { httpStatusCode?: number } })?.$metadata
+        ?.httpStatusCode;
+      if (name === 'NotFound' || name === 'NoSuchKey' || statusCode === 404) {
+        return { exists: false };
+      }
+      throw err;
+    }
   }
 
   async getObject(key: string) {

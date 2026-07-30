@@ -3,6 +3,7 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  HeadObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
 import {
@@ -76,6 +77,54 @@ describe('ObjectStore', () => {
     );
     expect(send).toHaveBeenNthCalledWith(2, expect.any(GetObjectCommand));
     expect(send).toHaveBeenNthCalledWith(3, expect.any(DeleteObjectCommand));
+  });
+
+  describe('headObject', () => {
+    it('returns exists: true and the object size when the object is present', async () => {
+      send.mockResolvedValue({ ContentLength: 4096 });
+      const store = createObjectStore(config);
+
+      const result = await store.headObject('uploads/conv-1/key');
+
+      expect(send).toHaveBeenCalledWith(expect.any(HeadObjectCommand));
+      expect(result).toEqual({ exists: true, size: 4096 });
+    });
+
+    it('returns exists: false when the SDK throws a NotFound error', async () => {
+      send.mockRejectedValue(Object.assign(new Error('not found'), { name: 'NotFound' }));
+      const store = createObjectStore(config);
+
+      const result = await store.headObject('uploads/conv-1/missing');
+
+      expect(result).toEqual({ exists: false });
+    });
+
+    it('returns exists: false when the SDK throws a NoSuchKey error', async () => {
+      send.mockRejectedValue(Object.assign(new Error('no such key'), { name: 'NoSuchKey' }));
+      const store = createObjectStore(config);
+
+      const result = await store.headObject('uploads/conv-1/missing');
+
+      expect(result).toEqual({ exists: false });
+    });
+
+    it('returns exists: false when the SDK throws with a 404 status code', async () => {
+      send.mockRejectedValue(
+        Object.assign(new Error('missing'), { $metadata: { httpStatusCode: 404 } }),
+      );
+      const store = createObjectStore(config);
+
+      const result = await store.headObject('uploads/conv-1/missing');
+
+      expect(result).toEqual({ exists: false });
+    });
+
+    it('re-throws unrelated errors instead of treating them as not-found', async () => {
+      send.mockRejectedValue(new Error('network error'));
+      const store = createObjectStore(config);
+
+      await expect(store.headObject('uploads/conv-1/key')).rejects.toThrow('network error');
+    });
   });
 });
 

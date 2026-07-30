@@ -45,26 +45,59 @@ function makeRedis(setResult: string | null = 'OK') {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe('EventDispatcher.register + backward-compat socket.on', () => {
-  it('calls handler when raw event is emitted', async () => {
+describe('EventDispatcher.register — no raw socket.on fallback (#342)', () => {
+  it('does NOT call the handler when the raw, non-enveloped event name is emitted directly', async () => {
     const { socket, trigger } = makeSocket();
     const dispatcher = new EventDispatcher(makeIo(), socket, null);
     const handler = vi.fn().mockResolvedValue(undefined);
 
     dispatcher.register('join_room', handler);
+    dispatcher.listen();
     trigger('join_room', { conversationId: 'c1' });
 
+    await new Promise((r) => setTimeout(r, 10));
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('only invokes the handler through the enveloped dispatch path', async () => {
+    const { socket, trigger } = makeSocket();
+    const redis = makeRedis('OK');
+    const dispatcher = new EventDispatcher(makeIo(), socket, redis as never);
+    const handler = vi.fn().mockResolvedValue(undefined);
+
+    dispatcher.register('join_room', handler);
+    dispatcher.listen();
+
+    // Raw emit is silently ignored — no listener attached for the bare type.
+    trigger('join_room', { conversationId: 'c1' });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(handler).not.toHaveBeenCalled();
+
+    // Enveloped emit through 'dispatch' reaches the handler.
+    trigger('dispatch', {
+      eventId: 'evt-raw-vs-enveloped',
+      type: 'join_room',
+      timestamp: Date.now(),
+      payload: { conversationId: 'c1' },
+    });
     await new Promise((r) => setTimeout(r, 10));
     expect(handler).toHaveBeenCalledWith({ conversationId: 'c1' });
   });
 
-  it('handler errors do not propagate (never crash)', async () => {
+  it('handler errors from the enveloped path do not propagate (never crash)', async () => {
     const { socket, trigger } = makeSocket();
     const dispatcher = new EventDispatcher(makeIo(), socket, null);
     const handler = vi.fn().mockRejectedValue(new Error('boom'));
 
     dispatcher.register('join_room', handler);
-    trigger('join_room', { conversationId: 'c1' });
+    dispatcher.listen();
+
+    trigger('dispatch', {
+      eventId: 'evt-error',
+      type: 'join_room',
+      timestamp: Date.now(),
+      payload: { conversationId: 'c1' },
+    });
 
     await new Promise((r) => setTimeout(r, 10));
     expect(handler).toHaveBeenCalled();

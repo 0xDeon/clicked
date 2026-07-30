@@ -6,6 +6,7 @@ import { db } from '../db/index.js';
 import { files, conversationMembers } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { generatePresignedPut, generateStorageKey } from '../lib/storage.js';
+import { getObjectStore } from '../lib/objectStore.js';
 import { verifyFileIntegrity } from '../lib/fileIntegrity.js';
 
 export const uploadsRouter: IRouter = Router();
@@ -127,35 +128,18 @@ uploadsRouter.post('/:fileId/confirm', async (req: AuthRequest, res) => {
     return;
   }
 
-  const parsed = ConfirmUploadSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(422).json({ error: 'sha256 is required' });
+  const head = await getObjectStore().headObject(file.storageKey);
+
+  if (!head.exists) {
+    res.status(422).json({ error: 'Object not found in storage', storageKey: file.storageKey });
     return;
   }
 
-  if (parsed.data.sha256 !== file.sha256) {
-    res.status(422).json({ error: 'sha256 mismatch' });
-    return;
-  }
-
-  const integrityCheck = await verifyFileIntegrity(file.storageKey, file.sha256);
-
-  if (!integrityCheck.valid) {
-    await db
-      .update(files)
-      .set({
-        status: 'deleted',
-        deletedAt: new Date(),
-      })
-      .where(eq(files.id, fileId));
-
+  if (head.size !== undefined && head.size !== file.size) {
     res.status(422).json({
-      error: 'File integrity verification failed',
-      details: {
-        reason: integrityCheck.error || 'Hash mismatch',
-        expectedHash: integrityCheck.expectedHash,
-        computedHash: integrityCheck.computedHash,
-      },
+      error: 'Object size mismatch',
+      expectedSize: file.size,
+      actualSize: head.size,
     });
     return;
   }

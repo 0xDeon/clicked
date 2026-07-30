@@ -211,13 +211,14 @@ describe('POST /uploads/:fileId/confirm', () => {
     app = await buildApp();
   });
 
-  it('returns 200 and status ready when file is pending and owned by caller', async () => {
+  it('returns 200 and status ready when object exists with matching size', async () => {
     mockFileFindFirst.mockResolvedValueOnce({
       id: 'file-001',
       uploaderId: 'user-abc',
       status: 'pending',
       sha256: 'abc123',
     });
+    mockHeadObject.mockResolvedValueOnce({ exists: true, size: 1024 });
     mockUpdate.mockReturnValueOnce({
       set: vi.fn().mockReturnThis(),
       where: vi.fn().mockResolvedValueOnce(undefined),
@@ -226,6 +227,7 @@ describe('POST /uploads/:fileId/confirm', () => {
     const res = await request(app).post('/uploads/file-001/confirm').send({ sha256: 'abc123' });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ fileId: 'file-001', status: 'ready' });
+    expect(mockHeadObject).toHaveBeenCalledWith('uploads/conv-123/abc123def456');
   });
 
   it('returns 404 when file does not exist', async () => {

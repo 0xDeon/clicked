@@ -20,11 +20,14 @@ import {
   insertMessageEnvelopes,
 } from '../lib/messageFanout.js';
 import { validateMessagePayload } from '../lib/validateMessagePayload.js';
+import { checkEnvelopeSizes } from '../services/rateLimit.js';
 import { dispatchOfflinePush, FILE_CONTENT_TYPES } from '../services/pushNotification.js';
 import { deliverMessage } from '../services/deliveryPipeline.js';
 import { publishEphemeral, readMissedEvents } from '../services/resumeStream.js';
 import { handleDeviceDeliveryReceipt } from '../services/deliveryAggregation.js';
 import { conversationRoom } from '../services/roomManager.js';
+import { handleHeartbeat } from '../services/heartbeat.js';
+import { cleanupStaleSockets } from '../services/presence.js';
 import { EventDispatcher } from './dispatcher.js';
 
 const PAGE_SIZE = 30;
@@ -87,6 +90,15 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       socket.to(conversationRoom(cid)).emit('typing_stop', rp);
     }
     typingTimers.clear();
+  });
+
+  // ── heartbeat ──────────────────────────────────────────────────────────────
+  dispatcher.register('heartbeat', async () => {
+    const deviceId = socket.auth!.deviceId;
+    await handleHeartbeat(socket, userId, deviceId, redis);
+    if (redis) {
+      await cleanupStaleSockets(io, redis, userId, socket.id);
+    }
   });
 
   // ── join_room ──────────────────────────────────────────────────────────────
@@ -165,6 +177,16 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         event: 'send_message',
         code: validation.code,
         message: validation.message,
+      });
+      return;
+    }
+
+    const envelopeSizeCheck = checkEnvelopeSizes(envelopes);
+    if (!envelopeSizeCheck.valid) {
+      socket.emit('error', {
+        event: 'send_message',
+        code: 'envelope_too_large',
+        message: `Envelope for device ${envelopeSizeCheck.oversizedDeviceId} exceeds size limit`,
       });
       return;
     }
@@ -282,6 +304,16 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       socket.emit('error', {
         event: 'edit_message',
         message: 'Content (envelope ciphertext) must not be empty',
+      });
+      return;
+    }
+
+    const envelopeSizeCheck = checkEnvelopeSizes(envelopes);
+    if (!envelopeSizeCheck.valid) {
+      socket.emit('error', {
+        event: 'edit_message',
+        code: 'envelope_too_large',
+        message: `Envelope for device ${envelopeSizeCheck.oversizedDeviceId} exceeds size limit`,
       });
       return;
     }

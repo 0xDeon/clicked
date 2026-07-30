@@ -113,6 +113,16 @@ function presenceDeviceSocketsKey(userId: string, deviceId: string): string {
   return `presence:device_sockets:${userId}:${deviceId}`;
 }
 
+/**
+ * Keyed by deviceId alone (no userId) so callers that only have a deviceId —
+ * e.g. the device-revocation pub/sub listener and push-notification's
+ * online check — can resolve connected sockets without a DB round trip.
+ * Cross-node visible, unlike the old in-process Map registry it replaces (#341).
+ */
+function deviceSocketsByDeviceKey(deviceId: string): string {
+  return `presence:device_sockets_by_device:${deviceId}`;
+}
+
 function presenceSocketKey(socketId: string): string {
   return `presence:socket:${socketId}`;
 }
@@ -152,12 +162,15 @@ export async function registerPresenceSocket(
   const userSocketsKey = presenceSocketsKey(userId);
   const deviceSocketsKey = presenceDeviceSocketsKey(userId, deviceId);
   const socketKey = presenceSocketKey(socketId);
+  const byDeviceKey = deviceSocketsByDeviceKey(deviceId);
 
   await redis.sadd(userSocketsKey, socketId);
   await redis.sadd(deviceSocketsKey, socketId);
+  await redis.sadd(byDeviceKey, socketId);
   await redis.hset(socketKey, { userId, deviceId });
   await redis.expire(userSocketsKey, PRESENCE_TTL);
   await redis.expire(deviceSocketsKey, PRESENCE_TTL);
+  await redis.expire(byDeviceKey, PRESENCE_TTL);
   await redis.expire(socketKey, PRESENCE_TTL);
 }
 
@@ -183,14 +196,21 @@ export async function unregisterPresenceSocket(
 ): Promise<boolean> {
   const userSocketsKey = presenceSocketsKey(userId);
   const deviceSocketsKey = presenceDeviceSocketsKey(userId, deviceId);
+  const byDeviceKey = deviceSocketsByDeviceKey(deviceId);
 
   await redis.srem(userSocketsKey, socketId);
   await redis.srem(deviceSocketsKey, socketId);
+  await redis.srem(byDeviceKey, socketId);
   await redis.del(presenceSocketKey(socketId));
 
   const remainingDeviceSockets = await redis.scard(deviceSocketsKey);
   if (remainingDeviceSockets === 0) {
     await redis.del(deviceSocketsKey);
+  }
+
+  const remainingByDeviceSockets = await redis.scard(byDeviceKey);
+  if (remainingByDeviceSockets === 0) {
+    await redis.del(byDeviceKey);
   }
 
   const remainingUserSockets = await redis.scard(userSocketsKey);
@@ -199,6 +219,20 @@ export async function unregisterPresenceSocket(
   }
 
   return remainingDeviceSockets === 0;
+}
+
+/**
+ * Cross-node connected-socket lookup keyed by deviceId alone (#341).
+ * Replaces deviceRevocation.ts's in-process Map, which only had visibility
+ * into sockets connected to the local gateway process.
+ */
+export async function getDeviceSocketIds(redis: Redis, deviceId: string): Promise<string[]> {
+  return redis.smembers(deviceSocketsByDeviceKey(deviceId));
+}
+
+export async function isDeviceConnectedInRegistry(redis: Redis, deviceId: string): Promise<boolean> {
+  const count = await redis.scard(deviceSocketsByDeviceKey(deviceId));
+  return count > 0;
 }
 
 /**
@@ -329,6 +363,13 @@ async function removeStaleSocketMapping(
     const remainingDeviceSockets = await redis.scard(deviceSocketsKey);
     if (remainingDeviceSockets === 0) {
       await redis.del(deviceSocketsKey);
+    }
+
+    const byDeviceKey = deviceSocketsByDeviceKey(deviceId);
+    await redis.srem(byDeviceKey, socketId);
+    const remainingByDeviceSockets = await redis.scard(byDeviceKey);
+    if (remainingByDeviceSockets === 0) {
+      await redis.del(byDeviceKey);
     }
   }
   await redis.del(presenceSocketKey(socketId));
