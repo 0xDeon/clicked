@@ -16,6 +16,7 @@ import { filesRouter } from './routes/files.js';
 import { pushRouter } from './routes/push.js';
 import { syncRouter } from './routes/sync.js';
 import { userDevicesRouter } from './routes/userDevices.js';
+import { localStorageRouter } from './routes/localStorage.js';
 import { requireAuth, type AuthRequest } from './middleware/auth.js';
 import { registry } from './lib/metrics.js';
 

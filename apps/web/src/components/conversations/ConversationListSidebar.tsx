@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { API_BASE_URL } from '@/lib/api';
 import { useAuth } from '@/components/auth/useAuth';
-import { parseJwtClaims } from '@/lib/realtime';
+import { parseJwtClaims, emitSocketEnvelope } from '@/lib/realtime';
 import { useSocket } from '@/hooks/useSocket';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { SkeletonLoader } from '@/components/ui/SkeletonLoader';
@@ -281,7 +281,7 @@ export function ConversationListSidebar() {
 
       if (conversationId === selectedIdRef.current) {
         // Conversation is open — mark read immediately
-        socket!.emit('message_read', { conversationId, lastReadMessageId: id });
+        emitSocketEnvelope(socket, 'message_read', { conversationId, lastReadMessageId: id });
       } else {
         // Background conversation — increment badge
         setUnreadCounts((prev) => {
@@ -311,7 +311,10 @@ export function ConversationListSidebar() {
 
     const lastId = latestMessageIds.current.get(selectedId);
     if (lastId) {
-      socket.emit('message_read', { conversationId: selectedId, lastReadMessageId: lastId });
+      emitSocketEnvelope(socket, 'message_read', {
+        conversationId: selectedId,
+        lastReadMessageId: lastId,
+      });
     }
   }, [selectedId, socket]);
 

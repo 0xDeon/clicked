@@ -5,6 +5,7 @@
  *   #236 – dispatch content-free Web Push when recipient device is offline
  *   #237 – prune dead subscriptions (410/404), back off on transient failures
  *   #239 – coalesce burst messages into a single push, rate-limit per device
+ *   SECURITY FIX: Use shared filtering logic to respect isMuted and pushEnabled
  */
 import webpush from 'web-push';
 import { and, eq, isNull } from 'drizzle-orm';
@@ -12,6 +13,7 @@ import { db } from '../db/index.js';
 import { pushSubscriptions } from '../db/schema.js';
 import { isDeviceConnected } from './deviceRevocation.js';
 import { pushResultTotal } from '../lib/metrics.js';
+import { redis } from '../lib/redis.js';
 
 const FILE_CONTENT_TYPES = new Set(['file', 'image', 'video', 'audio']);
 
@@ -46,18 +48,32 @@ const lastPushSentAt = new Map<string, number>();
 /**
  * #236 – After a message is persisted, dispatch push to every recipient device
  * that currently has no active socket connection.
+ *
+ * SECURITY FIX: Now uses shared filtering logic (pushFilter.ts) to ensure
+ * consistent behavior with sendPushForMessage:
+ * - Respects conversationMembers.isMuted
+ * - Respects devices.pushEnabled
+ * - Filters by connection state
+ * - Filters by online/offline state
  */
 export async function dispatchOfflinePush(
   conversationId: string,
   messageId: string,
   recipientDeviceIds: string[],
+  senderId?: string,
 ): Promise<void> {
   if (!vapidReady || recipientDeviceIds.length === 0) return;
 
-  for (const deviceId of recipientDeviceIds) {
-    if (!isDeviceConnected(deviceId)) {
-      queueCoalescedPush(deviceId, conversationId, messageId);
-    }
+  // Use shared filtering logic to get eligible recipients
+  const eligibleDeviceIds = await getEligiblePushRecipients({
+    conversationId,
+    senderId: senderId || '', // Sender filtering handled by pushFilter
+    recipientDeviceIds, // Only consider these specific devices
+    redis,
+  });
+
+  for (const deviceId of eligibleDeviceIds) {
+    queueCoalescedPush(deviceId, conversationId, messageId);
   }
 }
 
