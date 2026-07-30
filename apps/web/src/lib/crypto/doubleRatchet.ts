@@ -1,252 +1,457 @@
-import { x25519 } from '@noble/curves/ed25519';
-import { hkdf } from '@noble/hashes/hkdf';
-import { sha256 } from '@noble/hashes/sha2';
+const DB_NAME = 'driptide-crypto';
+const DB_VERSION = 1;
+const STORE_NAME = 'double-ratchet-sessions';
+const PROTOCOL_VERSION = 1;
+const ZERO_SALT = new Uint8Array(32);
 
-export const MAX_SKIP = 100;
-export const MAX_SKIPPED_KEYS = 1000;
+type BufferLike = Uint8Array;
 
-const INFO_RK = new TextEncoder().encode('DoubleRatchetRK');
-const INFO_CK = new TextEncoder().encode('DoubleRatchetCK');
-const INFO_MESSAGE_KEY = new TextEncoder().encode('DoubleRatchetMK');
+export type RatchetEnvelope = {
+  recipientDeviceId: string;
+  ciphertext: string;
+};
 
-export interface KeyPair {
-  privateKey: Uint8Array;
-  publicKey: Uint8Array;
-}
-
-export interface Header {
-  dh: Uint8Array;
-  pn: number;
+type RatchetHeader = {
+  v: number;
+  dh: string;
   n: number;
-}
+  pn: number;
+};
 
-export interface EncryptedMessagePayload {
-  header: {
-    dh: string; // base64
-    pn: number;
-    n: number;
-  };
-  ciphertext: string; // base64
-  iv: string; // base64
-}
+type RatchetState = {
+  sessionId: string;
+  rootKey: string;
+  sendChainKey: string;
+  receiveChainKey: string;
+  sendingPrivateKey: string;
+  sendingPublicKey: string;
+  remotePublicKey: string;
+  sendMessageNumber: number;
+  receiveMessageNumber: number;
+  previousSendingLength: number;
+  sendRatchetPending: boolean;
+  updatedAt: number;
+};
 
-export interface DoubleRatchetState {
-  DHs: KeyPair;
-  DHr: Uint8Array | null;
-  RK: Uint8Array;
-  CKs: Uint8Array | null;
-  CKr: Uint8Array | null;
-  Ns: number;
-  Nr: number;
-  PN: number;
-  MKSKIPPED: Map<string, Uint8Array>;
-}
+type StoredRatchetState = RatchetState & { id: string };
 
-export function toBase64(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString('base64');
-}
+export type RatchetSession = {
+  sessionId: string;
+  initiator: boolean;
+  initialSecret: Uint8Array;
+  remotePublicKey?: Uint8Array;
+};
 
-export function fromBase64(b64: string): Uint8Array {
-  return new Uint8Array(Buffer.from(b64, 'base64'));
-}
-
-function toBufferSource(arr: Uint8Array): BufferSource {
-  return new Uint8Array(Array.from(arr));
-}
-
-export function generateKeyPair(): KeyPair {
-  const privateKey = x25519.utils.randomSecretKey();
-  const publicKey = x25519.getPublicKey(privateKey);
-  return { privateKey, publicKey };
-}
-
-export function kdfRk(rk: Uint8Array, dhOut: Uint8Array): { rk: Uint8Array; ck: Uint8Array } {
-  const derived = hkdf(sha256, dhOut, rk, INFO_RK, 64);
-  return {
-    rk: derived.slice(0, 32),
-    ck: derived.slice(32, 64),
-  };
-}
-
-export function kdfCk(ck: Uint8Array): { ck: Uint8Array; mk: Uint8Array } {
-  const nextCk = hkdf(sha256, new Uint8Array([0x01]), ck, INFO_CK, 32);
-  const mk = hkdf(sha256, new Uint8Array([0x02]), ck, INFO_MESSAGE_KEY, 32);
-  return { ck: nextCk, mk };
-}
-
-function skippedKeyId(dhPub: Uint8Array | null, n: number): string {
-  const dhB64 = dhPub ? toBase64(dhPub) : 'none';
-  return `${dhB64}:${n}`;
-}
-
-export function initAlice(sharedKey: Uint8Array, bobDhPublicKey: Uint8Array): DoubleRatchetState {
-  const DHs = generateKeyPair();
-  const DHr = bobDhPublicKey;
-  const dhOut = x25519.getSharedSecret(DHs.privateKey, DHr);
-  const { rk: RK, ck: CKs } = kdfRk(sharedKey, dhOut);
-
-  return {
-    DHs,
-    DHr,
-    RK,
-    CKs,
-    CKr: null,
-    Ns: 0,
-    Nr: 0,
-    PN: 0,
-    MKSKIPPED: new Map(),
-  };
-}
-
-export function initBob(sharedKey: Uint8Array, bobKeyPair: KeyPair): DoubleRatchetState {
-  return {
-    DHs: bobKeyPair,
-    DHr: null,
-    RK: sharedKey,
-    CKs: null,
-    CKr: null,
-    Ns: 0,
-    Nr: 0,
-    PN: 0,
-    MKSKIPPED: new Map(),
-  };
-}
-
-function pruneSkippedKeys(mkSkipped: Map<string, Uint8Array>): void {
-  while (mkSkipped.size > MAX_SKIPPED_KEYS) {
-    const firstKey = mkSkipped.keys().next().value;
-    if (firstKey !== undefined) {
-      mkSkipped.delete(firstKey);
-    } else {
-      break;
-    }
+function webCrypto(): Crypto {
+  if (typeof crypto === 'undefined' || !crypto.subtle) {
+    throw new Error('Web Crypto API is unavailable');
   }
+  return crypto;
 }
 
-export function skipMessageKeys(state: DoubleRatchetState, until: number): void {
-  if (state.Nr + MAX_SKIP < until) {
-    throw new Error('Too many skipped messages');
-  }
-
-  if (state.CKr) {
-    while (state.Nr < until) {
-      const { ck, mk } = kdfCk(state.CKr);
-      state.CKr = ck;
-      const keyId = skippedKeyId(state.DHr, state.Nr);
-      state.MKSKIPPED.set(keyId, mk);
-      pruneSkippedKeys(state.MKSKIPPED);
-      state.Nr++;
-    }
-  }
+function bytes(value: string): Uint8Array {
+  return new TextEncoder().encode(value);
 }
 
-async function encryptAesGcm(key: Uint8Array, plaintext: Uint8Array, ad: Uint8Array): Promise<{ ciphertext: Uint8Array; iv: Uint8Array }> {
-  const cryptoKey = await crypto.subtle.importKey('raw', toBufferSource(key), { name: 'AES-GCM' }, false, ['encrypt']);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const encrypted = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv, additionalData: toBufferSource(ad) },
-    cryptoKey,
-    toBufferSource(plaintext),
+function text(value: Uint8Array): string {
+  return new TextDecoder().decode(value);
+}
+
+function source(value: Uint8Array): BufferSource {
+  return value as unknown as BufferSource;
+}
+
+function toBase64(value: Uint8Array): string {
+  let result = '';
+  for (let offset = 0; offset < value.length; offset += 0x8000) {
+    result += String.fromCharCode(...value.subarray(offset, offset + 0x8000));
+  }
+  return btoa(result);
+}
+
+function fromBase64(value: string): Uint8Array {
+  const decoded = atob(value);
+  const result = new Uint8Array(decoded.length);
+  for (let index = 0; index < decoded.length; index += 1) {
+    result[index] = decoded.charCodeAt(index);
+  }
+  return result;
+}
+
+async function hkdf(
+  input: BufferLike,
+  salt: BufferLike,
+  info: string,
+  length: number,
+): Promise<Uint8Array> {
+  const subtle = webCrypto().subtle;
+  const key = await subtle.importKey('raw', source(input), 'HKDF', false, ['deriveBits']);
+  const result = await subtle.deriveBits(
+    { name: 'HKDF', hash: 'SHA-256', salt: source(salt), info: source(bytes(info)) },
+    key,
+    length * 8,
   );
-  return { ciphertext: new Uint8Array(encrypted), iv };
+  return new Uint8Array(result);
 }
 
-async function decryptAesGcm(key: Uint8Array, ciphertext: Uint8Array, iv: Uint8Array, ad: Uint8Array): Promise<Uint8Array> {
-  const cryptoKey = await crypto.subtle.importKey('raw', toBufferSource(key), { name: 'AES-GCM' }, false, ['decrypt']);
-  const decrypted = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: toBufferSource(iv), additionalData: toBufferSource(ad) },
-    cryptoKey,
-    toBufferSource(ciphertext),
+async function hmac(keyBytes: Uint8Array, label: string): Promise<Uint8Array> {
+  const subtle = webCrypto().subtle;
+  const key = await subtle.importKey(
+    'raw',
+    source(keyBytes),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
   );
-  return new Uint8Array(decrypted);
+  return new Uint8Array(await subtle.sign('HMAC', key, source(bytes(label))));
 }
 
-export async function ratchetEncrypt(
-  state: DoubleRatchetState,
-  plaintext: string | Uint8Array,
-  associatedData: Uint8Array = new Uint8Array(0),
-): Promise<EncryptedMessagePayload> {
-  if (!state.CKs) {
-    throw new Error('Send chain key not initialized');
-  }
+async function generateDhKeyPair(): Promise<CryptoKeyPair> {
+  return (await webCrypto().subtle.generateKey(
+    { name: 'ECDH', namedCurve: 'P-256' },
+    true,
+    ['deriveBits'],
+  )) as CryptoKeyPair;
+}
 
-  const plaintextBytes = typeof plaintext === 'string' ? new TextEncoder().encode(plaintext) : plaintext;
-  const { ck, mk } = kdfCk(state.CKs);
-  state.CKs = ck;
+async function exportPublicKey(key: CryptoKey): Promise<Uint8Array> {
+  return new Uint8Array(await webCrypto().subtle.exportKey('raw', key));
+}
 
-  const header: Header = {
-    dh: state.DHs.publicKey,
-    pn: state.PN,
-    n: state.Ns,
-  };
+async function exportPrivateKey(key: CryptoKey): Promise<Uint8Array> {
+  return new Uint8Array(await webCrypto().subtle.exportKey('pkcs8', key));
+}
 
-  state.Ns++;
+async function importPrivateKey(value: Uint8Array): Promise<CryptoKey> {
+  return webCrypto().subtle.importKey(
+    'pkcs8',
+    source(value),
+    { name: 'ECDH', namedCurve: 'P-256' },
+    false,
+    ['deriveBits'],
+  );
+}
 
-  const { ciphertext, iv } = await encryptAesGcm(mk, plaintextBytes, associatedData);
+async function importPublicKey(value: Uint8Array): Promise<CryptoKey> {
+  return webCrypto().subtle.importKey(
+    'raw',
+    source(value),
+    { name: 'ECDH', namedCurve: 'P-256' },
+    false,
+    [],
+  );
+}
 
+async function dh(privateKey: CryptoKey, publicKey: CryptoKey): Promise<Uint8Array> {
+  return new Uint8Array(
+    await webCrypto().subtle.deriveBits(
+      { name: 'ECDH', public: publicKey },
+      privateKey,
+      256,
+    ),
+  );
+}
+
+async function rootStep(
+  rootKey: Uint8Array,
+  sharedSecret: Uint8Array,
+): Promise<{ rootKey: Uint8Array; chainKey: Uint8Array }> {
+  const material = await hkdf(
+    sharedSecret,
+    rootKey,
+    'DripTide Double Ratchet root step',
+    64,
+  );
   return {
-    header: {
-      dh: toBase64(header.dh),
-      pn: header.pn,
-      n: header.n,
-    },
-    ciphertext: toBase64(ciphertext),
-    iv: toBase64(iv),
+    rootKey: material.subarray(0, 32),
+    chainKey: material.subarray(32, 64),
   };
 }
 
-export async function ratchetDecrypt(
-  state: DoubleRatchetState,
-  payload: EncryptedMessagePayload,
-  associatedData: Uint8Array = new Uint8Array(0),
+async function chainStep(
+  chainKey: Uint8Array,
+): Promise<{ messageKey: Uint8Array; nextChainKey: Uint8Array }> {
+  return {
+    messageKey: await hmac(chainKey, 'DripTide Double Ratchet message key'),
+    nextChainKey: await hmac(chainKey, 'DripTide Double Ratchet chain key'),
+  };
+}
+
+function headerBytes(header: RatchetHeader): Uint8Array {
+  return bytes(JSON.stringify(header));
+}
+
+async function encryptWithKey(
+  messageKey: Uint8Array,
+  plaintext: string,
+  aad: Uint8Array,
+): Promise<Uint8Array> {
+  const iv = new Uint8Array(12);
+  webCrypto().getRandomValues(iv);
+  const key = await webCrypto().subtle.importKey(
+    'raw',
+    source(messageKey),
+    'AES-GCM',
+    false,
+    ['encrypt'],
+  );
+  const encrypted = new Uint8Array(
+    await webCrypto().subtle.encrypt(
+      { name: 'AES-GCM', iv: source(iv), additionalData: source(aad) },
+      key,
+      source(bytes(plaintext)),
+    ),
+  );
+  const result = new Uint8Array(iv.length + encrypted.length);
+  result.set(iv);
+  result.set(encrypted, iv.length);
+  return result;
+}
+
+async function decryptWithKey(
+  messageKey: Uint8Array,
+  payload: Uint8Array,
+  aad: Uint8Array,
 ): Promise<string> {
-  const headerDh = fromBase64(payload.header.dh);
-  const ciphertext = fromBase64(payload.ciphertext);
-  const iv = fromBase64(payload.iv);
+  if (payload.length < 13) throw new Error('Invalid ratchet ciphertext');
+  const key = await webCrypto().subtle.importKey(
+    'raw',
+    source(messageKey),
+    'AES-GCM',
+    false,
+    ['decrypt'],
+  );
+  const plaintext = await webCrypto().subtle.decrypt(
+    {
+      name: 'AES-GCM',
+      iv: source(payload.subarray(0, 12)),
+      additionalData: source(aad),
+    },
+    key,
+    source(payload.subarray(12)),
+  );
+  return text(new Uint8Array(plaintext));
+}
 
-  const keyId = skippedKeyId(headerDh, payload.header.n);
-  if (state.MKSKIPPED.has(keyId)) {
-    const mk = state.MKSKIPPED.get(keyId)!;
-    state.MKSKIPPED.delete(keyId);
-    const plaintextBytes = await decryptAesGcm(mk, ciphertext, iv, associatedData);
-    return new TextDecoder().decode(plaintextBytes);
+function openDatabase(): Promise<IDBDatabase> {
+  if (typeof indexedDB === 'undefined') {
+    return Promise.reject(
+      new Error('IndexedDB is unavailable; ratchet state cannot be persisted'),
+    );
   }
 
-  const dhChanged =
-    !state.DHr ||
-    headerDh.length !== state.DHr.length ||
-    !headerDh.every((b, i) => b === state.DHr![i]);
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onerror = () => {
+      reject(request.error ?? new Error('Unable to open crypto database'));
+    };
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains(STORE_NAME)) {
+        database.createObjectStore(STORE_NAME, { keyPath: 'id' });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+  });
+}
 
-  if (dhChanged) {
-    skipMessageKeys(state, payload.header.pn);
+async function readState(sessionId: string): Promise<RatchetState | undefined> {
+  const database = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const request = database
+      .transaction(STORE_NAME, 'readonly')
+      .objectStore(STORE_NAME)
+      .get(sessionId);
+    request.onerror = () => {
+      reject(request.error ?? new Error('Unable to read ratchet state'));
+    };
+    request.onsuccess = () => resolve(request.result as RatchetState | undefined);
+  });
+}
 
-    state.DHr = headerDh;
-    const dhSendReceive = x25519.getSharedSecret(state.DHs.privateKey, state.DHr);
-    const { rk: rk1, ck: ckRecv } = kdfRk(state.RK, dhSendReceive);
-    state.RK = rk1;
-    state.CKr = ckRecv;
+async function writeState(state: RatchetState): Promise<void> {
+  const database = await openDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const request = database
+      .transaction(STORE_NAME, 'readwrite')
+      .objectStore(STORE_NAME)
+      .put({ ...state, id: state.sessionId } satisfies StoredRatchetState);
+    request.onerror = () => {
+      reject(request.error ?? new Error('Unable to write ratchet state'));
+    };
+    request.onsuccess = () => resolve();
+  });
+}
 
-    state.DHs = generateKeyPair();
-    const dhSendSend = x25519.getSharedSecret(state.DHs.privateKey, state.DHr);
-    const { rk: rk2, ck: ckSend } = kdfRk(state.RK, dhSendSend);
-    state.RK = rk2;
-    state.CKs = ckSend;
+export async function deleteRatchetSession(sessionId: string): Promise<void> {
+  const database = await openDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const request = database
+      .transaction(STORE_NAME, 'readwrite')
+      .objectStore(STORE_NAME)
+      .delete(sessionId);
+    request.onerror = () => {
+      reject(request.error ?? new Error('Unable to delete ratchet state'));
+    };
+    request.onsuccess = () => resolve();
+  });
+}
 
-    state.PN = state.Ns;
-    state.Ns = 0;
-    state.Nr = 0;
+export async function createRatchetSession(session: RatchetSession): Promise<void> {
+  if (!session.sessionId) throw new Error('Ratchet sessionId is required');
+  if (session.initialSecret.length < 32) {
+    throw new Error('Ratchet initial secret must be at least 32 bytes');
+  }
+  if (await readState(session.sessionId)) return;
+
+  const pair = await generateDhKeyPair();
+  const publicKey = await exportPublicKey(pair.publicKey);
+  const privateKey = await exportPrivateKey(pair.privateKey);
+  const initial = await hkdf(
+    session.initialSecret,
+    ZERO_SALT,
+    'DripTide Double Ratchet initial root',
+    64,
+  );
+  const initialSendChain = initial.subarray(32, 64);
+  const initialReceiveChain = await hkdf(
+    initial.subarray(0, 32),
+    initialSendChain,
+    'DripTide receive chain',
+    32,
+  );
+
+  await writeState({
+    sessionId: session.sessionId,
+    rootKey: toBase64(initial.subarray(0, 32)),
+    sendChainKey: toBase64(session.initiator ? initialSendChain : initialReceiveChain),
+    receiveChainKey: toBase64(session.initiator ? initialReceiveChain : initialSendChain),
+    sendingPrivateKey: toBase64(privateKey),
+    sendingPublicKey: toBase64(publicKey),
+    remotePublicKey: session.remotePublicKey ? toBase64(session.remotePublicKey) : '',
+    sendMessageNumber: 0,
+    receiveMessageNumber: 0,
+    previousSendingLength: 0,
+    sendRatchetPending: !session.initiator,
+    updatedAt: Date.now(),
+  });
+}
+
+export async function loadRatchetSession(sessionId: string): Promise<boolean> {
+  return (await readState(sessionId)) !== undefined;
+}
+
+async function performSendingRatchet(state: RatchetState): Promise<void> {
+  if (!state.remotePublicKey) return;
+
+  const remoteKey = await importPublicKey(fromBase64(state.remotePublicKey));
+  const pair = await generateDhKeyPair();
+  const stepped = await rootStep(
+    fromBase64(state.rootKey),
+    await dh(pair.privateKey, remoteKey),
+  );
+
+  state.rootKey = toBase64(stepped.rootKey);
+  state.sendChainKey = toBase64(stepped.chainKey);
+  state.sendingPrivateKey = toBase64(await exportPrivateKey(pair.privateKey));
+  state.sendingPublicKey = toBase64(await exportPublicKey(pair.publicKey));
+  state.previousSendingLength = state.sendMessageNumber;
+  state.sendMessageNumber = 0;
+  state.sendRatchetPending = false;
+}
+
+export async function encryptDm(
+  sessionId: string,
+  recipientDeviceId: string,
+  plaintext: string,
+): Promise<RatchetEnvelope> {
+  const state = await readState(sessionId);
+  if (!state) throw new Error('Ratchet session is not initialized');
+
+  if (state.sendRatchetPending) {
+    await performSendingRatchet(state);
   }
 
-  skipMessageKeys(state, payload.header.n);
+  const header: RatchetHeader = {
+    v: PROTOCOL_VERSION,
+    dh: state.sendingPublicKey,
+    n: state.sendMessageNumber,
+    pn: state.previousSendingLength,
+  };
+  const step = await chainStep(fromBase64(state.sendChainKey));
+  const encrypted = await encryptWithKey(step.messageKey, plaintext, headerBytes(header));
 
-  if (!state.CKr) {
-    throw new Error('Receive chain key not initialized');
+  state.sendChainKey = toBase64(step.nextChainKey);
+  state.sendMessageNumber += 1;
+  state.updatedAt = Date.now();
+  await writeState(state);
+
+  return {
+    recipientDeviceId,
+    ciphertext: JSON.stringify({
+      v: PROTOCOL_VERSION,
+      h: header,
+      c: toBase64(encrypted),
+    }),
+  };
+}
+
+export async function decryptDm(sessionId: string, ciphertext: string): Promise<string> {
+  const state = await readState(sessionId);
+  if (!state) throw new Error('Ratchet session is not initialized');
+
+  let envelope: { v: number; h: RatchetHeader; c: string };
+  try {
+    envelope = JSON.parse(ciphertext) as { v: number; h: RatchetHeader; c: string };
+  } catch {
+    throw new Error('Invalid ratchet envelope');
   }
 
-  const { ck, mk } = kdfCk(state.CKr);
-  state.CKr = ck;
-  state.Nr++;
+  if (
+    envelope.v !== PROTOCOL_VERSION ||
+    !envelope.h ||
+    typeof envelope.h.dh !== 'string' ||
+    !Number.isInteger(envelope.h.n) ||
+    !Number.isInteger(envelope.h.pn) ||
+    typeof envelope.c !== 'string'
+  ) {
+    throw new Error('Unsupported ratchet envelope');
+  }
+  if (envelope.h.n !== state.receiveMessageNumber) {
+    throw new Error('Out-of-order ratchet messages are not supported');
+  }
 
-  const plaintextBytes = await decryptAesGcm(mk, ciphertext, iv, associatedData);
-  return new TextDecoder().decode(plaintextBytes);
+  const isFirstPeerMessage = !state.remotePublicKey;
+  const peerChanged =
+    !isFirstPeerMessage && envelope.h.dh !== state.remotePublicKey;
+
+  if (peerChanged) {
+    const privateKey = await importPrivateKey(fromBase64(state.sendingPrivateKey));
+    const peerKey = await importPublicKey(fromBase64(envelope.h.dh));
+    const stepped = await rootStep(
+      fromBase64(state.rootKey),
+      await dh(privateKey, peerKey),
+    );
+    state.rootKey = toBase64(stepped.rootKey);
+    state.receiveChainKey = toBase64(stepped.chainKey);
+    state.receiveMessageNumber = 0;
+    state.remotePublicKey = envelope.h.dh;
+    state.sendRatchetPending = true;
+  } else if (isFirstPeerMessage) {
+    state.remotePublicKey = envelope.h.dh;
+    state.sendRatchetPending = true;
+  }
+
+  const step = await chainStep(fromBase64(state.receiveChainKey));
+  const plaintext = await decryptWithKey(
+    step.messageKey,
+    fromBase64(envelope.c),
+    headerBytes(envelope.h),
+  );
+
+  state.receiveChainKey = toBase64(step.nextChainKey);
+  state.receiveMessageNumber += 1;
+  state.updatedAt = Date.now();
+  await writeState(state);
+  return plaintext;
 }
