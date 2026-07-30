@@ -12,6 +12,7 @@ const conversationMembersTable = {
 const mockFindConversation = vi.fn();
 const mockFindMember = vi.fn();
 const mockFindMany = vi.fn();
+const mockFindUser = vi.fn();
 const mockDelete = vi.fn();
 const mockReturning = vi.fn();
 const mockValues = vi.fn(() => ({ returning: mockReturning }));
@@ -46,6 +47,7 @@ vi.mock('../db/index.js', () => ({
     query: {
       conversations: { findFirst: mockFindConversation },
       conversationMembers: { findFirst: mockFindMember, findMany: mockFindMany },
+      users: { findFirst: mockFindUser },
     },
     delete: mockDelete,
     insert: mockInsert,
@@ -68,6 +70,8 @@ vi.mock('../db/schema.js', () => ({
   },
   messageEnvelopes: { recipientDeviceId: 'recipientDeviceId' },
   tokenTransfers: {},
+  devices: {},
+  users: {},
 }));
 
 const sqlJoinMock = vi.fn();
@@ -341,11 +345,26 @@ describe('POST /conversations/:id/members', () => {
     expect(mockInsert).not.toHaveBeenCalled();
   });
 
+  it('returns 403 when the target user is not accepting group invites', async () => {
+    mockFindConversation.mockResolvedValue({ id: 'conv-1', type: 'group' });
+    mockFindMember.mockResolvedValueOnce({ id: 'member-1' }).mockResolvedValueOnce(undefined);
+    mockFindUser.mockResolvedValue({ allowGroupInvites: false });
+
+    const res = await request(makeApp())
+      .post('/conversations/conv-1/members')
+      .send({ userId: 'user-2' });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: 'User is not accepting group invites' });
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
   it('adds a member to a group conversation and broadcasts member_joined', async () => {
     const joinedAt = new Date('2026-05-31T11:00:00.000Z');
 
     mockFindConversation.mockResolvedValue({ id: 'conv-1', type: 'group' });
     mockFindMember.mockResolvedValueOnce({ id: 'member-1' }).mockResolvedValueOnce(undefined);
+    mockFindUser.mockResolvedValue({ allowGroupInvites: true });
     mockReturning.mockResolvedValue([
       {
         id: 'member-2',

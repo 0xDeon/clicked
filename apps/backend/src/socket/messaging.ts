@@ -7,7 +7,6 @@ import {
   conversationMembers,
   messages,
   messageEnvelopes,
-  devices,
   files,
   users,
 } from '../db/schema.js';
@@ -15,13 +14,20 @@ import type { AuthSocket } from '../middleware/socketAuth.js';
 import { invalidateConversationCaches } from '../lib/conversationCache.js';
 import { serializeMessage } from '../lib/messages.js';
 import { redis } from '../lib/redis.js';
-import { sendPushForMessage } from '../services/push.js';
+import {
+  buildBroadcastEnvelopes,
+  findMissingSiblingDeviceIds,
+  insertMessageEnvelopes,
+} from '../lib/messageFanout.js';
 import { validateMessagePayload } from '../lib/validateMessagePayload.js';
+import { checkEnvelopeSizes } from '../services/rateLimit.js';
 import { dispatchOfflinePush, FILE_CONTENT_TYPES } from '../services/pushNotification.js';
 import { deliverMessage } from '../services/deliveryPipeline.js';
 import { publishEphemeral, readMissedEvents } from '../services/resumeStream.js';
 import { handleDeviceDeliveryReceipt } from '../services/deliveryAggregation.js';
 import { conversationRoom } from '../services/roomManager.js';
+import { handleHeartbeat } from '../services/heartbeat.js';
+import { cleanupStaleSockets } from '../services/presence.js';
 import { EventDispatcher } from './dispatcher.js';
 
 const PAGE_SIZE = 30;
@@ -44,6 +50,26 @@ async function fetchSiblingDeviceIds(userId: string, senderDeviceId: string): Pr
   return siblings.map((d) => d.id);
 }
 
+async function findUsersBlockingConversationAccess(
+  type: 'dm' | 'group',
+  memberIds: string[],
+): Promise<string[]> {
+  if (memberIds.length === 0) return [];
+
+  const invitedUsers = await db.query.users.findMany({
+    where: inArray(users.id, memberIds),
+    columns: {
+      id: true,
+      allowDirectMessages: true,
+      allowGroupInvites: true,
+    },
+  });
+
+  return invitedUsers
+    .filter((user) => (type === 'dm' ? !user.allowDirectMessages : !user.allowGroupInvites))
+    .map((user) => user.id);
+}
+
 export function registerMessagingHandlers(io: Server, socket: AuthSocket): void {
   const userId = socket.auth!.userId;
   const dispatcher = new EventDispatcher(io, socket, redis);
@@ -64,6 +90,15 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       socket.to(conversationRoom(cid)).emit('typing_stop', rp);
     }
     typingTimers.clear();
+  });
+
+  // ── heartbeat ──────────────────────────────────────────────────────────────
+  dispatcher.register('heartbeat', async () => {
+    const deviceId = socket.auth!.deviceId;
+    await handleHeartbeat(socket, userId, deviceId, redis);
+    if (redis) {
+      await cleanupStaleSockets(io, redis, userId, socket.id);
+    }
   });
 
   // ── join_room ──────────────────────────────────────────────────────────────
@@ -146,6 +181,16 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       return;
     }
 
+    const envelopeSizeCheck = checkEnvelopeSizes(envelopes);
+    if (!envelopeSizeCheck.valid) {
+      socket.emit('error', {
+        event: 'send_message',
+        code: 'envelope_too_large',
+        message: `Envelope for device ${envelopeSizeCheck.oversizedDeviceId} exceeds size limit`,
+      });
+      return;
+    }
+
     const membership = await db.query.conversationMembers.findFirst({
       where: and(
         eq(conversationMembers.conversationId, conversationId),
@@ -169,18 +214,14 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     }
 
     // Enforce full sibling-device coverage (#188).
-    const siblingIds = await fetchSiblingDeviceIds(userId, deviceId);
-    if (siblingIds.length > 0) {
-      const providedIds = new Set(envelopes?.map((e) => e.recipientDeviceId) ?? []);
-      const missing = siblingIds.filter((id) => !providedIds.has(id));
-      if (missing.length > 0) {
-        socket.emit('error', {
-          event: 'device_set_mismatch',
-          message: `Missing envelopes for ${missing.length} sibling device(s)`,
-          missingDeviceIds: missing,
-        });
-        return;
-      }
+    const missingSiblings = await findMissingSiblingDeviceIds(userId, deviceId, envelopes);
+    if (missingSiblings.length > 0) {
+      socket.emit('error', {
+        event: 'device_set_mismatch',
+        message: `Missing envelopes for ${missingSiblings.length} sibling device(s)`,
+        missingDeviceIds: missingSiblings,
+      });
+      return;
     }
 
     let fileId: string | null = inputFileId || null;
@@ -217,28 +258,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
           })
           .returning();
 
-        if (envelopes && envelopes.length > 0) {
-          const deviceIds = envelopes.map((e) => e.recipientDeviceId);
-          const devicesList = await tx.query.devices.findMany({
-            where: inArray(devices.id, deviceIds),
-            columns: { id: true, userId: true },
-          });
-          const deviceToUser = new Map(devicesList.map((d) => [d.id, d.userId]));
-
-          const validEnvelopes = envelopes
-            .filter((env) => deviceToUser.has(env.recipientDeviceId))
-            .map((env) => ({
-              messageId,
-              recipientDeviceId: env.recipientDeviceId,
-              recipientUserId: deviceToUser.get(env.recipientDeviceId)!,
-              ciphertext: env.ciphertext,
-            }));
-
-          if (validEnvelopes.length > 0) {
-            await tx.insert(messageEnvelopes).values(validEnvelopes);
-            recipientDeviceIds = validEnvelopes.map((e) => e.recipientDeviceId);
-          }
-        }
+        recipientDeviceIds = await insertMessageEnvelopes(tx, messageId, envelopes);
 
         return insertedMessage!;
       });
@@ -257,7 +277,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         columns: { userId: true },
       });
       await invalidateConversationCaches(members.map((m) => m.userId));
-      void dispatchOfflinePush(conversationId, messageId, recipientDeviceIds);
+      void dispatchOfflinePush(conversationId, messageId, recipientDeviceIds, userId);
     }
   });
 
@@ -284,6 +304,16 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       socket.emit('error', {
         event: 'edit_message',
         message: 'Content (envelope ciphertext) must not be empty',
+      });
+      return;
+    }
+
+    const envelopeSizeCheck = checkEnvelopeSizes(envelopes);
+    if (!envelopeSizeCheck.valid) {
+      socket.emit('error', {
+        event: 'edit_message',
+        code: 'envelope_too_large',
+        message: `Envelope for device ${envelopeSizeCheck.oversizedDeviceId} exceeds size limit`,
       });
       return;
     }
@@ -316,18 +346,14 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     }
 
     // Enforce full sibling-device coverage (#188).
-    const siblingIds = await fetchSiblingDeviceIds(userId, deviceId);
-    if (siblingIds.length > 0) {
-      const providedIds = new Set(envelopes?.map((e) => e.recipientDeviceId) ?? []);
-      const missing = siblingIds.filter((id) => !providedIds.has(id));
-      if (missing.length > 0) {
-        socket.emit('error', {
-          event: 'device_set_mismatch',
-          message: `Missing envelopes for ${missing.length} sibling device(s)`,
-          missingDeviceIds: missing,
-        });
-        return;
-      }
+    const missingSiblings = await findMissingSiblingDeviceIds(userId, deviceId, envelopes);
+    if (missingSiblings.length > 0) {
+      socket.emit('error', {
+        event: 'device_set_mismatch',
+        message: `Missing envelopes for ${missingSiblings.length} sibling device(s)`,
+        missingDeviceIds: missingSiblings,
+      });
+      return;
     }
 
     const rootMessageId = original.editsMessageId ?? original.id;
@@ -349,27 +375,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
           })
           .returning();
 
-        if (envelopes && envelopes.length > 0) {
-          const deviceIds = envelopes.map((e) => e.recipientDeviceId);
-          const devicesList = await tx.query.devices.findMany({
-            where: inArray(devices.id, deviceIds),
-            columns: { id: true, userId: true },
-          });
-          const deviceToUser = new Map(devicesList.map((d) => [d.id, d.userId]));
-
-          const validEnvelopes = envelopes
-            .filter((env) => deviceToUser.has(env.recipientDeviceId))
-            .map((env) => ({
-              messageId,
-              recipientDeviceId: env.recipientDeviceId,
-              recipientUserId: deviceToUser.get(env.recipientDeviceId)!,
-              ciphertext: env.ciphertext,
-            }));
-
-          if (validEnvelopes.length > 0) {
-            await tx.insert(messageEnvelopes).values(validEnvelopes);
-          }
-        }
+        await insertMessageEnvelopes(tx, messageId, envelopes);
 
         return insertedMessage!;
       });
@@ -397,123 +403,151 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
   });
 
   // ── send_file_message ──────────────────────────────────────────────────────
+  // Issue #347: routes through the same deliverMessage pipeline send_message
+  // uses, so file messages get identical per-device receipts, resume/sync
+  // backfill, and fan-out validation. `content` is the message-body envelope
+  // ciphertext (as before); `envelopes` carries the file's symmetric
+  // encryption key, individually sealed per recipient device — the key is
+  // never accepted or stored as a server-visible plaintext field, only
+  // inside each envelope's opaque ciphertext.
   socket.on(
     'send_file_message',
     async (payload: {
       conversationId: string;
+      messageId?: string;
       fileId: string;
       content: string;
+      ciphertext?: string;
       contentType: 'file' | 'image' | 'video' | 'audio';
-    }) => {
-      const { conversationId, fileId, content, contentType } = payload;
+      messageId?: string;
+    };
 
-      if (!content?.trim()) {
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'Content (envelope ciphertext) must not be empty',
-        });
-        return;
-      }
-
-      const validContentTypes = ['file', 'image', 'video', 'audio'] as const;
-      if (!validContentTypes.includes(contentType)) {
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'contentType must be one of: file, image, video, audio',
-        });
-        return;
-      }
-
-      const membership = await db.query.conversationMembers.findFirst({
-        where: and(
-          eq(conversationMembers.conversationId, conversationId),
-          eq(conversationMembers.userId, userId),
-        ),
+    if (!messageId) {
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'messageId is required',
       });
+      return;
+    }
 
-      if (!membership) {
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'Not a member of this conversation',
-        });
-        return;
-      }
-
-      const file = await db.query.files.findFirst({
-        where: eq(files.id, fileId),
+    if (!content?.trim()) {
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'Content (envelope ciphertext) must not be empty',
       });
+      return;
+    }
 
-      if (!file) {
-        socket.emit('error', { event: 'send_file_message', message: 'File not found' });
-        return;
-      }
+    const validContentTypes = ['file', 'image', 'video', 'audio'] as const;
+    if (!validContentTypes.includes(contentType)) {
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'contentType must be one of: file, image, video, audio',
+      });
+      return;
+    }
 
-      if (file.status !== 'ready') {
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'File is not ready for use',
-        });
-        return;
-      }
+    const membership = await db.query.conversationMembers.findFirst({
+      where: and(
+        eq(conversationMembers.conversationId, conversationId),
+        eq(conversationMembers.userId, userId),
+      ),
+    });
 
-      if (file.conversationId !== conversationId) {
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'File does not belong to this conversation',
-        });
-        return;
-      }
+    if (!membership) {
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'Not a member of this conversation',
+      });
+      return;
+    }
 
-      if (file.uploaderId !== userId) {
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'Access denied: you are not the uploader of this file',
-        });
-        return;
-      }
+    const existing = await db.query.messages.findFirst({
+      where: eq(messages.id, messageId),
+      columns: { createdAt: true },
+    });
 
-      let message;
-      try {
-        message = await db.transaction(async (tx) => {
-          const [insertedMessage] = await tx
-            .insert(messages)
-            .values({
-              conversationId,
-              senderId: userId,
-              ciphertext: content.trim(),
-              contentType,
-              fileId,
-            })
-            .returning();
+    if (existing) {
+      socket.emit('message_ack', { messageId, createdAt: existing.createdAt });
+      return;
+    }
 
-          return insertedMessage;
-        });
-      } catch (error) {
-        console.error('Transaction failed for file message:', error);
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'Failed to persist file message',
-        });
-        return;
-      }
+    const file = await db.query.files.findFirst({
+      where: eq(files.id, fileId),
+    });
 
-      if (message) {
-        io.to(conversationId).emit('new_message', message);
+    if (!file) {
+      socket.emit('error', { event: 'send_file_message', message: 'File not found' });
+      return;
+    }
 
-        const members = await db.query.conversationMembers.findMany({
-          where: eq(conversationMembers.conversationId, conversationId),
-          columns: { userId: true },
-        });
-        await invalidateConversationCaches(members.map((member) => member.userId));
+    if (file.status !== 'ready') {
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'File is not ready for use',
+      });
+      return;
+    }
 
-        sendPushForMessage({
-          conversationId,
-          messageId: message.id,
-          senderId: userId,
-        });
-      }
-    },
-  );
+    if (file.conversationId !== conversationId) {
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'File does not belong to this conversation',
+      });
+      return;
+    }
+
+    if (file.uploaderId !== userId) {
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'Access denied: you are not the uploader of this file',
+      });
+      return;
+    }
+
+    let message;
+    try {
+      message = await db.transaction(async (tx) => {
+        const [insertedMessage] = await tx
+          .insert(messages)
+          .values({
+            id: messageId,
+            conversationId,
+            senderId: userId,
+            ciphertext: content.trim(),
+            contentType,
+            fileId,
+          })
+          .returning();
+
+        return insertedMessage;
+      });
+    } catch (error) {
+      console.error('Transaction failed for file message:', error);
+      socket.emit('error', {
+        event: 'send_file_message',
+        message: 'Failed to persist file message',
+      });
+      return;
+    }
+
+    if (message) {
+      socket.emit('message_ack', { messageId, createdAt: message.createdAt });
+      io.to(conversationId).emit('new_message', message);
+
+      const members = await db.query.conversationMembers.findMany({
+        where: eq(conversationMembers.conversationId, conversationId),
+        columns: { userId: true },
+      });
+      await invalidateConversationCaches(members.map((member) => member.userId));
+
+      sendPushForMessage({
+        conversationId,
+        messageId: message.id,
+        senderId: userId,
+      });
+    }
+  });
 
   // ── message_history ────────────────────────────────────────────────────────
   dispatcher.register('message_history', async (payload) => {
@@ -831,7 +865,22 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       memberIds: string[];
     };
 
-    const allMembers = Array.from(new Set([userId, ...memberIds]));
+    const requestedMembers = Array.from(new Set(memberIds.filter((memberId) => memberId !== userId)));
+    const blockedMemberIds = await findUsersBlockingConversationAccess(type, requestedMembers);
+
+    if (blockedMemberIds.length > 0) {
+      socket.emit('error', {
+        event: 'create_conversation',
+        message:
+          type === 'dm'
+            ? 'One or more recipients are not accepting direct messages'
+            : 'One or more recipients are not accepting group invites',
+        blockedUserIds: blockedMemberIds,
+      });
+      return;
+    }
+
+    const allMembers = Array.from(new Set([userId, ...requestedMembers]));
 
     const [conversation] = await db.insert(conversations).values({ type, name }).returning();
 
@@ -1031,6 +1080,25 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         ON CONFLICT DO NOTHING
       `);
 
+      // Membership is resolved before the insert so the reply can be fanned
+      // out to every active device of every member (and reused afterwards for
+      // cache invalidation).
+      const members = await db.query.conversationMembers.findMany({
+        where: eq(conversationMembers.conversationId, conversationId),
+        columns: { userId: true },
+      });
+
+      // A server-authored reply has no per-recipient key material, so every
+      // device's envelope necessarily carries the same content — same as the
+      // shared column did before. What changes is the fan-out *shape*: the
+      // reply now flows through message_envelopes like every other message.
+      // The sender's own devices are included: the assistant reply must reach
+      // all of them, not just the device that asked.
+      const replyEnvelopes = await buildBroadcastEnvelopes(
+        members.map((member) => member.userId),
+        data.reply,
+      );
+
       const replyMessage = await db.transaction(async (tx) => {
         const [inserted] = await tx
           .insert(messages)
@@ -1041,15 +1109,15 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
             ciphertext: data.reply,
           })
           .returning();
+
+        await insertMessageEnvelopes(tx, inserted!.id, replyEnvelopes);
+
         return inserted;
       });
 
-      io.to(conversationId).volatile.emit('new_message', replyMessage);
-
-      const members = await db.query.conversationMembers.findMany({
-        where: eq(conversationMembers.conversationId, conversationId),
-        columns: { userId: true },
-      });
+      if (replyMessage) {
+        await deliverMessage(io, replyMessage, conversationId);
+      }
 
       await invalidateConversationCaches(members.map((member) => member.userId));
     } catch (err) {

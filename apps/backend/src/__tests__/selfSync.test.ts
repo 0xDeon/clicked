@@ -130,12 +130,28 @@ function makeIo() {
   };
 }
 
+// Handlers now run exclusively through the enveloped 'dispatch' path (#342)
+// — there's no more raw socket.on(type, ...) listener to grab directly.
+// Trigger through the real EventEmitter (not the mocked .emit used to record
+// client-bound emits) with the same envelope shape a real client would send.
+let envelopeSeq = 0;
 async function getHandlers(socket: EventEmitter, io: unknown) {
   const { registerMessagingHandlers } = await import('../socket/messaging.js');
   registerMessagingHandlers(io as never, socket as never);
+  const rawEmit = EventEmitter.prototype.emit.bind(socket);
+  const dispatch = (type: string, payload: unknown) => {
+    envelopeSeq += 1;
+    rawEmit('dispatch', {
+      eventId: `test-evt-${envelopeSeq}`,
+      type,
+      timestamp: Date.now(),
+      payload,
+    });
+    return new Promise((resolve) => setTimeout(resolve, 10));
+  };
   return {
-    sendMessage: socket.listeners('send_message')[0] as (p: unknown) => Promise<void>,
-    editMessage: socket.listeners('edit_message')[0] as (p: unknown) => Promise<void>,
+    sendMessage: (payload: unknown) => dispatch('send_message', payload),
+    editMessage: (payload: unknown) => dispatch('edit_message', payload),
   };
 }
 

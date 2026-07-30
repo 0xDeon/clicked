@@ -3,6 +3,7 @@
 import React, { useState, useRef } from 'react';
 import type { Socket } from 'socket.io-client';
 import transferToken from '../../lib/soroban';
+import { emitSocketEnvelope } from '@/lib/realtime';
 
 type Props = {
   conversationId: string;
@@ -22,7 +23,7 @@ export default function MessageInput({ conversationId, recipient, socket }: Prop
     if (socket && conversationId && isTypingRef.current) {
       isTypingRef.current = false;
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-      socket.emit('typing_stop', { conversationId });
+      emitSocketEnvelope(socket, 'typing_stop', { conversationId });
     }
   }
 
@@ -31,12 +32,12 @@ export default function MessageInput({ conversationId, recipient, socket }: Prop
     if (socket && conversationId) {
       if (!isTypingRef.current) {
         isTypingRef.current = true;
-        socket.emit('typing_start', { conversationId });
+        emitSocketEnvelope(socket, 'typing_start', { conversationId });
       }
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
       typingTimerRef.current = setTimeout(() => {
         isTypingRef.current = false;
-        socket.emit('typing_stop', { conversationId });
+        emitSocketEnvelope(socket, 'typing_stop', { conversationId });
       }, 2000);
     }
   }
@@ -44,7 +45,7 @@ export default function MessageInput({ conversationId, recipient, socket }: Prop
   function handleSendText() {
     if (!text.trim() || !socket) return;
     stopTyping();
-    socket.emit('send_message', {
+    emitSocketEnvelope(socket, 'send_message', {
       conversationId,
       content: text.trim(),
     });
@@ -73,7 +74,7 @@ export default function MessageInput({ conversationId, recipient, socket }: Prop
         token: 'TOKEN',
         txHash,
       };
-      socket.emit('send_message', {
+      emitSocketEnvelope(socket, 'send_message', {
         conversationId,
         content: JSON.stringify(transferMsg),
       });
