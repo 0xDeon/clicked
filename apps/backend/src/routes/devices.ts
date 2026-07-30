@@ -25,6 +25,7 @@ import { SignedPreKeyEntrySchema, PreKeyEntrySchema, verifyEd25519Signature } fr
 import { conversationRoom } from '../services/roomManager.js';
 import { redis } from '../lib/redis.js';
 import { markDeviceRevoked } from '../services/deviceRevocation.js';
+import { actorFromRequest, recordAuditEvent } from '../services/auditLog.js';
 
 export const devicesRouter: RouterType = Router();
 
@@ -177,6 +178,21 @@ devicesRouter.delete('/:id', async (req: AuthRequest, res) => {
   const revokedAt = await revokeDeviceRow(deviceId);
   void emitDeviceChangeEvent(callerId, 'device_revoked');
 
+  void recordAuditEvent({
+    action: 'device_revoked',
+    ...actorFromRequest(req),
+    targetType: 'device',
+    targetId: deviceId,
+    metadata: {
+      deviceName: device.deviceName,
+      platform: device.platform,
+      // Revoking from the device being revoked reads very differently from
+      // revoking a device you no longer hold.
+      selfRevocation: deviceId === req.auth!.deviceId,
+      remainingActiveDevices: activeCount - 1,
+    },
+  });
+
   res.json({ id: deviceId, revokedAt: revokedAt.toISOString() });
 });
 
@@ -199,11 +215,28 @@ devicesRouter.post('/logout-everywhere', async (req: AuthRequest, res) => {
 
   for (const { id } of toRevoke) {
     await revokeDeviceRow(id);
+    void recordAuditEvent({
+      action: 'device_revoked',
+      ...actorFromRequest(req),
+      targetType: 'device',
+      targetId: id,
+      metadata: { viaLogoutEverywhere: true },
+    });
   }
 
   if (toRevoke.length > 0) {
     void emitDeviceChangeEvent(userId, 'device_revoked');
   }
+
+  // Recorded even when nothing was revoked: an account-wide security action
+  // was still invoked, and a responder wants to see the attempt.
+  void recordAuditEvent({
+    action: 'logout_everywhere',
+    ...actorFromRequest(req),
+    targetType: 'user',
+    targetId: userId,
+    metadata: { revokedCount: toRevoke.length, retainedDeviceId: currentDeviceId },
+  });
 
   res.json({ revokedCount: toRevoke.length });
 });
@@ -429,6 +462,26 @@ devicesRouter.post(
       return;
     }
 
+    void recordAuditEvent({
+      action: 'device_linked',
+      ...actorFromRequest(req),
+      targetType: 'device',
+      targetId: row.id,
+      metadata: {
+        deviceName: body.deviceName ?? null,
+        platform: body.platform ?? null,
+        // Re-activating a revoked identity key is not the same event as
+        // linking a brand-new device, and the difference matters after a
+        // revocation that was meant to lock someone out.
+        reactivatedRevokedDevice: Boolean(existing),
+      },
+    });
+
+    res.status(201).json({ id: row.id, createdAt: row.createdAt });
+  } catch (err) {
+    console.error('Failed to register device:', err);
+    res.status(500).json({ error: 'Failed to register device' });
+  }
     if (
       !verifyWalletSignature(walletAddress, deviceLinkMessage(userId, body.nonce), body.signature)
     ) {

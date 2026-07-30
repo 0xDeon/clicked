@@ -17,6 +17,7 @@ import { invalidateConversationCaches } from '../lib/conversationCache.js';
 import { serializeMessage, type MessageLike } from '../lib/messages.js';
 import { getSocketServer } from '../lib/socket.js';
 import { MAX_MESSAGES_LIMIT, DEFAULT_MESSAGES_LIMIT } from '../constants.js';
+import { actorFromRequest, recordAuditEvent } from '../services/auditLog.js';
 
 export const conversationsRouter: IRouter = Router();
 
@@ -353,6 +354,18 @@ conversationsRouter.post('/:id/members', async (req: AuthRequest, res) => {
     getSocketServer()?.to(conversationId).emit('member_joined', {
       userId: newUserId,
       conversationId,
+    });
+
+    // Group membership defines who can decrypt what from here on, so the
+    // change is a security event for both parties: the requester who made it
+    // and the account that was added (#376).
+    void recordAuditEvent({
+      action: 'group_member_added',
+      ...actorFromRequest(req),
+      subjectUserId: newUserId,
+      targetType: 'conversation',
+      targetId: conversationId,
+      metadata: { memberCount: members.length },
     });
 
     res.status(201).json({
@@ -782,6 +795,20 @@ conversationsRouter.delete('/:id/leave', async (req: AuthRequest, res) => {
   }
 
   await invalidateConversationCaches(members.map((member) => member.userId));
+
+  void recordAuditEvent({
+    action: 'group_member_removed',
+    ...actorFromRequest(req),
+    subjectUserId: userId,
+    targetType: 'conversation',
+    targetId: conversationId,
+    metadata: {
+      // Leaving as the last member deletes the conversation outright, which
+      // is a materially different outcome to a departure.
+      conversationDeleted: members.length === 1,
+      memberCountBefore: members.length,
+    },
+  });
 
   res.status(204).send();
 });

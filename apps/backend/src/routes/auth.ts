@@ -9,6 +9,7 @@ import { eq, and } from 'drizzle-orm';
 import { createNonce, consumeNonce } from '../lib/nonce.js';
 import { signToken } from '../lib/jwt.js';
 import { validate } from '../middleware/validate.js';
+import { recordAuditEvent, requestContext } from '../services/auditLog.js';
 import { ipIdentifier, rateLimit } from '../middleware/rateLimit.js';
 import {
   ChallengeSchema,
@@ -56,9 +57,22 @@ authRouter.post(
     const platform = device?.platform;
     const registrationId = device?.registrationId;
 
+    // Every failed sign-in is audited (#376). The wallet address is the only
+    // identity available before verification succeeds, and it is a public
+    // value, so it is safe to record as the target.
+    const auditFailure = (reason: string) =>
+      recordAuditEvent({
+        action: 'auth_failed',
+        ...requestContext(req),
+        targetType: 'wallet',
+        targetId: walletAddress,
+        metadata: { reason },
+      });
+
     // Validate and consume nonce
     const valid = consumeNonce(walletAddress, nonce);
     if (!valid) {
+      void auditFailure('invalid_or_expired_nonce');
       res.status(401).json({ error: 'Invalid or expired nonce' });
       return;
     }
@@ -79,10 +93,12 @@ authRouter.post(
         keypair.verify(freighterMessageBytes, base64SignatureBytes);
 
       if (!isValidSignature) {
+        void auditFailure('signature_verification_failed');
         res.status(401).json({ error: 'Signature verification failed' });
         return;
       }
     } catch {
+      void auditFailure('malformed_signature_or_wallet');
       res.status(401).json({ error: 'Invalid signature or wallet address' });
       return;
     }
@@ -116,6 +132,17 @@ authRouter.post(
 
     if (existingDevice) {
       if (existingDevice.revokedAt) {
+        // A revoked device still holding valid wallet credentials is the
+        // single most interesting failed sign-in there is.
+        void recordAuditEvent({
+          action: 'auth_failed',
+          ...requestContext(req),
+          subjectUserId: userId,
+          actorDeviceId: existingDevice.id,
+          targetType: 'device',
+          targetId: existingDevice.id,
+          metadata: { reason: 'device_revoked' },
+        });
         res.status(401).json({ error: 'Device has been revoked' });
         return;
       }

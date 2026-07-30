@@ -9,6 +9,7 @@ import { redis } from '../lib/redis.js';
 import { isOnline, deriveDevicePresence } from '../services/presence.js';
 import { getSocketServer } from '../lib/socket.js';
 import { conversationRoom } from '../services/roomManager.js';
+import { actorFromRequest, recordAuditEvent } from '../services/auditLog.js';
 import { prekeyConsumedTotal } from '../lib/metrics.js';
 
 export const usersRouter: RouterType = Router();
@@ -297,8 +298,40 @@ usersRouter.get(
     return { keyId: candidate.keyId, publicKey: candidate.publicKey };
   });
 
+  // A one-time prekey was consumed and cannot be handed out again (#376).
+  // Draining a device's supply forces every later session with it down from
+  // 4-DH to 3-DH, and it happens quietly, so the count left is the signal an
+  // incident responder actually needs. Subject is the device owner — the
+  // account this was done *to* — while the actor is whoever fetched it.
   if (claimedOneTimePreKey) {
-    prekeyConsumedTotal.inc();
+    // The remaining count is the useful part but only a nice-to-have: if the
+    // count query fails, still record that a prekey was consumed rather than
+    // losing the event, and never fail the bundle fetch over bookkeeping.
+    let remaining: number | null = null;
+    try {
+      const [remainingRow] = await db
+        .select({ remaining: sql<number>`count(*)::int` })
+        .from(devicePrekeys)
+        .where(
+          and(
+            eq(devicePrekeys.deviceId, deviceId),
+            eq(devicePrekeys.keyType, 'one_time'),
+            eq(devicePrekeys.consumed, false),
+          ),
+        );
+      remaining = remainingRow?.remaining ?? 0;
+    } catch {
+      // Leave it null — the event itself is what must not be lost.
+    }
+
+    void recordAuditEvent({
+      action: 'key_bundle_drained',
+      ...actorFromRequest(req),
+      subjectUserId: targetUserId,
+      targetType: 'device',
+      targetId: deviceId,
+      metadata: { oneTimePreKeysRemaining: remaining, exhausted: remaining === 0 },
+    });
   }
 
   res.json({
