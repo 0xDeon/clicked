@@ -7,6 +7,7 @@ import {
   pgEnum,
   index,
   integer,
+  bigint,
   uniqueIndex,
   check,
   type AnyPgColumn,
@@ -129,6 +130,12 @@ export const messages = pgTable(
     editsMessageId: uuid('edits_message_id').references((): AnyPgColumn => messages.id, {
       onDelete: 'set null',
     }),
+    // MLS epoch whose secrets encrypted `ciphertext` (#372). Null for messages
+    // that are not MLS group messages — DMs, system events, and anything sent
+    // before the conversation adopted MLS. Devices that joined the group after
+    // this epoch cannot derive the key, so the read paths surface those
+    // messages as unavailable instead of handing back undecryptable bytes.
+    mlsEpoch: bigint('mls_epoch', { mode: 'number' }),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     deletedAt: timestamp('deleted_at'),
   },
@@ -243,6 +250,130 @@ export const devicePrekeys = pgTable(
       'device_prekeys_signed_requires_signature',
       sql`${table.keyType} <> 'signed' OR ${table.signature} IS NOT NULL`,
     ),
+  ],
+);
+
+// ─── MLS group state (#372) ──────────────────────────────────────────────────
+//
+// Group conversations run MLS (RFC 9420). The server is a transport and an
+// ordering service — it never holds group secrets. What it does hold is the
+// *public* ledger every member needs to agree on: which epoch the group is at,
+// which devices are in the ratchet tree, the commit that produced each epoch,
+// and the Welcome messages addressed to devices being added.
+//
+// Epochs are the unit of membership. A device added by the commit that
+// produces epoch N can decrypt messages from epoch N onwards and nothing
+// before it, because the group secrets for earlier epochs were derived before
+// its leaf existed. That is a property of MLS, not a gap in this schema — see
+// docs/mls-group-membership.md.
+
+export const mlsGroups = pgTable(
+  'mls_groups',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    // Base64 of the MLS group id chosen by the founding client.
+    groupId: text('group_id').notNull(),
+    cipherSuite: integer('cipher_suite').notNull(),
+    // Epoch of the most recent accepted commit. Starts at 0 for a fresh group.
+    currentEpoch: bigint('current_epoch', { mode: 'number' }).notNull().default(0),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    // One MLS group per conversation — the conversation *is* the group.
+    uniqueIndex('mls_groups_conversation_idx').on(table.conversationId),
+    uniqueIndex('mls_groups_group_id_idx').on(table.groupId),
+  ],
+);
+
+// Device membership, recorded as an epoch interval rather than a boolean so a
+// device's decryption window is derivable: it can read epochs in
+// [joinedAtEpoch, removedAtEpoch). A device that is removed and later re-added
+// gets a second row with a later joinedAtEpoch, which is exactly right — it
+// still cannot read the epochs it was absent for.
+export const mlsGroupMembers = pgTable(
+  'mls_group_members',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    mlsGroupId: uuid('mls_group_id')
+      .notNull()
+      .references(() => mlsGroups.id, { onDelete: 'cascade' }),
+    deviceId: uuid('device_id')
+      .notNull()
+      .references(() => devices.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    joinedAtEpoch: bigint('joined_at_epoch', { mode: 'number' }).notNull(),
+    // Null while the device is still in the group.
+    removedAtEpoch: bigint('removed_at_epoch', { mode: 'number' }),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    // A device can hold at most one *active* leaf in a group at a time.
+    uniqueIndex('mls_group_members_active_idx')
+      .on(table.mlsGroupId, table.deviceId)
+      .where(sql`${table.removedAtEpoch} IS NULL`),
+    index('mls_group_members_device_idx').on(table.deviceId),
+  ],
+);
+
+// Append-only commit log. A device that was offline replays from its last
+// known epoch to catch back up, which is what makes group state recoverable
+// without the server ever seeing plaintext.
+export const mlsCommits = pgTable(
+  'mls_commits',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    mlsGroupId: uuid('mls_group_id')
+      .notNull()
+      .references(() => mlsGroups.id, { onDelete: 'cascade' }),
+    // Epoch this commit produces (i.e. the group's epoch after applying it).
+    epoch: bigint('epoch', { mode: 'number' }).notNull(),
+    committerDeviceId: uuid('committer_device_id').references(() => devices.id, {
+      onDelete: 'set null',
+    }),
+    // Base64 of the TLS-serialised MLSMessage carrying the Commit.
+    commit: text('commit').notNull(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  // Two members committing concurrently must not both win — the unique index
+  // makes the epoch race resolve in the database.
+  (table) => [uniqueIndex('mls_commits_group_epoch_idx').on(table.mlsGroupId, table.epoch)],
+);
+
+// Welcome messages addressed to a device being added. Held until the device
+// comes online and claims it, which is what lets a newly-linked device join
+// groups it was invited to while it was offline.
+export const mlsWelcomes = pgTable(
+  'mls_welcomes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    mlsGroupId: uuid('mls_group_id')
+      .notNull()
+      .references(() => mlsGroups.id, { onDelete: 'cascade' }),
+    deviceId: uuid('device_id')
+      .notNull()
+      .references(() => devices.id, { onDelete: 'cascade' }),
+    // Epoch the recipient joins at — the epoch the accompanying commit produced.
+    epoch: bigint('epoch', { mode: 'number' }).notNull(),
+    // Base64 of the TLS-serialised MLSMessage carrying the Welcome.
+    welcome: text('welcome').notNull(),
+    claimedAt: timestamp('claimed_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('mls_welcomes_group_device_epoch_idx').on(
+      table.mlsGroupId,
+      table.deviceId,
+      table.epoch,
+    ),
+    index('mls_welcomes_pending_idx')
+      .on(table.deviceId)
+      .where(sql`${table.claimedAt} IS NULL`),
   ],
 );
 
@@ -362,12 +493,42 @@ export const walletsRelations = relations(wallets, ({ one }) => ({
   user: one(users, { fields: [wallets.userId], references: [users.id] }),
 }));
 
-export const conversationsRelations = relations(conversations, ({ many }) => ({
+export const conversationsRelations = relations(conversations, ({ one, many }) => ({
   members: many(conversationMembers),
   messages: many(messages),
   transfers: many(tokenTransfers),
   treasuryProposals: many(treasuryProposals),
   files: many(files),
+  mlsGroup: one(mlsGroups),
+}));
+
+export const mlsGroupsRelations = relations(mlsGroups, ({ one, many }) => ({
+  conversation: one(conversations, {
+    fields: [mlsGroups.conversationId],
+    references: [conversations.id],
+  }),
+  members: many(mlsGroupMembers),
+  commits: many(mlsCommits),
+  welcomes: many(mlsWelcomes),
+}));
+
+export const mlsGroupMembersRelations = relations(mlsGroupMembers, ({ one }) => ({
+  group: one(mlsGroups, { fields: [mlsGroupMembers.mlsGroupId], references: [mlsGroups.id] }),
+  device: one(devices, { fields: [mlsGroupMembers.deviceId], references: [devices.id] }),
+  user: one(users, { fields: [mlsGroupMembers.userId], references: [users.id] }),
+}));
+
+export const mlsCommitsRelations = relations(mlsCommits, ({ one }) => ({
+  group: one(mlsGroups, { fields: [mlsCommits.mlsGroupId], references: [mlsGroups.id] }),
+  committerDevice: one(devices, {
+    fields: [mlsCommits.committerDeviceId],
+    references: [devices.id],
+  }),
+}));
+
+export const mlsWelcomesRelations = relations(mlsWelcomes, ({ one }) => ({
+  group: one(mlsGroups, { fields: [mlsWelcomes.mlsGroupId], references: [mlsGroups.id] }),
+  device: one(devices, { fields: [mlsWelcomes.deviceId], references: [devices.id] }),
 }));
 
 export const filesRelations = relations(files, ({ one, many }) => ({
@@ -483,3 +644,11 @@ export type Device = typeof devices.$inferSelect;
 export type NewDevice = typeof devices.$inferInsert;
 export type DevicePrekey = typeof devicePrekeys.$inferSelect;
 export type NewDevicePrekey = typeof devicePrekeys.$inferInsert;
+export type MlsGroup = typeof mlsGroups.$inferSelect;
+export type NewMlsGroup = typeof mlsGroups.$inferInsert;
+export type MlsGroupMember = typeof mlsGroupMembers.$inferSelect;
+export type NewMlsGroupMember = typeof mlsGroupMembers.$inferInsert;
+export type MlsCommit = typeof mlsCommits.$inferSelect;
+export type NewMlsCommit = typeof mlsCommits.$inferInsert;
+export type MlsWelcome = typeof mlsWelcomes.$inferSelect;
+export type NewMlsWelcome = typeof mlsWelcomes.$inferInsert;

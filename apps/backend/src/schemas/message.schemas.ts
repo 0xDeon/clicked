@@ -23,6 +23,13 @@ export const SendMessageSchema = z.object({
   envelopes: z.array(EnvelopeSchema).optional(),
   /** UUID of an already-uploaded file; required when contentType is file/image/video/audio */
   fileId: z.string().uuid('fileId must be a valid UUID').optional(),
+  /**
+   * MLS epoch whose secrets encrypted `ciphertext` (#372). Present only on MLS
+   * group messages, which carry one group ciphertext instead of per-device
+   * envelopes. Recorded so the history read paths know which devices can
+   * derive the key.
+   */
+  mlsEpoch: z.number().int().nonnegative().optional(),
 });
 
 export type SendMessageBody = z.infer<typeof SendMessageSchema>;

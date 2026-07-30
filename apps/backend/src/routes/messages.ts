@@ -21,14 +21,16 @@ messagesRouter.use(requireAuth);
 messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, res) => {
   const userId = req.auth!.userId;
   const deviceId = req.auth!.deviceId as string | undefined;
-  const { conversationId, messageId, contentType, ciphertext, envelopes, fileId } = req.body as {
-    conversationId: string;
-    messageId: string;
-    contentType?: string;
-    ciphertext?: string;
-    envelopes?: Array<{ recipientDeviceId: string; ciphertext: string }>;
-    fileId?: string;
-  };
+  const { conversationId, messageId, contentType, ciphertext, envelopes, fileId, mlsEpoch } =
+    req.body as {
+      conversationId: string;
+      messageId: string;
+      contentType?: string;
+      ciphertext?: string;
+      envelopes?: Array<{ recipientDeviceId: string; ciphertext: string }>;
+      fileId?: string;
+      mlsEpoch?: number;
+    };
 
   // ── content-type-specific validation ──────────────────────────────────────
   const validation = validateMessagePayload({
@@ -36,6 +38,7 @@ messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, r
     ...(ciphertext !== undefined ? { ciphertext } : {}),
     ...(envelopes !== undefined ? { envelopes } : {}),
     ...(fileId !== undefined ? { fileId } : {}),
+    ...(mlsEpoch !== undefined ? { mlsEpoch } : {}),
   });
   if (!validation.ok) {
     res.status(validation.code).json({ error: validation.message });
@@ -80,6 +83,7 @@ messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, r
           contentType: contentType?.trim().toLowerCase() || 'text',
           ciphertext: ciphertext || null,
           fileId: fileId ?? null,
+          mlsEpoch: mlsEpoch ?? null,
         })
         .returning();
 
