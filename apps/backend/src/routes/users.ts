@@ -9,6 +9,7 @@ import { redis } from '../lib/redis.js';
 import { isOnline, deriveDevicePresence } from '../services/presence.js';
 import { getSocketServer } from '../lib/socket.js';
 import { conversationRoom } from '../services/roomManager.js';
+import { prekeyConsumedTotal } from '../lib/metrics.js';
 
 export const usersRouter: RouterType = Router();
 
@@ -74,6 +75,10 @@ usersRouter.get('/me', async (req: AuthRequest, res) => {
         username: true,
         avatarUrl: true,
         presenceVisible: true,
+        lastSeenVisible: true,
+        sendReadReceipts: true,
+        allowDirectMessages: true,
+        allowGroupInvites: true,
         createdAt: true,
       },
       with: {
@@ -96,6 +101,10 @@ usersRouter.get('/me', async (req: AuthRequest, res) => {
       username: user.username,
       avatarUrl: user.avatarUrl,
       presenceVisible: user.presenceVisible,
+      lastSeenVisible: user.lastSeenVisible,
+      sendReadReceipts: user.sendReadReceipts,
+      allowDirectMessages: user.allowDirectMessages,
+      allowGroupInvites: user.allowGroupInvites,
       wallets: user.wallets.map((w) => ({
         address: w.address,
         isPrimary: w.isPrimary,
@@ -152,7 +161,7 @@ usersRouter.get('/:id/presence', async (req: AuthRequest, res) => {
   try {
     const user = await db.query.users.findFirst({
       where: eq(users.id, id),
-      columns: { presenceVisible: true },
+      columns: { presenceVisible: true, lastSeenVisible: true },
     });
 
     if (!user) {
@@ -177,7 +186,10 @@ usersRouter.get('/:id/presence', async (req: AuthRequest, res) => {
     // Fall back to device-based presence from devices.lastSeenAt.
     try {
       const { online, lastSeen } = await deriveDevicePresence(id);
-      res.json({ online, ...(lastSeen ? { lastSeen } : {}) });
+      res.json({
+        online,
+        ...(user.lastSeenVisible && lastSeen ? { lastSeen } : {}),
+      });
     } catch {
       res.json({ online: false });
     }
@@ -256,19 +268,51 @@ usersRouter.get(
       return { keyId: candidate.keyId, publicKey: candidate.publicKey };
     });
 
-    res.json({
-      deviceId: device.id,
-      identityPublicKey: device.identityPublicKey,
-      registrationId: device.registrationId,
-      signedPreKey: {
-        keyId: signedPreKey.keyId,
-        publicKey: signedPreKey.publicKey,
-        signature: signedPreKey.signature,
-      },
-      oneTimePreKey: claimedOneTimePreKey,
-    });
-  },
-);
+  const claimedOneTimePreKey = await db.transaction(async (tx) => {
+    const [candidate] = await tx
+      .select({
+        id: devicePrekeys.id,
+        keyId: devicePrekeys.keyId,
+        publicKey: devicePrekeys.publicKey,
+      })
+      .from(devicePrekeys)
+      .where(
+        and(
+          eq(devicePrekeys.deviceId, deviceId),
+          eq(devicePrekeys.keyType, 'one_time'),
+          eq(devicePrekeys.consumed, false),
+        ),
+      )
+      .orderBy(devicePrekeys.createdAt)
+      .limit(1)
+      .for('update', { skipLocked: true });
+
+    if (!candidate) return null;
+
+    await tx
+      .update(devicePrekeys)
+      .set({ consumed: true })
+      .where(eq(devicePrekeys.id, candidate.id));
+
+    return { keyId: candidate.keyId, publicKey: candidate.publicKey };
+  });
+
+  if (claimedOneTimePreKey) {
+    prekeyConsumedTotal.inc();
+  }
+
+  res.json({
+    deviceId: device.id,
+    identityPublicKey: device.identityPublicKey,
+    registrationId: device.registrationId,
+    signedPreKey: {
+      keyId: signedPreKey.keyId,
+      publicKey: signedPreKey.publicKey,
+      signature: signedPreKey.signature,
+    },
+    oneTimePreKey: claimedOneTimePreKey,
+  });
+});
 
 /**
  * GET /users/:id/key-fingerprint
@@ -370,7 +414,15 @@ usersRouter.get('/:id/key-fingerprint', async (req: AuthRequest, res) => {
 
 usersRouter.patch('/me', async (req: AuthRequest, res) => {
   const userId = req.auth!.userId;
-  const { username, avatarUrl, presenceVisible } = req.body;
+  const {
+    username,
+    avatarUrl,
+    presenceVisible,
+    lastSeenVisible,
+    sendReadReceipts,
+    allowDirectMessages,
+    allowGroupInvites,
+  } = req.body;
 
   const updateData: Partial<typeof users.$inferInsert> = {};
 
@@ -384,6 +436,38 @@ usersRouter.patch('/me', async (req: AuthRequest, res) => {
       return;
     }
     updateData.presenceVisible = presenceVisible;
+  }
+
+  if (lastSeenVisible !== undefined) {
+    if (typeof lastSeenVisible !== 'boolean') {
+      res.status(400).json({ error: 'lastSeenVisible must be a boolean' });
+      return;
+    }
+    updateData.lastSeenVisible = lastSeenVisible;
+  }
+
+  if (sendReadReceipts !== undefined) {
+    if (typeof sendReadReceipts !== 'boolean') {
+      res.status(400).json({ error: 'sendReadReceipts must be a boolean' });
+      return;
+    }
+    updateData.sendReadReceipts = sendReadReceipts;
+  }
+
+  if (allowDirectMessages !== undefined) {
+    if (typeof allowDirectMessages !== 'boolean') {
+      res.status(400).json({ error: 'allowDirectMessages must be a boolean' });
+      return;
+    }
+    updateData.allowDirectMessages = allowDirectMessages;
+  }
+
+  if (allowGroupInvites !== undefined) {
+    if (typeof allowGroupInvites !== 'boolean') {
+      res.status(400).json({ error: 'allowGroupInvites must be a boolean' });
+      return;
+    }
+    updateData.allowGroupInvites = allowGroupInvites;
   }
 
   if (username !== undefined) {
@@ -411,7 +495,7 @@ usersRouter.patch('/me', async (req: AuthRequest, res) => {
   try {
     const oldUser = await db.query.users.findFirst({
       where: eq(users.id, userId),
-      columns: { presenceVisible: true },
+      columns: { presenceVisible: true, lastSeenVisible: true },
     });
 
     const [updatedUser] = await db
@@ -440,10 +524,15 @@ usersRouter.patch('/me', async (req: AuthRequest, res) => {
               io.to(conversationRoom(m.conversationId)).emit('presence_update', {
                 userId,
                 online: true,
+                ...(updatedUser.lastSeenVisible ? { lastSeen: Date.now() } : {}),
               });
               // Also emit to direct conversation room for backward compatibility
               io.to(m.conversationId).emit('user_online', { userId });
-              io.to(m.conversationId).emit('presence_update', { userId, online: true });
+              io.to(m.conversationId).emit('presence_update', {
+                userId,
+                online: true,
+                ...(updatedUser.lastSeenVisible ? { lastSeen: Date.now() } : {}),
+              });
             } else {
               io.to(conversationRoom(m.conversationId)).emit('user_offline', { userId });
               io.to(conversationRoom(m.conversationId)).emit('presence_update', {

@@ -30,6 +30,17 @@ jobs:
       run:
         working-directory: apps/backend
 
+    env:
+      DATABASE_URL: postgres://postgres:password@localhost:5432/clicked
+      REDIS_URL: redis://localhost:6379
+      OBJECT_STORE_ENDPOINT: http://localhost:9000
+      OBJECT_STORE_BUCKET: clicked
+      OBJECT_STORE_ACCESS_KEY: clicked
+      OBJECT_STORE_SECRET_KEY: clickedsecret
+      OBJECT_STORE_REGION: us-east-1
+      OBJECT_STORE_FORCE_PATH_STYLE: 'true'
+      JWT_SECRET: ci-test-secret
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -46,6 +57,55 @@ jobs:
         run: pnpm install --frozen-lockfile
         working-directory: .
 
+      - name: Start MinIO
+        run: |
+          docker run -d \
+            --name clicked-minio-ci \
+            -p 9000:9000 \
+            -p 9001:9001 \
+            -e MINIO_ROOT_USER="$OBJECT_STORE_ACCESS_KEY" \
+            -e MINIO_ROOT_PASSWORD="$OBJECT_STORE_SECRET_KEY" \
+            minio/minio:RELEASE.2025-04-22T22-12-26Z \
+            server /data --console-address ":9001"
+
+      - name: Wait for MinIO
+        run: |
+          for _ in $(seq 1 30); do
+            curl -fsS http://localhost:9000/minio/health/ready && exit 0
+            sleep 2
+          done
+          exit 1
+
+      - name: Seed MinIO bucket
+        run: |
+          node --input-type=module <<'NODE'
+          import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3';
+
+          const client = new S3Client({
+            endpoint: process.env.OBJECT_STORE_ENDPOINT,
+            region: process.env.OBJECT_STORE_REGION,
+            credentials: {
+              accessKeyId: process.env.OBJECT_STORE_ACCESS_KEY,
+              secretAccessKey: process.env.OBJECT_STORE_SECRET_KEY,
+            },
+            forcePathStyle: true,
+          });
+
+          try {
+            await client.send(new CreateBucketCommand({ Bucket: process.env.OBJECT_STORE_BUCKET }));
+          } catch (error) {
+            if (
+              error?.name !== 'BucketAlreadyOwnedByYou' &&
+              error?.name !== 'BucketAlreadyExists'
+            ) {
+              throw error;
+            }
+          }
+          NODE
+
+      - name: Run migrations
+        run: pnpm db:migrate
+
       - name: Format check
         run: pnpm format:check
 
@@ -54,6 +114,3 @@ jobs:
 
       - name: Tests
         run: pnpm test
-        env:
-          JWT_SECRET: ${{ secrets.JWT_SECRET || 'ci-test-secret' }}
-          REDIS_URL: redis://localhost:6379
