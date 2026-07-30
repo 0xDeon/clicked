@@ -6,6 +6,7 @@ export const KNOWN_EVENT_TYPES = new Set([
   // Inbound (client → server)
   'join_room',
   'send_message',
+  'send_file_message',
   'message_history',
   'delete_message',
   'message_read',

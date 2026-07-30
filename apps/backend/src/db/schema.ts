@@ -7,6 +7,7 @@ import {
   pgEnum,
   index,
   integer,
+  jsonb,
   uniqueIndex,
   check,
   type AnyPgColumn,
@@ -132,10 +133,24 @@ export const messages = pgTable(
     editsMessageId: uuid('edits_message_id').references((): AnyPgColumn => messages.id, {
       onDelete: 'set null',
     }),
+    // Structured payload for system events (member joined/left, device
+    // added/revoked, conversation renamed, MLS epoch change, etc). These are
+    // routing/UX metadata, not secret — unlike `ciphertext`, this is stored
+    // in the clear. Only ever set when contentType='system'; enforced below.
+    // System rows are ordinary rows in this table, so they fall out of the
+    // existing (conversationId, createdAt) ordering/index for free — no
+    // separate interleaving logic needed.
+    systemPayload: jsonb('system_payload'),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     deletedAt: timestamp('deleted_at'),
   },
-  (table) => [index('messages_conversation_created_idx').on(table.conversationId, table.createdAt)],
+  (table) => [
+    index('messages_conversation_created_idx').on(table.conversationId, table.createdAt),
+    check(
+      'messages_system_payload_only_on_system_type',
+      sql`${table.contentType} = 'system' OR ${table.systemPayload} IS NULL`,
+    ),
+  ],
 );
 
 export const messageEnvelopes = pgTable(
