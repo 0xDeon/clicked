@@ -246,6 +246,19 @@ describe('GET /files/:fileId — MLS group files', () => {
     expect(mockGetConversationEpochWindow).not.toHaveBeenCalled();
   });
 
+  it('treats a null membership lookup as not-a-member', async () => {
+    // Guards the membership filter against a driver that reports "no row" as
+    // null rather than undefined — a truthiness slip here would hand a
+    // non-member a download URL.
+    mockMessageFindMany.mockResolvedValue([groupMessage(7)]);
+    mockMemberFindFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp()).get(url);
+
+    expect(res.status).toBe(403);
+    expect(mockGeneratePresignedGet).not.toHaveBeenCalled();
+  });
+
   it('returns 404 for a soft-deleted file', async () => {
     mockFileFindFirst.mockResolvedValue({ ...READY_FILE, deletedAt: new Date() });
 

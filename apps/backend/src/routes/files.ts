@@ -69,7 +69,7 @@ filesRouter.get('/:fileId', async (req: AuthRequest, res) => {
     ),
   );
 
-  const memberOf = new Set(conversationIds.filter((_, index) => memberships[index] !== undefined));
+  const memberOf = new Set(conversationIds.filter((_, index) => Boolean(memberships[index])));
 
   const reachable = referencing.filter((m) => memberOf.has(m.conversationId));
 
