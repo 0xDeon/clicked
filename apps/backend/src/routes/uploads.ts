@@ -6,6 +6,7 @@ import { db } from '../db/index.js';
 import { files, conversationMembers } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { generatePresignedPut, generateStorageKey } from '../lib/storage.js';
+import { verifyFileIntegrity } from '../lib/fileIntegrity.js';
 
 export const uploadsRouter: IRouter = Router();
 
@@ -33,6 +34,10 @@ const RequestSlotSchema = z.object({
   mimeType: z.string().min(1),
   sha256: z.string().min(1),
   isThumbnail: z.boolean().optional().default(false),
+});
+
+const ConfirmUploadSchema = z.object({
+  sha256: z.string().min(1),
 });
 
 // POST /uploads — request a presigned upload slot
@@ -86,6 +91,9 @@ uploadsRouter.post('/', async (req: AuthRequest, res) => {
 });
 
 // POST /uploads/:fileId/confirm — mark file as ready after client PUT succeeds
+//
+// SECURITY FIX: Now performs SHA-256 integrity verification before marking ready.
+// If hash mismatch is detected, the file is marked as corrupted and never becomes ready.
 uploadsRouter.post('/:fileId/confirm', async (req: AuthRequest, res) => {
   const userId = req.auth!.userId;
   const fileId = req.params['fileId'] as string;
@@ -116,6 +124,39 @@ uploadsRouter.post('/:fileId/confirm', async (req: AuthRequest, res) => {
 
   if (file.status === 'deleted') {
     res.status(409).json({ error: 'File has been deleted' });
+    return;
+  }
+
+  const parsed = ConfirmUploadSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(422).json({ error: 'sha256 is required' });
+    return;
+  }
+
+  if (parsed.data.sha256 !== file.sha256) {
+    res.status(422).json({ error: 'sha256 mismatch' });
+    return;
+  }
+
+  const integrityCheck = await verifyFileIntegrity(file.storageKey, file.sha256);
+
+  if (!integrityCheck.valid) {
+    await db
+      .update(files)
+      .set({
+        status: 'deleted',
+        deletedAt: new Date(),
+      })
+      .where(eq(files.id, fileId));
+
+    res.status(422).json({
+      error: 'File integrity verification failed',
+      details: {
+        reason: integrityCheck.error || 'Hash mismatch',
+        expectedHash: integrityCheck.expectedHash,
+        computedHash: integrityCheck.computedHash,
+      },
+    });
     return;
   }
 

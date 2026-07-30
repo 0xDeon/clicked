@@ -256,7 +256,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         columns: { userId: true },
       });
       await invalidateConversationCaches(members.map((m) => m.userId));
-      void dispatchOfflinePush(conversationId, messageId, recipientDeviceIds);
+      void dispatchOfflinePush(conversationId, messageId, recipientDeviceIds, userId);
     }
   });
 
