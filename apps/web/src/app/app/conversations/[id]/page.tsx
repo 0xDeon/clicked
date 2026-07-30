@@ -16,6 +16,9 @@ import { useSocket } from '@/hooks/useSocket';
 import { useAuth } from '@/components/auth/useAuth';
 import { Avatar } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { clearSessionKeys } from '@/lib/crypto/sessionStore';
+import { sessionStore } from '@/lib/sessionStore';
+
 import { useInboundPipeline } from '@/hooks/useInboundPipeline';
 import { sendEncryptedMessage, fetchConversationDevices } from '@/lib/crypto';
 import type { InboundMessage } from '@/lib/crypto/types';
@@ -458,6 +461,9 @@ export default function ConversationPage() {
           : typeof record.contactId === 'string'
             ? record.contactId
             : (record.subjectUserId as string);
+
+      clearSessionKeys();
+      void sessionStore.clear();
 
       setSafetyByUser((prev) => ({
         ...prev,

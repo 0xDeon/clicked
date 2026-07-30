@@ -18,11 +18,14 @@ export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
   username: text('username').unique(),
   avatarUrl: text('avatar_url'),
-  presenceVisible: boolean('presence_visible').notNull().default(true),
+  presenceVisible: boolean('presence_visible').notNull().default(false),
+  lastSeenVisible: boolean('last_seen_visible').notNull().default(false),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
   // Privacy setting: whether the user allows sending read receipts to others
-  sendReadReceipts: boolean('send_read_receipts').notNull().default(true),
+  sendReadReceipts: boolean('send_read_receipts').notNull().default(false),
+  allowDirectMessages: boolean('allow_direct_messages').notNull().default(true),
+  allowGroupInvites: boolean('allow_group_invites').notNull().default(false),
 });
 
 export const wallets = pgTable('wallets', {

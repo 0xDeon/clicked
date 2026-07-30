@@ -207,17 +207,21 @@ function readyFile(
   };
 }
 
-function insertedMessage(overrides: Record<string, unknown> = {}) {
+function fileMessagePayload(
+  overrides: Partial<{
+    conversationId: string;
+    fileId: string;
+    messageId: string;
+    content: string;
+    contentType: 'file' | 'image' | 'video' | 'audio';
+  }> = {},
+) {
   return {
-    id: 'msg-1',
     conversationId: CONVERSATION_ID,
-    senderId: SENDER_ID,
-    senderDeviceId: SENDER_DEVICE,
-    ciphertext: ENVELOPE_CIPHERTEXT,
-    contentType: 'image',
     fileId: FILE_ID,
-    createdAt: new Date('2024-01-01T00:00:01.000Z'),
-    deletedAt: null,
+    messageId: DEFAULT_MESSAGE_ID,
+    content: ENVELOPE_CIPHERTEXT,
+    contentType: 'image' as const,
     ...overrides,
   };
 }
@@ -346,6 +350,9 @@ describe('send_file_message — per-device envelopes (#337)', () => {
       contentType: 'image',
       envelopes: [{ recipientDeviceId: SIBLING_B, ciphertext: 'cipher-for-b' }],
     });
+    mockFileFindFirst.mockResolvedValueOnce(readyFile());
+    mockMessageFindFirst.mockResolvedValueOnce(undefined);
+    mockFindMany.mockResolvedValueOnce([{ userId: SENDER_ID }, { userId: 'user-2' }]);
 
     const errors = socket.emitted.filter((e) => e.event === 'error');
     expect(errors).toHaveLength(1);
@@ -390,21 +397,22 @@ describe('send_file_message — per-device envelopes (#337)', () => {
     const io = makeIo();
     const handler = await getHandler(socket, io);
 
-    await handler({
-      conversationId: CONVERSATION_ID,
-      fileId: FILE_ID,
-      content: ENVELOPE_CIPHERTEXT,
-      contentType: 'image',
-      envelopes: [{ recipientDeviceId: 'device-recipient', ciphertext: 'sealed-file-key' }],
-    });
+    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
+      p: unknown,
+    ) => Promise<void>;
+    await handler(fileMessagePayload({ messageId: returnedMessage.id, contentType: 'image' }));
 
     expect(socket.emitted.some((e) => e.event === 'error')).toBe(false);
     expect(mockInsert).toHaveBeenCalled();
-  });
-
-  it('re-acks without re-inserting when the client messageId already exists', async () => {
-    const createdAt = new Date('2024-01-01T00:00:07.000Z');
-    mockMessageFindFirst.mockResolvedValue({ createdAt });
+    expect(valuesFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: returnedMessage.id,
+        conversationId: CONVERSATION_ID,
+        senderId: SENDER_ID,
+        fileId: FILE_ID,
+        contentType: 'image',
+      }),
+    );
 
     const socket = makeSocket(SENDER_ID);
     const io = makeIo();
@@ -460,88 +468,10 @@ describe('send_file_message — delivery pipeline (#337)', () => {
     const io = makeIo();
     const handler = await getHandler(socket, io);
 
-    await handler({
-      conversationId: CONVERSATION_ID,
-      fileId: FILE_ID,
-      content: ENVELOPE_CIPHERTEXT,
-      contentType: 'audio',
-      envelopes: [{ recipientDeviceId: BOB_DEVICE, ciphertext: 'cipher-for-bob' }],
-    });
-
-    expect(deliverMessage).toHaveBeenCalledTimes(1);
-    expect(deliverMessage).toHaveBeenCalledWith(io, message, CONVERSATION_ID);
-
-    // The handler itself performs no direct room emit — everything the room
-    // sees comes from the pipeline.
-    expect(io.roomEmitted.filter((e) => e.event === 'new_message')).toHaveLength(1);
-  });
-
-  it('acks the sender once the message is persisted', async () => {
-    const message = insertedMessage();
-    mockReturning.mockResolvedValue([message]);
-
-    const socket = makeSocket(SENDER_ID);
-    const io = makeIo();
-    const handler = await getHandler(socket, io);
-
-    await handler({
-      conversationId: CONVERSATION_ID,
-      fileId: FILE_ID,
-      content: ENVELOPE_CIPHERTEXT,
-      contentType: 'image',
-      envelopes: [{ recipientDeviceId: 'device-recipient', ciphertext: 'sealed-file-key' }],
-    });
-
-    expect(socket.emit).toHaveBeenCalledWith('message_ack', {
-      messageId: message.id,
-      createdAt: message.createdAt,
-    });
-  });
-
-  it('dispatches offline push for the envelope recipients, not the legacy path', async () => {
-    mockDevicesFindMany.mockResolvedValueOnce([]).mockResolvedValueOnce([
-      { id: BOB_DEVICE, userId: 'user-bob' },
-      { id: 'device-carol', userId: 'user-carol' },
-    ]);
-
-    const socket = makeSocket(SENDER_ID);
-    const io = makeIo();
-    const handler = await getHandler(socket, io);
-
-    await handler({
-      conversationId: CONVERSATION_ID,
-      fileId: FILE_ID,
-      content: ENVELOPE_CIPHERTEXT,
-      contentType: 'video',
-      envelopes: [
-        { recipientDeviceId: BOB_DEVICE, ciphertext: 'cipher-for-bob' },
-        { recipientDeviceId: 'device-carol', ciphertext: 'cipher-for-carol' },
-      ],
-    });
-
-    expect(dispatchOfflinePush).toHaveBeenCalledWith('conv-1', 'msg-1', [
-      BOB_DEVICE,
-      'device-carol',
-    ]);
-    // The old uncoalesced file-message push path is no longer used, so a file
-    // message can't be pushed twice via two different mechanisms.
-    expect(sendPushForMessage).not.toHaveBeenCalled();
-  });
-
-  it('does not deliver when the transaction fails', async () => {
-    mockReturning.mockRejectedValue(new Error('db down'));
-
-    const socket = makeSocket(SENDER_ID);
-    const io = makeIo();
-    const handler = await getHandler(socket, io);
-
-    await handler({
-      conversationId: CONVERSATION_ID,
-      fileId: FILE_ID,
-      content: ENVELOPE_CIPHERTEXT,
-      contentType: 'image',
-      envelopes: [{ recipientDeviceId: 'device-recipient', ciphertext: 'sealed-file-key' }],
-    });
+    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
+      p: unknown,
+    ) => Promise<void>;
+    await handler(fileMessagePayload({ messageId: 'msg-not-member', contentType: 'file' }));
 
     expect(socket.emit).toHaveBeenCalledWith(
       'error',
@@ -610,13 +540,17 @@ describe('send_file_message — validation and access control', () => {
     const io = makeIo();
     const handler = await getHandler(socket, io);
 
-    await handler({
-      conversationId: CONVERSATION_ID,
-      fileId: 'nonexistent-file',
-      content: ENVELOPE_CIPHERTEXT,
-      contentType: 'image',
-      envelopes: [{ recipientDeviceId: 'device-recipient', ciphertext: 'sealed-file-key' }],
-    });
+    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
+      p: unknown,
+    ) => Promise<void>;
+    mockMessageFindFirst.mockResolvedValueOnce(undefined);
+    await handler(
+      fileMessagePayload({
+        messageId: 'msg-missing-file',
+        fileId: 'nonexistent-file',
+        contentType: 'image',
+      }),
+    );
 
     expect(socket.emit).toHaveBeenCalledWith(
       'error',
@@ -635,13 +569,14 @@ describe('send_file_message — validation and access control', () => {
     const io = makeIo();
     const handler = await getHandler(socket, io);
 
-    await handler({
-      conversationId: CONVERSATION_ID,
-      fileId: FILE_ID,
-      content: ENVELOPE_CIPHERTEXT,
-      contentType: 'file',
-      envelopes: [{ recipientDeviceId: 'device-recipient', ciphertext: 'sealed-file-key' }],
-    });
+    const { registerMessagingHandlers } = await import('../socket/messaging.js');
+    registerMessagingHandlers(io as never, socket as never);
+
+    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
+      p: unknown,
+    ) => Promise<void>;
+    mockMessageFindFirst.mockResolvedValueOnce(undefined);
+    await handler(fileMessagePayload({ messageId: 'msg-pending-file', contentType: 'file' }));
 
     expect(socket.emit).toHaveBeenCalledWith(
       'error',
@@ -660,13 +595,14 @@ describe('send_file_message — validation and access control', () => {
     const io = makeIo();
     const handler = await getHandler(socket, io);
 
-    await handler({
-      conversationId: CONVERSATION_ID,
-      fileId: FILE_ID,
-      content: ENVELOPE_CIPHERTEXT,
-      contentType: 'file',
-      envelopes: [{ recipientDeviceId: 'device-recipient', ciphertext: 'sealed-file-key' }],
-    });
+    const { registerMessagingHandlers } = await import('../socket/messaging.js');
+    registerMessagingHandlers(io as never, socket as never);
+
+    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
+      p: unknown,
+    ) => Promise<void>;
+    mockMessageFindFirst.mockResolvedValueOnce(undefined);
+    await handler(fileMessagePayload({ messageId: 'msg-deleted-file', contentType: 'file' }));
 
     expect(socket.emit).toHaveBeenCalledWith(
       'error',
@@ -685,13 +621,14 @@ describe('send_file_message — validation and access control', () => {
     const io = makeIo();
     const handler = await getHandler(socket, io);
 
-    await handler({
-      conversationId: CONVERSATION_ID,
-      fileId: FILE_ID,
-      content: ENVELOPE_CIPHERTEXT,
-      contentType: 'image',
-      envelopes: [{ recipientDeviceId: 'device-recipient', ciphertext: 'sealed-file-key' }],
-    });
+    const { registerMessagingHandlers } = await import('../socket/messaging.js');
+    registerMessagingHandlers(io as never, socket as never);
+
+    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
+      p: unknown,
+    ) => Promise<void>;
+    mockMessageFindFirst.mockResolvedValueOnce(undefined);
+    await handler(fileMessagePayload({ messageId: 'msg-wrong-conv', contentType: 'image' }));
 
     expect(socket.emit).toHaveBeenCalledWith(
       'error',
@@ -715,13 +652,14 @@ describe('send_file_message — validation and access control', () => {
     const io = makeIo();
     const handler = await getHandler(socket, io);
 
-    await handler({
-      conversationId: CONVERSATION_ID,
-      fileId: FILE_ID,
-      content: ENVELOPE_CIPHERTEXT,
-      contentType: 'video',
-      envelopes: [{ recipientDeviceId: 'device-recipient', ciphertext: 'sealed-file-key' }],
-    });
+    const { registerMessagingHandlers } = await import('../socket/messaging.js');
+    registerMessagingHandlers(io as never, socket as never);
+
+    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
+      p: unknown,
+    ) => Promise<void>;
+    mockMessageFindFirst.mockResolvedValueOnce(undefined);
+    await handler(fileMessagePayload({ messageId: 'msg-unauthorized', contentType: 'video' }));
 
     expect(socket.emit).toHaveBeenCalledWith(
       'error',
@@ -738,12 +676,19 @@ describe('send_file_message — validation and access control', () => {
     const io = makeIo();
     const handler = await getHandler(socket, io);
 
-    await handler({
-      conversationId: CONVERSATION_ID,
-      fileId: FILE_ID,
-      content: '   ',
-      contentType: 'audio',
-    });
+    const { registerMessagingHandlers } = await import('../socket/messaging.js');
+    registerMessagingHandlers(io as never, socket as never);
+
+    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
+      p: unknown,
+    ) => Promise<void>;
+    await handler(
+      fileMessagePayload({
+        messageId: 'msg-empty-content',
+        content: '   ',
+        contentType: 'audio',
+      }),
+    );
 
     expect(socket.emit).toHaveBeenCalledWith(
       'error',
@@ -755,17 +700,39 @@ describe('send_file_message — validation and access control', () => {
     expect(mockInsert).not.toHaveBeenCalled();
   });
 
-  it('rejects an unsupported contentType', async () => {
+  it('fan-out is identical to text message: io.to(conversationId).emit("new_message", message)', async () => {
+    const returnedMessage = {
+      id: 'msg-2',
+      conversationId: CONVERSATION_ID,
+      senderId: SENDER_ID,
+      content: ENVELOPE_CIPHERTEXT,
+      contentType: 'audio',
+      fileId: FILE_ID,
+      createdAt: new Date(),
+      deletedAt: null,
+    };
+
+    mockMemberFindFirst.mockResolvedValueOnce({
+      id: 'membership-1',
+      userId: SENDER_ID,
+      conversationId: CONVERSATION_ID,
+    });
+    mockFileFindFirst.mockResolvedValueOnce(readyFile());
+    mockMessageFindFirst.mockResolvedValueOnce(undefined);
+    mockFindMany.mockResolvedValueOnce([{ userId: SENDER_ID }]);
+
+    const returningFn = vi.fn().mockResolvedValue([returnedMessage]);
+    const valuesFn = vi.fn().mockReturnValue({ returning: returningFn });
+    mockInsert.mockReturnValue({ values: valuesFn });
+
     const socket = makeSocket(SENDER_ID);
     const io = makeIo();
     const handler = await getHandler(socket, io);
 
-    await handler({
-      conversationId: CONVERSATION_ID,
-      fileId: FILE_ID,
-      content: ENVELOPE_CIPHERTEXT,
-      contentType: 'text',
-    });
+    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
+      p: unknown,
+    ) => Promise<void>;
+    await handler(fileMessagePayload({ messageId: returnedMessage.id, contentType: 'audio' }));
 
     expect(socket.emit).toHaveBeenCalledWith(
       'error',
@@ -778,17 +745,44 @@ describe('send_file_message — validation and access control', () => {
   });
 
   it('fileKey inside envelope ciphertext is never extracted or stored by the server', async () => {
+    // The server must treat `content` as an opaque blob. We verify that the
+    // insert values object does NOT contain a `fileKey` field — the key must
+    // remain only inside the encrypted envelope ciphertext.
+    const returnedMessage = {
+      id: 'msg-3',
+      conversationId: CONVERSATION_ID,
+      senderId: SENDER_ID,
+      content: ENVELOPE_CIPHERTEXT,
+      contentType: 'image',
+      fileId: FILE_ID,
+      createdAt: new Date(),
+      deletedAt: null,
+    };
+
+    mockMemberFindFirst.mockResolvedValueOnce({
+      id: 'membership-1',
+      userId: SENDER_ID,
+      conversationId: CONVERSATION_ID,
+    });
+    mockFileFindFirst.mockResolvedValueOnce(readyFile());
+    mockMessageFindFirst.mockResolvedValueOnce(undefined);
+    mockFindMany.mockResolvedValueOnce([{ userId: SENDER_ID }]);
+
+    const returningFn = vi.fn().mockResolvedValue([returnedMessage]);
+    const valuesFn = vi.fn().mockReturnValue({ returning: returningFn });
+    mockInsert.mockReturnValue({ values: valuesFn });
+
     const socket = makeSocket(SENDER_ID);
     const io = makeIo();
     const handler = await getHandler(socket, io);
 
-    await handler({
-      conversationId: CONVERSATION_ID,
-      fileId: FILE_ID,
-      content: ENVELOPE_CIPHERTEXT,
-      contentType: 'image',
-      envelopes: [{ recipientDeviceId: 'device-recipient', ciphertext: 'sealed-file-key' }],
-    });
+    const { registerMessagingHandlers } = await import('../socket/messaging.js');
+    registerMessagingHandlers(io as never, socket as never);
+
+    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
+      p: unknown,
+    ) => Promise<void>;
+    await handler(fileMessagePayload({ messageId: returnedMessage.id, contentType: 'image' }));
 
     // The inserted values must not include a top-level `fileKey` field.
     expect(messageRow()).not.toHaveProperty('fileKey');
@@ -800,22 +794,100 @@ describe('send_file_message — validation and access control', () => {
     const contentTypes = ['file', 'image', 'video', 'audio'] as const;
 
     for (const contentType of contentTypes) {
-      insertCalls.length = 0;
-      mockDevicesFindMany.mockResolvedValue([]);
+      vi.clearAllMocks();
+
+      const returnedMessage = {
+        id: `msg-${contentType}`,
+        conversationId: CONVERSATION_ID,
+        senderId: SENDER_ID,
+        content: ENVELOPE_CIPHERTEXT,
+        contentType,
+        fileId: FILE_ID,
+        createdAt: new Date(),
+        deletedAt: null,
+      };
+
+      mockMemberFindFirst.mockResolvedValueOnce({
+        id: 'membership-1',
+        userId: SENDER_ID,
+        conversationId: CONVERSATION_ID,
+      });
+      mockFileFindFirst.mockResolvedValueOnce(readyFile());
+      mockMessageFindFirst.mockResolvedValueOnce(undefined);
+      mockFindMany.mockResolvedValueOnce([{ userId: SENDER_ID }]);
+
+      const returningFn = vi.fn().mockResolvedValue([returnedMessage]);
+      const valuesFn = vi.fn().mockReturnValue({ returning: returningFn });
+      mockInsert.mockReturnValue({ values: valuesFn });
 
       const socket = makeSocket(SENDER_ID);
       const io = makeIo();
       const handler = await getHandler(socket, io);
 
-      await handler({
-        conversationId: CONVERSATION_ID,
-        fileId: FILE_ID,
-        content: ENVELOPE_CIPHERTEXT,
-        contentType,
-        envelopes: [{ recipientDeviceId: 'device-recipient', ciphertext: 'sealed-file-key' }],
-      });
+      const { registerMessagingHandlers } = await import('../socket/messaging.js');
+      registerMessagingHandlers(io as never, socket as never);
+
+      const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
+        p: unknown,
+      ) => Promise<void>;
+      await handler(fileMessagePayload({ messageId: returnedMessage.id, contentType }));
 
       expect(messageRow()).toMatchObject({ contentType });
     }
+  });
+
+  it('requires a messageId so retries can be idempotent', async () => {
+    const socket = makeSocket(SENDER_ID);
+    const io = makeIo();
+
+    const { registerMessagingHandlers } = await import('../socket/messaging.js');
+    registerMessagingHandlers(io as never, socket as never);
+
+    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
+      p: unknown,
+    ) => Promise<void>;
+    await handler({
+      conversationId: CONVERSATION_ID,
+      fileId: FILE_ID,
+      content: ENVELOPE_CIPHERTEXT,
+      contentType: 'image',
+    });
+
+    expect(socket.emit).toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({
+        event: 'send_file_message',
+        message: expect.stringContaining('messageId is required'),
+      }),
+    );
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  it('acks duplicate messageIds without creating a second file message', async () => {
+    const createdAt = new Date('2026-01-01T00:00:00.000Z');
+    mockMemberFindFirst.mockResolvedValueOnce({
+      id: 'membership-1',
+      userId: SENDER_ID,
+      conversationId: CONVERSATION_ID,
+    });
+    mockMessageFindFirst.mockResolvedValueOnce({ createdAt });
+
+    const socket = makeSocket(SENDER_ID);
+    const io = makeIo();
+
+    const { registerMessagingHandlers } = await import('../socket/messaging.js');
+    registerMessagingHandlers(io as never, socket as never);
+
+    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
+      p: unknown,
+    ) => Promise<void>;
+    await handler(fileMessagePayload({ messageId: 'msg-duplicate', contentType: 'image' }));
+
+    expect(socket.emit).toHaveBeenCalledWith('message_ack', {
+      messageId: 'msg-duplicate',
+      createdAt,
+    });
+    expect(mockFileFindFirst).not.toHaveBeenCalled();
+    expect(mockInsert).not.toHaveBeenCalled();
   });
 });

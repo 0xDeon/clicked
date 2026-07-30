@@ -170,6 +170,64 @@ describe('EventDispatcher.listen — envelope routing', () => {
     expect((ack?.data as { duplicate: boolean }).duplicate).toBe(false);
   });
 
+  it('rejects stale envelopes before dispatching the handler', async () => {
+    const { socket, emitted, trigger } = makeSocket();
+    const redis = makeRedis('OK');
+    const dispatcher = new EventDispatcher(makeIo(), socket, redis as never);
+    const handler = vi.fn();
+    dispatcher.register('join_room', handler);
+    dispatcher.listen();
+
+    trigger('dispatch', {
+      eventId: 'stale-evt',
+      type: 'join_room',
+      timestamp: Date.now() - 301_000,
+      payload: { conversationId: 'c1' },
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(handler).not.toHaveBeenCalled();
+    expect(redis.set).not.toHaveBeenCalled();
+    expect(emitted).toContainEqual({
+      event: 'error',
+      data: expect.objectContaining({
+        payload: expect.objectContaining({
+          eventId: 'stale-evt',
+          message: 'Stale or invalid envelope timestamp',
+        }),
+      }),
+    });
+  });
+
+  it('rejects envelopes too far in the future', async () => {
+    const { socket, emitted, trigger } = makeSocket();
+    const redis = makeRedis('OK');
+    const dispatcher = new EventDispatcher(makeIo(), socket, redis as never);
+    const handler = vi.fn();
+    dispatcher.register('join_room', handler);
+    dispatcher.listen();
+
+    trigger('dispatch', {
+      eventId: 'future-evt',
+      type: 'join_room',
+      timestamp: Date.now() + 31_000,
+      payload: { conversationId: 'c1' },
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(handler).not.toHaveBeenCalled();
+    expect(redis.set).not.toHaveBeenCalled();
+    expect(emitted).toContainEqual({
+      event: 'error',
+      data: expect.objectContaining({
+        payload: expect.objectContaining({
+          eventId: 'future-evt',
+          message: 'Stale or invalid envelope timestamp',
+        }),
+      }),
+    });
+  });
+
   it('rejects unauthenticated socket', async () => {
     const { socket, emitted, trigger } = makeSocket(null);
     const dispatcher = new EventDispatcher(makeIo(), socket, null);

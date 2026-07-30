@@ -10,15 +10,18 @@ import {
 
 type Handler = (payload: Record<string, unknown>) => Promise<void>;
 
-const DEFAULT_IDEMPOTENCY_TTL_SECONDS = 86_400; // 24 h
+const IDEMPOTENCY_TTL_SECONDS = 86_400; // 24 h
+const SOCKET_EVENT_MAX_AGE_MS = parseInt(process.env['SOCKET_EVENT_MAX_AGE_MS'] ?? '300000', 10);
+const SOCKET_EVENT_MAX_FUTURE_SKEW_MS = parseInt(
+  process.env['SOCKET_EVENT_MAX_FUTURE_SKEW_MS'] ?? '30000',
+  10,
+);
 
-// Read lazily (not at module load) so tests can override
-// process.env.IDEMPOTENCY_TTL_SECONDS per-case without a module reset.
-function getIdempotencyTtlSeconds(): number {
-  const raw = process.env.IDEMPOTENCY_TTL_SECONDS;
-  if (!raw) return DEFAULT_IDEMPOTENCY_TTL_SECONDS;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_IDEMPOTENCY_TTL_SECONDS;
+function isEnvelopeTimestampFresh(timestamp: number): boolean {
+  const now = Date.now();
+  return (
+    timestamp >= now - SOCKET_EVENT_MAX_AGE_MS && timestamp <= now + SOCKET_EVENT_MAX_FUTURE_SKEW_MS
+  );
 }
 
 export class EventDispatcher {
@@ -80,6 +83,17 @@ export class EventDispatcher {
           'error',
           createEnvelope('error', {
             message: `Unknown event type: ${envelope.type}`,
+            eventId: envelope.eventId,
+          }),
+        );
+        return;
+      }
+
+      if (!isEnvelopeTimestampFresh(envelope.timestamp)) {
+        this.socket.emit(
+          'error',
+          createEnvelope('error', {
+            message: 'Stale or invalid envelope timestamp',
             eventId: envelope.eventId,
           }),
         );
