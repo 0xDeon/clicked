@@ -1,10 +1,13 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   setOnline,
   refreshPresence,
   setOffline,
   markDeviceOffline,
   isOnline,
+  scheduleOfflineBroadcast,
+  cancelPendingOfflineBroadcast,
+  __resetOfflineBroadcastsForTesting,
 } from '../services/presence.js';
 
 class FakeRedis {
@@ -94,5 +97,76 @@ describe('presence service', () => {
 
     expect(redis.hashes.get('presence:user:user-1')).toEqual(undefined);
     expect(redis.deleted.has('presence:user:user-1:device:device-1')).toBe(true);
+  });
+});
+
+describe('presence offline-broadcast debounce (#345)', () => {
+  const ORIGINAL_GRACE = process.env.PRESENCE_OFFLINE_GRACE_MS;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    __resetOfflineBroadcastsForTesting();
+    vi.useRealTimers();
+    if (ORIGINAL_GRACE === undefined) delete process.env.PRESENCE_OFFLINE_GRACE_MS;
+    else process.env.PRESENCE_OFFLINE_GRACE_MS = ORIGINAL_GRACE;
+  });
+
+  it('does not broadcast if cancelled (reconnect) before the grace window elapses', async () => {
+    process.env.PRESENCE_OFFLINE_GRACE_MS = '5000';
+    const broadcast = vi.fn();
+
+    scheduleOfflineBroadcast('user-1', broadcast);
+    vi.advanceTimersByTime(4999);
+    const cancelled = cancelPendingOfflineBroadcast('user-1');
+
+    await vi.runAllTimersAsync();
+
+    expect(cancelled).toBe(true);
+    expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it('broadcasts once the grace window fully elapses without a reconnect', async () => {
+    process.env.PRESENCE_OFFLINE_GRACE_MS = '5000';
+    const broadcast = vi.fn();
+
+    scheduleOfflineBroadcast('user-1', broadcast);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(broadcast).toHaveBeenCalledTimes(1);
+    expect(cancelPendingOfflineBroadcast('user-1')).toBe(false);
+  });
+
+  it('cancelling with nothing pending is a no-op that reports false', () => {
+    expect(cancelPendingOfflineBroadcast('user-with-no-pending-broadcast')).toBe(false);
+  });
+
+  it('re-scheduling for the same user replaces (does not stack) the pending broadcast', async () => {
+    process.env.PRESENCE_OFFLINE_GRACE_MS = '5000';
+    const first = vi.fn();
+    const second = vi.fn();
+
+    scheduleOfflineBroadcast('user-1', first);
+    vi.advanceTimersByTime(2000);
+    scheduleOfflineBroadcast('user-1', second);
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it('defaults the grace window to 5000ms when PRESENCE_OFFLINE_GRACE_MS is unset', async () => {
+    delete process.env.PRESENCE_OFFLINE_GRACE_MS;
+    const broadcast = vi.fn();
+
+    scheduleOfflineBroadcast('user-1', broadcast);
+    vi.advanceTimersByTime(4999);
+    expect(broadcast).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(broadcast).toHaveBeenCalledTimes(1);
   });
 });

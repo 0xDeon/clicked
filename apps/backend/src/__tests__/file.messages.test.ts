@@ -35,7 +35,10 @@ const mockMemberFindFirst = vi.fn();
 const mockMemberFindMany = vi.fn();
 const mockMessageFindFirst = vi.fn();
 const mockFileFindFirst = vi.fn();
+const mockMessageFindFirst = vi.fn();
 const mockDevicesFindMany = vi.fn();
+const mockInsert = vi.fn();
+const mockFindMany = vi.fn();
 const mockUpdate = vi.fn();
 
 /** Every insert(table).values(rows) call, so envelope rows can be asserted. */
@@ -185,10 +188,13 @@ const CONVERSATION_ID = 'conv-1';
 const FILE_ID = 'file-abc';
 const MESSAGE_ID = 'msg-client-supplied';
 
-// The content is an E2EE envelope ciphertext. The server treats it as an
-// opaque string — it must NOT parse or store the embedded fileKey.
-const ENVELOPE_CIPHERTEXT =
-  'encrypted:{"fileId":"file-abc","fileName":"photo.jpg","mimeType":"image/jpeg","size":204800,"fileKey":"SUPER_SECRET_KEY_NEVER_STORED"}';
+// The content is an E2EE envelope ciphertext for the message body. The server
+// treats it as an opaque string. The file's symmetric encryption key must
+// NEVER appear here — it only ever lives inside `envelopes[].ciphertext`.
+const ENVELOPE_CIPHERTEXT = 'encrypted:{"fileId":"file-abc","fileName":"photo.jpg"}';
+const FILE_KEY_ENVELOPES = [
+  { recipientDeviceId: RECIPIENT_DEVICE_ID, ciphertext: 'sealed:SUPER_SECRET_KEY_NEVER_STORED' },
+];
 
 function readyFile(
   overrides: Partial<{
@@ -553,16 +559,60 @@ describe('send_file_message — validation and access control', () => {
   it('rejects when sender is not a member of the conversation', async () => {
     mockMemberFindFirst.mockResolvedValue(undefined);
 
-    const socket = makeSocket('non-member');
+    await handler(basePayload({ messageId: '' }));
+
+    expect(socket.emit).toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({
+        event: 'send_file_message',
+        message: expect.stringContaining('messageId'),
+      }),
+    );
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects when envelopes are missing (the file key has nowhere safe to travel)', async () => {
+    mockMemberFindFirst.mockResolvedValueOnce({
+      id: 'm1',
+      userId: SENDER_ID,
+      conversationId: CONVERSATION_ID,
+    });
+
+    const socket = makeSocket(SENDER_ID);
     const io = makeIo();
     const handler = await getHandler(socket, io);
 
     await handler({
       conversationId: CONVERSATION_ID,
-      fileId: FILE_ID,
-      content: ENVELOPE_CIPHERTEXT,
-      contentType: 'file',
     });
+    mockFileFindFirst.mockResolvedValueOnce(readyFile());
+    // fetchSiblingDeviceIds finds one sibling device the payload didn't cover.
+    mockDevicesFindMany.mockResolvedValueOnce([{ id: 'device-sibling', userId: SENDER_ID }]);
+
+    const socket = makeSocket(SENDER_ID);
+    const io = makeIo();
+    const handler = await getHandler(socket, io);
+
+    await handler(basePayload());
+
+    expect(socket.emit).toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({
+        event: 'device_set_mismatch',
+        missingDeviceIds: ['device-sibling'],
+      }),
+    );
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects when sender is not a member of the conversation', async () => {
+    mockMemberFindFirst.mockResolvedValueOnce(undefined); // no membership
+
+    const socket = makeSocket('non-member');
+    const io = makeIo();
+    const handler = await getHandler(socket, io);
+
+    await handler(basePayload());
 
     expect(socket.emit).toHaveBeenCalledWith(
       'error',

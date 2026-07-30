@@ -332,6 +332,13 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
   });
 
   // ── send_file_message ──────────────────────────────────────────────────────
+  // Issue #347: routes through the same deliverMessage pipeline send_message
+  // uses, so file messages get identical per-device receipts, resume/sync
+  // backfill, and fan-out validation. `content` is the message-body envelope
+  // ciphertext (as before); `envelopes` carries the file's symmetric
+  // encryption key, individually sealed per recipient device — the key is
+  // never accepted or stored as a server-visible plaintext field, only
+  // inside each envelope's opaque ciphertext.
   socket.on(
     'send_file_message',
     async (payload: {
@@ -361,6 +368,14 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         socket.emit('error', {
           event: 'send_file_message',
           message: 'contentType must be one of: file, image, video, audio',
+        });
+        return;
+      }
+
+      if (!Array.isArray(envelopes) || envelopes.length === 0) {
+        socket.emit('error', {
+          event: 'send_file_message',
+          message: 'envelopes are required for file messages (they carry the encrypted file key)',
         });
         return;
       }
