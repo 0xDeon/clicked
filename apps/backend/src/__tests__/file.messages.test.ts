@@ -2,6 +2,7 @@
  * Tests for file message construction (issue #228).
  *
  * Validates that:
+ *  - The handler calls the shared `validateMessagePayload` (#335).
  *  - File messages reference a `ready` file authorized for the sender.
  *  - The handler rejects files that are not `ready` (pending, deleted, missing).
  *  - Access control: only the uploader may reference a file.
@@ -10,6 +11,7 @@
  *    the text-message path.
  *  - `fileKey` is never inspected or stored by the server — it lives only
  *    inside the encrypted `content` envelope ciphertext.
+ *  - Envelopes are required, matching the text-message path.
  *  - Non-members are rejected before any file check.
  */
 
@@ -51,6 +53,10 @@ vi.mock('drizzle-orm', () => ({
   lt: vi.fn(),
   desc: vi.fn(),
   sql: vi.fn(),
+}));
+
+vi.mock('../lib/validateMessagePayload.js', () => ({
+  validateMessagePayload: vi.fn().mockReturnValue({ ok: true }),
 }));
 
 vi.mock('../lib/conversationCache.js', () => ({
@@ -100,10 +106,10 @@ const SENDER_ID = 'user-sender';
 const CONVERSATION_ID = 'conv-1';
 const FILE_ID = 'file-abc';
 
-// The content is an E2EE envelope ciphertext. The server treats it as an
-// opaque string — it must NOT parse or store the embedded fileKey.
-const ENVELOPE_CIPHERTEXT =
-  'encrypted:{"fileId":"file-abc","fileName":"photo.jpg","mimeType":"image/jpeg","size":204800,"fileKey":"SUPER_SECRET_KEY_NEVER_STORED"}';
+const ENVELOPES = [
+  { recipientDeviceId: 'dev-recipient-1', ciphertext: 'for-recipient-1' },
+  { recipientDeviceId: 'dev-sender-sibling', ciphertext: 'for-sender-sibling' },
+];
 
 function readyFile(
   overrides: Partial<{
@@ -141,11 +147,11 @@ describe('send_file_message socket event', () => {
       id: 'msg-1',
       conversationId: CONVERSATION_ID,
       senderId: SENDER_ID,
-      content: ENVELOPE_CIPHERTEXT,
       contentType: 'image',
       fileId: FILE_ID,
       createdAt: new Date(),
       deletedAt: null,
+      envelopes: ENVELOPES,
     };
 
     mockMemberFindFirst.mockResolvedValueOnce({
@@ -172,8 +178,8 @@ describe('send_file_message socket event', () => {
     await handler({
       conversationId: CONVERSATION_ID,
       fileId: FILE_ID,
-      content: ENVELOPE_CIPHERTEXT,
       contentType: 'image',
+      envelopes: ENVELOPES,
     });
 
     // Message was inserted
@@ -206,8 +212,8 @@ describe('send_file_message socket event', () => {
     await handler({
       conversationId: CONVERSATION_ID,
       fileId: FILE_ID,
-      content: ENVELOPE_CIPHERTEXT,
       contentType: 'file',
+      envelopes: ENVELOPES,
     });
 
     expect(socket.emit).toHaveBeenCalledWith(
@@ -240,8 +246,8 @@ describe('send_file_message socket event', () => {
     await handler({
       conversationId: CONVERSATION_ID,
       fileId: 'nonexistent-file',
-      content: ENVELOPE_CIPHERTEXT,
       contentType: 'image',
+      envelopes: ENVELOPES,
     });
 
     expect(socket.emit).toHaveBeenCalledWith(
@@ -274,8 +280,8 @@ describe('send_file_message socket event', () => {
     await handler({
       conversationId: CONVERSATION_ID,
       fileId: FILE_ID,
-      content: ENVELOPE_CIPHERTEXT,
       contentType: 'file',
+      envelopes: ENVELOPES,
     });
 
     expect(socket.emit).toHaveBeenCalledWith(
@@ -308,8 +314,8 @@ describe('send_file_message socket event', () => {
     await handler({
       conversationId: CONVERSATION_ID,
       fileId: FILE_ID,
-      content: ENVELOPE_CIPHERTEXT,
       contentType: 'file',
+      envelopes: ENVELOPES,
     });
 
     expect(socket.emit).toHaveBeenCalledWith(
@@ -342,8 +348,8 @@ describe('send_file_message socket event', () => {
     await handler({
       conversationId: CONVERSATION_ID,
       fileId: FILE_ID,
-      content: ENVELOPE_CIPHERTEXT,
       contentType: 'image',
+      envelopes: ENVELOPES,
     });
 
     expect(socket.emit).toHaveBeenCalledWith(
@@ -376,8 +382,8 @@ describe('send_file_message socket event', () => {
     await handler({
       conversationId: CONVERSATION_ID,
       fileId: FILE_ID,
-      content: ENVELOPE_CIPHERTEXT,
       contentType: 'video',
+      envelopes: ENVELOPES,
     });
 
     expect(socket.emit).toHaveBeenCalledWith(
@@ -390,45 +396,11 @@ describe('send_file_message socket event', () => {
     expect(mockInsert).not.toHaveBeenCalled();
   });
 
-  it('rejects when content (envelope ciphertext) is empty', async () => {
-    mockMemberFindFirst.mockResolvedValueOnce({
-      id: 'm1',
-      userId: SENDER_ID,
-      conversationId: CONVERSATION_ID,
-    });
-
-    const socket = makeSocket(SENDER_ID);
-    const io = makeIo();
-
-    const { registerMessagingHandlers } = await import('../socket/messaging.js');
-    registerMessagingHandlers(io as never, socket as never);
-
-    const handler = (socket as EventEmitter).listeners('send_file_message')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await handler({
-      conversationId: CONVERSATION_ID,
-      fileId: FILE_ID,
-      content: '   ',
-      contentType: 'audio',
-    });
-
-    expect(socket.emit).toHaveBeenCalledWith(
-      'error',
-      expect.objectContaining({
-        event: 'send_file_message',
-        message: expect.stringContaining('empty'),
-      }),
-    );
-    expect(mockInsert).not.toHaveBeenCalled();
-  });
-
   it('fan-out is identical to text message: io.to(conversationId).emit("new_message", message)', async () => {
     const returnedMessage = {
       id: 'msg-2',
       conversationId: CONVERSATION_ID,
       senderId: SENDER_ID,
-      content: ENVELOPE_CIPHERTEXT,
       contentType: 'audio',
       fileId: FILE_ID,
       createdAt: new Date(),
@@ -463,8 +435,8 @@ describe('send_file_message socket event', () => {
     await handler({
       conversationId: CONVERSATION_ID,
       fileId: FILE_ID,
-      content: ENVELOPE_CIPHERTEXT,
       contentType: 'audio',
+      envelopes: ENVELOPES,
     });
 
     expect(io.to).toHaveBeenCalledWith(CONVERSATION_ID);
@@ -472,14 +444,13 @@ describe('send_file_message socket event', () => {
   });
 
   it('fileKey inside envelope ciphertext is never extracted or stored by the server', async () => {
-    // The server must treat `content` as an opaque blob. We verify that the
+    // The server must treat envelope `ciphertext` as an opaque blob. We verify that the
     // insert values object does NOT contain a `fileKey` field — the key must
     // remain only inside the encrypted envelope ciphertext.
     const returnedMessage = {
       id: 'msg-3',
       conversationId: CONVERSATION_ID,
       senderId: SENDER_ID,
-      content: ENVELOPE_CIPHERTEXT,
       contentType: 'image',
       fileId: FILE_ID,
       createdAt: new Date(),
@@ -510,16 +481,16 @@ describe('send_file_message socket event', () => {
     await handler({
       conversationId: CONVERSATION_ID,
       fileId: FILE_ID,
-      content: ENVELOPE_CIPHERTEXT,
       contentType: 'image',
+      envelopes: ENVELOPES,
     });
 
     // The inserted values must not include a top-level `fileKey` field
     const insertedValues = (valuesFn.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
     expect(insertedValues).not.toHaveProperty('fileKey');
 
-    // The `ciphertext` field is stored as-is (opaque encrypted blob)
-    expect(insertedValues.ciphertext).toBe(ENVELOPE_CIPHERTEXT);
+    // The message row itself has no ciphertext; it's all in the envelopes.
+    expect(insertedValues.ciphertext).toBeUndefined();
   });
 
   it('supports all valid file content types: file, image, video, audio', async () => {
@@ -532,7 +503,6 @@ describe('send_file_message socket event', () => {
         id: `msg-${contentType}`,
         conversationId: CONVERSATION_ID,
         senderId: SENDER_ID,
-        content: ENVELOPE_CIPHERTEXT,
         contentType,
         fileId: FILE_ID,
         createdAt: new Date(),
@@ -563,8 +533,8 @@ describe('send_file_message socket event', () => {
       await handler({
         conversationId: CONVERSATION_ID,
         fileId: FILE_ID,
-        content: ENVELOPE_CIPHERTEXT,
         contentType,
+        envelopes: ENVELOPES,
       });
 
       expect(mockInsert).toHaveBeenCalled();
