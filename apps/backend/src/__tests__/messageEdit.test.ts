@@ -110,10 +110,22 @@ function makeIo() {
   };
 }
 
+// Handlers now run exclusively through the enveloped 'dispatch' path (#342)
+// — there's no more raw socket.on(type, ...) listener to grab directly.
+let envelopeSeq = 0;
 async function getHandler(socket: EventEmitter, io: unknown) {
   const { registerMessagingHandlers } = await import('../socket/messaging.js');
   registerMessagingHandlers(io as never, socket as never);
-  return socket.listeners('edit_message')[0] as (p: unknown) => Promise<void>;
+  return async (payload: unknown) => {
+    envelopeSeq += 1;
+    EventEmitter.prototype.emit.call(socket, 'dispatch', {
+      eventId: `test-evt-${envelopeSeq}`,
+      type: 'edit_message',
+      timestamp: Date.now(),
+      payload,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  };
 }
 
 const USER_ID = 'sender-1';

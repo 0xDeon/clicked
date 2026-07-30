@@ -1,5 +1,5 @@
 {
-  "id": "2e17fd56-4cca-4b30-b479-2b9e98191e61",
+  "id": "9ea97ad2-6999-44b6-a433-e809d3209adf",
   "prevId": "d5682005-cccf-4e2e-992d-d66a5d6d3f4c",
   "version": "7",
   "dialect": "postgresql",
@@ -907,6 +907,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "system_payload": {
+          "name": "system_payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -1014,7 +1020,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "messages_system_payload_only_on_system_type": {
+          "name": "messages_system_payload_only_on_system_type",
+          "value": "\"messages\".\"content_type\" = 'system' OR \"messages\".\"system_payload\" IS NULL"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.proposal_votes": {

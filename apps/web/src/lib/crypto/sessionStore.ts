@@ -17,6 +17,10 @@ export function hasSessionKey(senderDeviceId: string): boolean {
   return sessionKeys.has(senderDeviceId);
 }
 
+export function removeSessionKey(senderDeviceId: string): void {
+  sessionKeys.delete(senderDeviceId);
+}
+
 export function clearSessionKeys(): void {
   sessionKeys.clear();
 }
@@ -32,3 +36,4 @@ export async function importSessionKey(
   sessionKeys.set(senderDeviceId, key);
   return key;
 }
+

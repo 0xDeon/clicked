@@ -7,6 +7,7 @@ import {
   pgEnum,
   index,
   integer,
+  jsonb,
   uniqueIndex,
   check,
   type AnyPgColumn,
@@ -17,11 +18,14 @@ export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
   username: text('username').unique(),
   avatarUrl: text('avatar_url'),
-  presenceVisible: boolean('presence_visible').notNull().default(true),
+  presenceVisible: boolean('presence_visible').notNull().default(false),
+  lastSeenVisible: boolean('last_seen_visible').notNull().default(false),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
   // Privacy setting: whether the user allows sending read receipts to others
-  sendReadReceipts: boolean('send_read_receipts').notNull().default(true),
+  sendReadReceipts: boolean('send_read_receipts').notNull().default(false),
+  allowDirectMessages: boolean('allow_direct_messages').notNull().default(true),
+  allowGroupInvites: boolean('allow_group_invites').notNull().default(false),
 });
 
 export const wallets = pgTable('wallets', {
@@ -129,6 +133,12 @@ export const messages = pgTable(
     }),
     contentType: text('content_type').notNull().default('text'),
     ciphertext: text('ciphertext'),
+    // Structured, server-generated metadata for `content_type = 'system'` rows
+    // (device add/revoke, membership changes). Kept separate from `ciphertext`
+    // so genuine E2EE ciphertext — opaque, per-device-encrypted — is never
+    // conflated with plaintext system metadata. Null for every non-system row;
+    // enforced by `messages_system_payload_check` below.
+    systemPayload: jsonb('system_payload').$type<{ userId: string; change: string } | null>(),
     fileId: uuid('file_id').references(() => files.id, { onDelete: 'set null' }),
     editsMessageId: uuid('edits_message_id').references((): AnyPgColumn => messages.id, {
       onDelete: 'set null',
@@ -136,7 +146,19 @@ export const messages = pgTable(
     createdAt: timestamp('created_at').notNull().defaultNow(),
     deletedAt: timestamp('deleted_at'),
   },
-  (table) => [index('messages_conversation_created_idx').on(table.conversationId, table.createdAt)],
+  (table) => [
+    index('messages_conversation_created_idx').on(table.conversationId, table.createdAt),
+    // System messages carry structured metadata, never ciphertext; everything
+    // else carries ciphertext (or an envelope), never a system payload.
+    // Supersedes the looser `messages_system_payload_only_on_system_type`
+    // constraint (#398), which only forbade a payload on non-system rows —
+    // it didn't require a system row to actually have one, or forbid a
+    // system row from also carrying ciphertext.
+    check(
+      'messages_system_payload_check',
+      sql`${table.contentType} <> 'system' OR (${table.ciphertext} IS NULL AND ${table.systemPayload} IS NOT NULL)`,
+    ),
+  ],
 );
 
 export const messageEnvelopes = pgTable(
@@ -351,64 +373,72 @@ export const pushSubscriptions = pgTable('push_subscriptions', {
 export type PushSubscription = typeof pushSubscriptions.$inferSelect;
 export type NewPushSubscription = typeof pushSubscriptions.$inferInsert;
 
-// ─── Group control messages (#369) ────────────────────────────────────────────
+// ─── Audit log (#376) ─────────────────────────────────────────────────────────
 //
-// The ordered, gap-free log of everything that changes a group's membership or
-// its epoch: joins, leaves, removals, and client-submitted MLS commits.
+// Append-only record of security-relevant events, for incident response.
+// Nothing here may contain message content: an audit trail that leaks
+// plaintext would undo the end-to-end encryption it exists to protect. Rows
+// carry identifiers, counts and outcomes only — `services/auditLog.ts`
+// strips anything content-shaped before it reaches the database.
 //
-// Chat messages are ordered by (createdAt, id) — good enough for a timeline,
-// but useless for group state, where a client that applies two commits in the
-// wrong order derives a different key schedule and can no longer decrypt.
-// Group control therefore gets its own strictly monotonic per-conversation
-// `sequence`, and "catch up" is `sequence > mine`, which cannot silently skip
-// an event the way a timestamp cursor can.
+// Append-only is enforced in the database itself (see the migration's
+// `audit_logs_no_mutation` trigger), not just by convention, because the
+// value of the log to an incident responder depends on it not being editable
+// by the same application account an attacker would already have reached.
 //
-// `epoch` is the value *after* the event was applied, so a client can compare
-// its own epoch against the newest row and know exactly how far behind it is.
-// The `messageId` links to the `content_type='system'` message emitted for the
-// same event, so the timeline and the control log never disagree.
-//
-// `payload` is opaque to the server: an MLS commit or welcome blob, stored and
-// relayed byte-for-byte. The server sequences group control, it does not
-// interpret it.
+// `actorUserId` is who did it; `subjectUserId` is whose account it happened
+// to. They differ for exactly the events that matter most — someone else's
+// device fetching your key bundle, a failed sign-in against your wallet — and
+// the account-scoped query indexes on the subject so a user's own history
+// includes what was done *to* them, not just by them.
 
-export const groupControlEventTypeEnum = pgEnum('group_control_event_type', [
-  'member_added',
-  'member_removed',
-  'member_left',
-  'commit',
+export const auditActionEnum = pgEnum('audit_action', [
+  'device_linked',
+  'device_revoked',
+  'logout_everywhere',
+  'key_bundle_drained',
+  'auth_failed',
+  'file_access_denied',
+  'group_member_added',
+  'group_member_removed',
 ]);
 
-export type GroupControlEventType = (typeof groupControlEventTypeEnum.enumValues)[number];
+export type AuditAction = (typeof auditActionEnum.enumValues)[number];
 
-export const groupControlEvents = pgTable(
-  'group_control_events',
+export const auditLogs = pgTable(
+  'audit_logs',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    conversationId: uuid('conversation_id')
-      .notNull()
-      .references(() => conversations.id, { onDelete: 'cascade' }),
-    /** Strictly increasing from 1, gap-free within a conversation. */
-    sequence: integer('sequence').notNull(),
-    /** Group epoch after this event was applied. */
-    epoch: integer('epoch').notNull(),
-    eventType: groupControlEventTypeEnum('event_type').notNull(),
-    actorUserId: uuid('actor_user_id').references(() => users.id, { onDelete: 'set null' }),
-    targetUserId: uuid('target_user_id').references(() => users.id, { onDelete: 'set null' }),
-    /** The system message emitted for this event, when one was created. */
-    messageId: uuid('message_id').references(() => messages.id, { onDelete: 'set null' }),
-    /** Opaque client-supplied MLS commit/welcome material. Never parsed here. */
-    payload: text('payload'),
+    action: auditActionEnum('action').notNull(),
+    // Deliberately *not* foreign keys. An audit row must record what was true
+    // when it was written and stay that way: a cascade would delete history
+    // along with the account it incriminates, and ON DELETE SET NULL would
+    // issue an UPDATE that the append-only trigger correctly refuses. Ids are
+    // stored plain, and a responder resolves them (or finds them gone) at
+    // read time. Nullable because a failed sign-in has no established actor.
+    actorUserId: uuid('actor_user_id'),
+    actorDeviceId: uuid('actor_device_id'),
+    subjectUserId: uuid('subject_user_id'),
+    /** Kind of thing acted on: 'device', 'file', 'conversation', 'wallet'. */
+    targetType: text('target_type'),
+    targetId: text('target_id'),
+    ipAddress: text('ip_address'),
+    userAgent: text('user_agent'),
+    /** Sanitised, bounded key/value context. Never message content. */
+    metadata: jsonb('metadata').$type<Record<string, unknown>>(),
     createdAt: timestamp('created_at').notNull().defaultNow(),
   },
   (table) => [
-    // Both the gap-free guarantee and the catch-up read path.
-    uniqueIndex('group_control_conversation_sequence_idx').on(table.conversationId, table.sequence),
+    // Account-scoped queries are the primary read path.
+    index('audit_logs_subject_created_idx').on(table.subjectUserId, table.createdAt),
+    index('audit_logs_actor_created_idx').on(table.actorUserId, table.createdAt),
+    // "Show me every failed auth in the last hour" during an incident.
+    index('audit_logs_action_created_idx').on(table.action, table.createdAt),
   ],
 );
 
-export type GroupControlEvent = typeof groupControlEvents.$inferSelect;
-export type NewGroupControlEvent = typeof groupControlEvents.$inferInsert;
+export type AuditLog = typeof auditLogs.$inferSelect;
+export type NewAuditLog = typeof auditLogs.$inferInsert;
 
 // ─── Relations ────────────────────────────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { IRouter } from 'express';
-import { asc, and, count, desc, eq, inArray, lt, or, sql, ne } from 'drizzle-orm';
+import { asc, and, count, desc, eq, inArray, isNotNull, lt, notInArray, or, sql, ne } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import {
   conversationMembers,
@@ -9,23 +9,15 @@ import {
   tokenTransfers,
   messageEnvelopes,
   devices,
+  users,
 } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { redis, CONV_CACHE_TTL, convCacheKey } from '../lib/redis.js';
 import { invalidateConversationCaches } from '../lib/conversationCache.js';
-import { serializeMessage } from '../lib/messages.js';
+import { serializeMessage, type MessageLike } from '../lib/messages.js';
 import { getSocketServer } from '../lib/socket.js';
 import { MAX_MESSAGES_LIMIT, DEFAULT_MESSAGES_LIMIT } from '../constants.js';
-import {
-  DEFAULT_GROUP_CONTROL_PAGE_SIZE,
-  MAX_GROUP_CONTROL_PAGE_SIZE,
-  MAX_GROUP_CONTROL_PAYLOAD_BYTES,
-  appendGroupControlEvent,
-  broadcastGroupControlEvent,
-  getGroupState,
-  readGroupControlEvents,
-  serializeGroupControlEvent,
-} from '../services/groupControl.js';
+import { actorFromRequest, recordAuditEvent } from '../services/auditLog.js';
 
 export const conversationsRouter: IRouter = Router();
 
@@ -53,17 +45,26 @@ const getConversationRelations = (deviceId: string) => ({
   },
 });
 
-type ConversationPayload = {
+type ConversationPayload = Conversation & {
+  messages?: MessageLike[];
+  members?: unknown[]; // from relation
+};
+
+type SerializedConversationPayload = {
   messages?: Array<ReturnType<typeof serializeMessage>>;
   [key: string]: unknown;
 };
 
-function serializeConversation<T extends ConversationPayload>(conversation: T): T {
+function serializeConversation(
+  conversation: ConversationPayload,
+): SerializedConversationPayload {
   return {
-    ...conversation,
-    messages: (conversation.messages ?? []).map((message) =>
-      serializeMessage(message as any),
-    ) as any,
+    id: conversation.id,
+    type: conversation.type,
+    name: conversation.name,
+    avatarUrl: conversation.avatarUrl,
+    createdAt: conversation.createdAt,
+    messages: (conversation.messages ?? []).map(serializeMessage),
   };
 }
 
@@ -175,7 +176,7 @@ conversationsRouter.get('/', async (req: AuthRequest, res) => {
   const unreadMap = new Map(unreadRows.map((r) => [r.conversationId, r.unreadCount]));
 
   const result = memberships.map((m) => ({
-    ...m.conversation,
+    ...serializeConversation(m.conversation),
     isMuted: m.isMuted,
     isArchived: m.isArchived,
     messageCount: countMap.get(m.conversationId) ?? 0,
@@ -322,6 +323,16 @@ conversationsRouter.post('/:id/members', async (req: AuthRequest, res) => {
     return;
   }
 
+  const targetUser = await db.query.users.findFirst({
+    where: eq(users.id, newUserId),
+    columns: { allowGroupInvites: true },
+  });
+
+  if (targetUser && !targetUser.allowGroupInvites) {
+    res.status(403).json({ error: 'User is not accepting group invites' });
+    return;
+  }
+
   try {
     // The membership row and its group-control event are written together
     // (#369). A member committed without the epoch bump that announces them
@@ -372,6 +383,17 @@ conversationsRouter.post('/:id/members', async (req: AuthRequest, res) => {
     // Fanned out only once the transaction has committed, so a client that
     // reacts to the event always finds the member already present.
     broadcastGroupControlEvent(appended);
+    // Group membership defines who can decrypt what from here on, so the
+    // change is a security event for both parties: the requester who made it
+    // and the account that was added (#376).
+    void recordAuditEvent({
+      action: 'group_member_added',
+      ...actorFromRequest(req),
+      subjectUserId: newUserId,
+      targetType: 'conversation',
+      targetId: conversationId,
+      metadata: { memberCount: members.length },
+    });
 
     res.status(201).json({
       id: newMembership.id,
@@ -511,6 +533,23 @@ conversationsRouter.get('/:id/messages', async (req: AuthRequest, res) => {
     return;
   }
 
+  // #340 — Resolve each edit chain to its newest version server-side.
+  // Editing a message inserts a *new* row whose `editsMessageId` points back
+  // at the row it replaces (see `messages.editsMessageId` in db/schema.ts),
+  // so a chain of edits is a backward-linked list: newest -> ... -> original.
+  // The set of every id referenced by some other row's `editsMessageId` is
+  // exactly the set of "superseded" (non-latest) versions — excluding them
+  // collapses any chain, however long, down to just its tip in one extra
+  // query, with no recursive CTE needed. Older versions are left in the
+  // table untouched; they're just excluded from this default list response.
+  const supersededRows = await db
+    .select({ id: messages.editsMessageId })
+    .from(messages)
+    .where(and(eq(messages.conversationId, conversationId), isNotNull(messages.editsMessageId)));
+  const supersededIds = supersededRows
+    .map((row) => row.id)
+    .filter((id): id is string => id !== null);
+
   // Resolve cursor: look up the `(createdAt, id)` of the "before" message.
   // `id` breaks ties for same-millisecond inserts — createdAt alone can
   // silently skip or duplicate rows across pages under concurrent writes.
@@ -527,17 +566,23 @@ conversationsRouter.get('/:id/messages', async (req: AuthRequest, res) => {
     cursor = ref;
   }
 
+  const conversationScope = and(
+    eq(messages.conversationId, conversationId),
+    cursor
+      ? or(
+          lt(messages.createdAt, cursor.createdAt),
+          and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id)),
+        )
+      : undefined,
+    // Only apply the NOT IN filter when there's something to exclude —
+    // an empty array here is a no-op in Postgres/drizzle, but skipping it
+    // entirely avoids relying on that edge-case behavior.
+    supersededIds.length > 0 ? notInArray(messages.id, supersededIds) : undefined,
+  );
+
   // Fetch one extra to determine whether there is a next page
   const rows = await db.query.messages.findMany({
-    where: cursor
-      ? and(
-          eq(messages.conversationId, conversationId),
-          or(
-            lt(messages.createdAt, cursor.createdAt),
-            and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id)),
-          ),
-        )
-      : eq(messages.conversationId, conversationId),
+    where: conversationScope,
     orderBy: [desc(messages.createdAt), desc(messages.id)],
     limit: limit + 1,
     with: {
@@ -802,6 +847,19 @@ conversationsRouter.delete('/:id/leave', async (req: AuthRequest, res) => {
   await invalidateConversationCaches(members.map((member) => member.userId));
 
   broadcastGroupControlEvent(appended);
+  void recordAuditEvent({
+    action: 'group_member_removed',
+    ...actorFromRequest(req),
+    subjectUserId: userId,
+    targetType: 'conversation',
+    targetId: conversationId,
+    metadata: {
+      // Leaving as the last member deletes the conversation outright, which
+      // is a materially different outcome to a departure.
+      conversationDeleted: members.length === 1,
+      memberCountBefore: members.length,
+    },
+  });
 
   res.status(204).send();
 });

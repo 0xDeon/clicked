@@ -1,4 +1,5 @@
 import type { AuthSocket } from '../middleware/socketAuth.js';
+import { backpressureEventsTotal } from '../lib/metrics.js';
 
 function getBufferThreshold(): number {
   const val = process.env['SOCKET_BUFFER_THRESHOLD'];
@@ -54,6 +55,7 @@ function checkBuffers(): void {
         `Socket ${socket.id} buffer ${buffered} exceeds disconnect threshold ${disconnectThreshold}, disconnecting`,
       );
       shedSockets.add(socket.id);
+      backpressureEventsTotal.inc({ action: 'disconnect' });
       socket.disconnect(true);
     } else if (buffered > shedThreshold) {
       if (!shedSockets.has(socket.id)) {
@@ -61,6 +63,7 @@ function checkBuffers(): void {
           `Socket ${socket.id} buffer ${buffered} exceeds shed threshold ${shedThreshold}, shedding`,
         );
         shedSockets.add(socket.id);
+        backpressureEventsTotal.inc({ action: 'shed' });
       }
     } else {
       if (shedSockets.has(socket.id)) {
