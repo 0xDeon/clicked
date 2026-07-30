@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { getObjectStore } from './objectStore.js';
+import { getLocalObjectStore } from './localObjectStore.js';
 
 const PRESIGNED_TTL_SECONDS = 900; // 15 minutes
 
@@ -7,20 +8,13 @@ function isProduction(): boolean {
   return process.env['NODE_ENV'] === 'production';
 }
 
-// Development/test fallback: a structurally-plausible but fake URL, never
-// backed by a network call. Keeps local dev and CI from needing a reachable
-// S3/MinIO endpoint just to exercise the upload/download routes (same "no
-// external services in tests" rule this project applies to Redis/Postgres).
-// Production always returns a real, cryptographically-signed URL (#166).
-function fakeUrl(storageKey: string, ttlSeconds: number): string {
-  const base = process.env['STORAGE_ENDPOINT'] ?? 'https://storage.example.com';
-  const expires = Math.floor(Date.now() / 1000) + ttlSeconds;
-  return `${base}/${storageKey}?X-Expires=${expires}`;
-}
-
+// Outside production this issues a real presigned URL against the fs-backed
+// `LocalDiskObjectStore` (#330) instead of the string-templated `fakeUrl()`
+// this used to fall back to — the URL is now genuinely backed by a file and
+// served by routes/localStorage.ts. Production always uses real S3 (#166).
 export async function generatePresignedPut(storageKey: string, mimeType: string): Promise<string> {
   if (!isProduction()) {
-    return fakeUrl(storageKey, PRESIGNED_TTL_SECONDS);
+    return getLocalObjectStore().getPresignedPutUrl(storageKey, mimeType, PRESIGNED_TTL_SECONDS);
   }
   return getObjectStore().getPresignedPutUrl(storageKey, mimeType, PRESIGNED_TTL_SECONDS);
 }
@@ -30,7 +24,7 @@ export async function generatePresignedGet(
   ttlSeconds: number = PRESIGNED_TTL_SECONDS,
 ): Promise<string> {
   if (!isProduction()) {
-    return fakeUrl(storageKey, ttlSeconds);
+    return getLocalObjectStore().getPresignedGetUrl(storageKey, ttlSeconds);
   }
   return getObjectStore().getPresignedGetUrl(storageKey, ttlSeconds);
 }

@@ -104,7 +104,7 @@ export class EventDispatcher {
       if (this.redis) {
         const idempotencyKey = `event:idempotency:${envelope.eventId}`;
         const set = await this.redis
-          .set(idempotencyKey, '1', 'EX', IDEMPOTENCY_TTL_SECONDS, 'NX')
+          .set(idempotencyKey, '1', 'EX', getIdempotencyTtlSeconds(), 'NX')
           .catch(() => null);
         if (set === null) {
           // Already processed — acknowledge without re-running.
