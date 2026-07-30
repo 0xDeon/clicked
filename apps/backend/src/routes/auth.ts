@@ -61,6 +61,10 @@ authRouter.post(
     const deviceName = device?.deviceName;
     const platform = device?.platform;
     const registrationId = device?.registrationId;
+    // Signal capability is monotonic (#364): sign-in can raise it but never
+    // clear it, so a downgraded client cannot walk the conversation back onto
+    // the Phase-1 sealed box.
+    const supportsSignal = device?.supportsSignal;
 
     // Validate and consume nonce
     const valid = consumeNonce(walletAddress, nonce);
@@ -133,6 +137,7 @@ authRouter.post(
           ...(deviceName ? { deviceName } : {}),
           ...(platform ? { platform } : {}),
           ...(registrationId !== undefined ? { registrationId } : {}),
+          ...(supportsSignal === true ? { supportsSignal: true } : {}),
         })
         .where(eq(devices.id, deviceId));
     } else {
@@ -144,6 +149,7 @@ authRouter.post(
           deviceName: deviceName ?? null,
           platform: platform ?? null,
           registrationId: registrationId ?? null,
+          supportsSignal: supportsSignal ?? false,
           lastSeenAt: new Date(),
         })
         .returning({ id: devices.id });

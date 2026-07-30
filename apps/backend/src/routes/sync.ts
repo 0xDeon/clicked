@@ -102,6 +102,7 @@ syncRouter.get('/', async (req: AuthRequest, res) => {
       id: messageEnvelopes.id,
       messageId: messageEnvelopes.messageId,
       ciphertext: messageEnvelopes.ciphertext,
+      protocol: messageEnvelopes.protocol,
       deliveredAt: messageEnvelopes.deliveredAt,
       envelopeCreatedAt: messageEnvelopes.createdAt,
       conversationId: messages.conversationId,
@@ -160,6 +161,10 @@ syncRouter.get('/', async (req: AuthRequest, res) => {
       senderDeviceId: r.senderDeviceId,
       contentType: r.contentType,
       ciphertext: r.ciphertext,
+      // #364 — which construction encrypted this envelope. Envelopes written
+      // before the cutover stay `sealed_box` and decrypt on the Phase-1 path,
+      // so catching up across the cutover loses nothing.
+      protocol: r.protocol,
       deliveredAt: r.deliveredAt,
       createdAt: r.envelopeCreatedAt,
       messageCreatedAt: r.messageCreatedAt,

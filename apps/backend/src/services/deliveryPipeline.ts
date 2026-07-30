@@ -59,6 +59,7 @@ export async function deliverMessage(
       id: messageEnvelopes.id,
       recipientDeviceId: messageEnvelopes.recipientDeviceId,
       ciphertext: messageEnvelopes.ciphertext,
+      protocol: messageEnvelopes.protocol,
     })
     .from(messageEnvelopes)
     .where(
@@ -84,6 +85,8 @@ export async function deliverMessage(
       createdAt: message.createdAt,
       envelopeId: envelope.id,
       ciphertext: envelope.ciphertext,
+      // #364 — tells the receiving device which decryption path to use.
+      protocol: envelope.protocol,
     });
   }
 

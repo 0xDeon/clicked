@@ -16,6 +16,7 @@ import { invalidateConversationCaches } from '../lib/conversationCache.js';
 import { serializeMessage } from '../lib/messages.js';
 import { getSocketServer } from '../lib/socket.js';
 import { MAX_MESSAGES_LIMIT, DEFAULT_MESSAGES_LIMIT } from '../constants.js';
+import { negotiateConversationProtocol } from '../services/e2eeProtocol.js';
 
 export const conversationsRouter: IRouter = Router();
 
@@ -798,16 +799,56 @@ conversationsRouter.get('/:id/devices', async (req: AuthRequest, res) => {
       identityPublicKey: true,
       deviceName: true,
       platform: true,
+      supportsSignal: true,
     },
   });
 
+  // #364 — the client encrypts straight after this call, so the negotiated
+  // protocol travels with the device set it applies to. Reading capability and
+  // protocol from two separate requests would leave a window where the client
+  // encrypts for a device set that has since changed.
+  const negotiation = await negotiateConversationProtocol(conversationId);
+
   res.json({
+    protocol: negotiation.protocol,
     devices: deviceRows.map((d) => ({
       id: d.id,
       userId: d.userId,
       identityPublicKey: d.identityPublicKey,
       deviceName: d.deviceName,
       platform: d.platform,
+      supportsSignal: d.supportsSignal,
     })),
   });
+});
+
+// ── GET /conversations/:id/e2ee-protocol ──────────────────────────────────────
+// Which E2EE construction new messages in this conversation must use (#364),
+// and — when it is still sealed box — exactly which devices are holding the
+// cutover back, so the UI can prompt those users to update.
+conversationsRouter.get('/:id/e2ee-protocol', async (req: AuthRequest, res) => {
+  const userId = req.auth!.userId;
+  const conversationId = req.params['id'] as string | undefined;
+
+  if (!conversationId) {
+    res.status(400).json({ error: 'Conversation id is required' });
+    return;
+  }
+
+  const membership = await db.query.conversationMembers.findFirst({
+    where: and(
+      eq(conversationMembers.conversationId, conversationId),
+      eq(conversationMembers.userId, userId),
+    ),
+    columns: { id: true },
+  });
+
+  if (!membership) {
+    res.status(403).json({ error: 'Not a member of this conversation' });
+    return;
+  }
+
+  const negotiation = await negotiateConversationProtocol(conversationId);
+
+  res.json({ conversationId, ...negotiation });
 });

@@ -37,6 +37,11 @@ const UploadPreKeysSchema = z.object({
 
 const RegisterDeviceSchema = DeviceSchema;
 
+/** Capability advertisement (#364). See PATCH /devices/:id/capabilities. */
+const UpdateCapabilitiesSchema = z.object({
+  supportsSignal: z.boolean(),
+});
+
 /** Maximum number of stored one-time prekeys per device. */
 const OTP_CAP = 200;
 
@@ -79,6 +84,7 @@ devicesRouter.get('/', async (req: AuthRequest, res) => {
         identityPublicKey: device.identityPublicKey,
         deviceName: device.deviceName,
         platform: device.platform,
+        supportsSignal: device.supportsSignal,
         lastSeenAt: device.lastSeenAt,
         revokedAt: device.revokedAt,
         oneTimePreKeysRemaining: remainingByDevice.get(device.id) ?? 0,
@@ -296,6 +302,68 @@ devicesRouter.post('/:id/prekeys', validate(UploadPreKeysSchema), async (req: Au
   });
 });
 
+// ─── PATCH /devices/:id/capabilities ────────────────────────────────────────
+//
+// Advertises what E2EE this device can do (#364). A client that has shipped
+// Signal support calls this once after upgrading; the conversations it takes
+// part in cut over as soon as every other active device has done the same.
+//
+// The flag is monotonic. Accepting `supportsSignal: false` from a device that
+// already advertised true would hand any client — including a tampered one — a
+// lever to pull the whole conversation back onto the Phase-1 sealed box, and
+// the other side would have no way to tell that from a genuine rollback. A
+// device that really has lost its Signal state re-registers under a new
+// identity key, which produces a new row that starts at false.
+
+devicesRouter.patch(
+  '/:id/capabilities',
+  validate(UpdateCapabilitiesSchema),
+  async (req: AuthRequest, res) => {
+    const deviceId = req.params['id'] as string;
+    const callerId = req.auth!.userId;
+    const { supportsSignal } = req.body as z.infer<typeof UpdateCapabilitiesSchema>;
+
+    const device = await db.query.devices.findFirst({
+      where: eq(devices.id, deviceId),
+      columns: { id: true, userId: true, revokedAt: true, supportsSignal: true },
+    });
+
+    if (!device) {
+      res.status(404).json({ error: 'Device not found' });
+      return;
+    }
+
+    if (device.userId !== callerId) {
+      res.status(403).json({ error: 'Only the device owner may update capabilities' });
+      return;
+    }
+
+    if (device.revokedAt) {
+      res.status(403).json({ error: 'Device is revoked' });
+      return;
+    }
+
+    if (device.supportsSignal && !supportsSignal) {
+      res.status(409).json({
+        error: 'Signal capability cannot be withdrawn; re-register the device instead',
+      });
+      return;
+    }
+
+    if (device.supportsSignal === supportsSignal) {
+      res.json({ id: deviceId, supportsSignal, changed: false });
+      return;
+    }
+
+    await db
+      .update(devices)
+      .set({ supportsSignal, updatedAt: new Date() })
+      .where(eq(devices.id, deviceId));
+
+    res.json({ id: deviceId, supportsSignal, changed: true });
+  },
+);
+
 // ─── POST /devices — register a new device for an existing user --------------
 
 devicesRouter.post('/', validate(RegisterDeviceSchema), async (req: AuthRequest, res) => {
@@ -323,6 +391,8 @@ devicesRouter.post('/', validate(RegisterDeviceSchema), async (req: AuthRequest,
           deviceName: body.deviceName,
           platform: body.platform,
           registrationId: body.registrationId ?? null,
+          // Monotonic (#364) — re-registering never clears the capability.
+          ...(body.supportsSignal === true ? { supportsSignal: true } : {}),
           revokedAt: null,
           updatedAt: new Date(),
         })
@@ -337,6 +407,7 @@ devicesRouter.post('/', validate(RegisterDeviceSchema), async (req: AuthRequest,
           deviceName: body.deviceName,
           platform: body.platform,
           registrationId: body.registrationId ?? null,
+          supportsSignal: body.supportsSignal ?? false,
         })
         .returning({ id: devices.id, createdAt: devices.createdAt });
     }

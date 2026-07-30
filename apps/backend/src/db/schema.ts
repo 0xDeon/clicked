@@ -135,6 +135,17 @@ export const messages = pgTable(
   (table) => [index('messages_conversation_created_idx').on(table.conversationId, table.createdAt)],
 );
 
+// Which E2EE construction produced an envelope's ciphertext (#364).
+//
+// `sealed_box` is the Phase-1 path: ECDH ephemeral key + HKDF + AES-256-GCM,
+// one independent box per message. `signal` is the Double Ratchet.
+//
+// This is recorded per envelope rather than inferred, because the two coexist
+// across the migration: envelopes written before a conversation cut over stay
+// decryptable by the sealed-box path forever, and the receiving client needs to
+// know which path to use without guessing from the ciphertext.
+export const e2eeProtocolEnum = pgEnum('e2ee_protocol', ['sealed_box', 'signal']);
+
 export const messageEnvelopes = pgTable(
   'message_envelopes',
   {
@@ -149,6 +160,9 @@ export const messageEnvelopes = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     ciphertext: text('ciphertext').notNull(),
+    // Defaults to sealed_box so every envelope written before this column
+    // existed is labelled correctly by the migration's backfill.
+    protocol: e2eeProtocolEnum('protocol').notNull().default('sealed_box'),
     deliveredAt: timestamp('delivered_at'),
     readAt: timestamp('read_at'),
     createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -185,6 +199,14 @@ export const devices = pgTable(
     registrationId: integer('registration_id'),
     deviceName: text('device_name'),
     platform: devicePlatformEnum('platform'),
+    // Signal Protocol capability flag (#364). False means the device only
+    // understands the Phase-1 sealed-box path. A conversation cuts over to
+    // Signal once every active device on every side has advertised support.
+    //
+    // Treated as monotonic: a device may turn this on but not off. Un-advertising
+    // would be a downgrade lever, and a device that genuinely lost its Signal
+    // state re-registers under a new identity key instead.
+    supportsSignal: boolean('supports_signal').notNull().default(false),
     lastSeenAt: timestamp('last_seen_at'),
     pushEnabled: boolean('push_enabled').notNull().default(true),
     revokedAt: timestamp('revoked_at'),

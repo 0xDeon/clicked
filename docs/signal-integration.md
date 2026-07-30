@@ -79,6 +79,21 @@ Activation requires filling in the stub and changing `defaultSession` in `sessio
 
 ---
 
+## Migration path
+
+Activating Phase-2 is not a flag flip for the whole product: clients update at
+their own pace, so a conversation contains Phase-1 and Signal devices at the
+same time for as long as the slowest device takes.
+
+The cutover — the `supports_signal` capability flag on `devices`, the
+per-envelope `protocol` column that keeps Phase-1 history decryptable, the
+negotiation endpoint, and the rollout order — is specified in
+[apps/backend/docs/signal-migration.md](../apps/backend/docs/signal-migration.md).
+
+The short version: a conversation switches to Signal only once every active
+device on both sides advertises support, old envelopes are never re-encrypted,
+and the client keeps its Phase-1 decryption path forever.
+
 ## Activation checklist
 
 ```bash

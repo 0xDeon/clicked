@@ -10,6 +10,7 @@ import { invalidateConversationCaches } from '../lib/conversationCache.js';
 import { getSocketServer } from '../lib/socket.js';
 import { validateMessagePayload } from '../lib/validateMessagePayload.js';
 import { SendMessageSchema } from '../schemas/message.schemas.js';
+import { checkEnvelopeProtocols, type E2eeProtocol } from '../services/e2eeProtocol.js';
 
 export const messagesRouter: IRouter = Router();
 
@@ -26,7 +27,11 @@ messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, r
     messageId: string;
     contentType?: string;
     ciphertext?: string;
-    envelopes?: Array<{ recipientDeviceId: string; ciphertext: string }>;
+    envelopes?: Array<{
+      recipientDeviceId: string;
+      ciphertext: string;
+      protocol?: E2eeProtocol;
+    }>;
     fileId?: string;
   };
 
@@ -53,6 +58,29 @@ messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, r
   if (!membership) {
     res.status(403).json({ error: 'Not a member of this conversation' });
     return;
+  }
+
+  // ── E2EE protocol negotiation (#364) ───────────────────────────────────────
+  // Rejects an envelope encrypted with a protocol its recipient cannot read,
+  // and rejects a sealed-box fallback once the conversation has cut over to
+  // Signal.
+  if (envelopes && envelopes.length > 0) {
+    const protocolCheck = await checkEnvelopeProtocols(
+      conversationId,
+      envelopes.map((e) => ({
+        recipientDeviceId: e.recipientDeviceId,
+        protocol: e.protocol ?? 'sealed_box',
+      })),
+    );
+
+    if (!protocolCheck.ok) {
+      res.status(protocolCheck.code).json({
+        error: protocolCheck.error,
+        negotiatedProtocol: protocolCheck.negotiated,
+        offendingDeviceIds: protocolCheck.offendingDeviceIds,
+      });
+      return;
+    }
   }
 
   // ── idempotency ────────────────────────────────────────────────────────────
@@ -98,6 +126,7 @@ messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, r
             recipientDeviceId: env.recipientDeviceId,
             recipientUserId: deviceToUser.get(env.recipientDeviceId)!,
             ciphertext: env.ciphertext,
+            protocol: env.protocol ?? ('sealed_box' as const),
           }));
 
         if (validEnvelopes.length > 0) {

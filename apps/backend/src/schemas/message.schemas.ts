@@ -13,6 +13,12 @@ import { z } from 'zod';
 export const EnvelopeSchema = z.object({
   recipientDeviceId: z.string().uuid('recipientDeviceId must be a valid UUID'),
   ciphertext: z.string().min(1, 'envelope ciphertext is required'),
+  /**
+   * Which construction produced `ciphertext` (#364). Defaults to the Phase-1
+   * sealed box so clients that predate the migration keep working unchanged;
+   * a conversation whose devices are all Signal-capable requires `signal`.
+   */
+  protocol: z.enum(['sealed_box', 'signal']).optional().default('sealed_box'),
 });
 
 export const SendMessageSchema = z.object({

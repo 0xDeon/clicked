@@ -13,6 +13,11 @@ export const DeviceSchema = z.object({
   platform: z.enum(['web', 'ios', 'android']),
   identityPublicKey: IdentityPublicKeySchema,
   registrationId: z.number().int().nonnegative().optional(),
+  /**
+   * Whether this device can do Signal Protocol messaging (#364). Absent means
+   * no — an older client that predates the flag is by definition Phase-1 only.
+   */
+  supportsSignal: z.boolean().optional(),
 });
 
 export const VerifySchema = z

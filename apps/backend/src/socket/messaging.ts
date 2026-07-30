@@ -21,6 +21,7 @@ import { deliverMessage } from '../services/deliveryPipeline.js';
 import { publishEphemeral, readMissedEvents } from '../services/resumeStream.js';
 import { handleDeviceDeliveryReceipt } from '../services/deliveryAggregation.js';
 import { conversationRoom } from '../services/roomManager.js';
+import { checkEnvelopeProtocols, type E2eeProtocol } from '../services/e2eeProtocol.js';
 import { EventDispatcher } from './dispatcher.js';
 
 const PAGE_SIZE = 30;
@@ -101,7 +102,11 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       content?: string;
       contentType?: string;
       ciphertext?: string;
-      envelopes?: Array<{ recipientDeviceId: string; ciphertext: string }>;
+      envelopes?: Array<{
+        recipientDeviceId: string;
+        ciphertext: string;
+        protocol?: E2eeProtocol;
+      }>;
       fileId?: string;
     };
     const deviceId = socket.auth!.deviceId;
@@ -182,6 +187,28 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       }
     }
 
+    // Enforce the negotiated E2EE protocol (#364) — same rule as POST /messages.
+    if (envelopes && envelopes.length > 0) {
+      const protocolCheck = await checkEnvelopeProtocols(
+        conversationId,
+        envelopes.map((e) => ({
+          recipientDeviceId: e.recipientDeviceId,
+          protocol: e.protocol ?? 'sealed_box',
+        })),
+      );
+
+      if (!protocolCheck.ok) {
+        socket.emit('error', {
+          event: 'protocol_mismatch',
+          code: protocolCheck.code,
+          message: protocolCheck.error,
+          negotiatedProtocol: protocolCheck.negotiated,
+          offendingDeviceIds: protocolCheck.offendingDeviceIds,
+        });
+        return;
+      }
+    }
+
     let fileId: string | null = inputFileId || null;
     if (FILE_CONTENT_TYPES.has(resolvedContentType) && !fileId) {
       const [fileRow] = await db
@@ -231,6 +258,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
               recipientDeviceId: env.recipientDeviceId,
               recipientUserId: deviceToUser.get(env.recipientDeviceId)!,
               ciphertext: env.ciphertext,
+              protocol: env.protocol ?? ('sealed_box' as const),
             }));
 
           if (validEnvelopes.length > 0) {
@@ -363,6 +391,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
               recipientDeviceId: env.recipientDeviceId,
               recipientUserId: deviceToUser.get(env.recipientDeviceId)!,
               ciphertext: env.ciphertext,
+              protocol: (env as { protocol?: E2eeProtocol }).protocol ?? ('sealed_box' as const),
             }));
 
           if (validEnvelopes.length > 0) {
