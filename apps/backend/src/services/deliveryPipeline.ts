@@ -5,6 +5,7 @@ import { conversationMembers, messageEnvelopes, devices } from '../db/schema.js'
 import type { Message } from '../db/schema.js';
 import { conversationRoom } from './roomManager.js';
 import { isMlsWelcomeContentType, mlsWelcomeTransport } from '../lib/mls.js';
+import { fanoutSize, deliveryLatency } from '../lib/metrics.js';
 
 /**
  * Room name for per-device targeting. Each socket joins this room on connect
@@ -34,6 +35,8 @@ export async function deliverMessage(
   message: Message,
   conversationId: string,
 ): Promise<void> {
+  const deliveryStart = process.hrtime.bigint();
+  // Step 1: re-validate membership from the source of truth.
   const members = await db
     .select({ userId: conversationMembers.userId })
     .from(conversationMembers)
@@ -71,8 +74,7 @@ export async function deliverMessage(
     );
 
   const envelopeByDevice = new Map(envelopes.map((e) => [e.recipientDeviceId, e]));
-  const welcome = isMlsWelcomeContentType(message.contentType);
-  const welcomeTransport = welcome ? mlsWelcomeTransport() : undefined;
+  fanoutSize.observe(envelopeByDevice.size);
 
   for (const device of activeDevices) {
     const envelope = envelopeByDevice.get(device.id);
@@ -105,4 +107,7 @@ export async function deliverMessage(
 
   io.to(conversationId).emit('new_message', newMessageEvent);
   io.to(conversationRoom(conversationId)).emit('new_message', newMessageEvent);
+
+  const deliverySeconds = Number(process.hrtime.bigint() - deliveryStart) / 1e9;
+  deliveryLatency.observe(deliverySeconds);
 }

@@ -28,8 +28,9 @@ vi.mock('../lib/conversationCache.js', () => ({
   invalidateConversationCaches: vi.fn().mockResolvedValue(undefined),
 }));
 
-// Truthy redis so the resume handler takes the replay path.
-vi.mock('../lib/redis.js', () => ({ redis: {} }));
+// Truthy redis so the resume handler takes the replay path. Also needs a
+// `set` method for the dispatcher's eventId-idempotency NX check (#342).
+vi.mock('../lib/redis.js', () => ({ redis: { set: vi.fn().mockResolvedValue('OK') } }));
 
 vi.mock('drizzle-orm', () => ({
   and: vi.fn(),
@@ -80,10 +81,22 @@ function makeIo() {
   return { to: vi.fn(() => ({ emit: emitFn, volatile: { emit: emitFn } })) };
 }
 
+// Handlers now run exclusively through the enveloped 'dispatch' path (#342)
+// — there's no more raw socket.on(type, ...) listener to grab directly.
+let envelopeSeq = 0;
 async function getHandler(socket: EventEmitter, io: unknown) {
   const { registerMessagingHandlers } = await import('../socket/messaging.js');
   registerMessagingHandlers(io as never, socket as never);
-  return socket.listeners('resume')[0] as (p: unknown) => Promise<void>;
+  return async (payload: unknown) => {
+    envelopeSeq += 1;
+    EventEmitter.prototype.emit.call(socket, 'dispatch', {
+      eventId: `test-evt-${envelopeSeq}`,
+      type: 'resume',
+      timestamp: Date.now(),
+      payload,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  };
 }
 
 const USER_ID = 'user-1';
