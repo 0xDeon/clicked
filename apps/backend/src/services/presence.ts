@@ -36,6 +36,63 @@ import { devices, conversationMembers } from '../db/schema.js';
 const PRESENCE_TTL = 90; // seconds
 const SOCKET_MAPPING_PREFIX = 'presence:sockets:';
 
+const DEFAULT_OFFLINE_GRACE_MS = 5_000;
+
+function getOfflineGraceMs(): number {
+  const raw = process.env.PRESENCE_OFFLINE_GRACE_MS;
+  if (!raw) return DEFAULT_OFFLINE_GRACE_MS;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_OFFLINE_GRACE_MS;
+}
+
+// Per-user pending "went offline" broadcast timers (issue #345). A user
+// going fully offline schedules its broadcast here instead of firing it
+// immediately; a reconnect within the grace window cancels the timer so a
+// brief disconnect+reconnect blip never produces an offline/online pair.
+const pendingOfflineBroadcasts = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * Defer a "user went offline" broadcast by the configured grace window.
+ * Call only once the caller has confirmed the user has zero remaining
+ * live devices/sockets — this schedules the *broadcast*, not the
+ * underlying presence-state removal, which should already be immediate.
+ */
+export function scheduleOfflineBroadcast(
+  userId: string,
+  broadcast: () => void | Promise<void>,
+): void {
+  const existing = pendingOfflineBroadcasts.get(userId);
+  if (existing) clearTimeout(existing);
+
+  const timer = setTimeout(() => {
+    pendingOfflineBroadcasts.delete(userId);
+    void broadcast();
+  }, getOfflineGraceMs());
+
+  // Let a pending offline broadcast never hold the process open on its own.
+  timer.unref?.();
+  pendingOfflineBroadcasts.set(userId, timer);
+}
+
+/**
+ * Cancel a pending offline broadcast for a user, e.g. because a device
+ * reconnected within the grace window. Returns true if a pending
+ * broadcast was actually found and cancelled.
+ */
+export function cancelPendingOfflineBroadcast(userId: string): boolean {
+  const timer = pendingOfflineBroadcasts.get(userId);
+  if (!timer) return false;
+  clearTimeout(timer);
+  pendingOfflineBroadcasts.delete(userId);
+  return true;
+}
+
+/** Test hook: clear all pending timers between test cases. */
+export function __resetOfflineBroadcastsForTesting(): void {
+  for (const timer of pendingOfflineBroadcasts.values()) clearTimeout(timer);
+  pendingOfflineBroadcasts.clear();
+}
+
 type RedisWithOptionalHashRead = Redis & {
   hgetall?: (key: string) => Promise<Record<string, string>>;
 };
@@ -54,6 +111,16 @@ function presenceSocketsKey(userId: string): string {
 
 function presenceDeviceSocketsKey(userId: string, deviceId: string): string {
   return `presence:device_sockets:${userId}:${deviceId}`;
+}
+
+/**
+ * Keyed by deviceId alone (no userId) so callers that only have a deviceId —
+ * e.g. the device-revocation pub/sub listener and push-notification's
+ * online check — can resolve connected sockets without a DB round trip.
+ * Cross-node visible, unlike the old in-process Map registry it replaces (#341).
+ */
+function deviceSocketsByDeviceKey(deviceId: string): string {
+  return `presence:device_sockets_by_device:${deviceId}`;
 }
 
 function presenceSocketKey(socketId: string): string {
@@ -95,12 +162,15 @@ export async function registerPresenceSocket(
   const userSocketsKey = presenceSocketsKey(userId);
   const deviceSocketsKey = presenceDeviceSocketsKey(userId, deviceId);
   const socketKey = presenceSocketKey(socketId);
+  const byDeviceKey = deviceSocketsByDeviceKey(deviceId);
 
   await redis.sadd(userSocketsKey, socketId);
   await redis.sadd(deviceSocketsKey, socketId);
+  await redis.sadd(byDeviceKey, socketId);
   await redis.hset(socketKey, { userId, deviceId });
   await redis.expire(userSocketsKey, PRESENCE_TTL);
   await redis.expire(deviceSocketsKey, PRESENCE_TTL);
+  await redis.expire(byDeviceKey, PRESENCE_TTL);
   await redis.expire(socketKey, PRESENCE_TTL);
 }
 
@@ -126,14 +196,21 @@ export async function unregisterPresenceSocket(
 ): Promise<boolean> {
   const userSocketsKey = presenceSocketsKey(userId);
   const deviceSocketsKey = presenceDeviceSocketsKey(userId, deviceId);
+  const byDeviceKey = deviceSocketsByDeviceKey(deviceId);
 
   await redis.srem(userSocketsKey, socketId);
   await redis.srem(deviceSocketsKey, socketId);
+  await redis.srem(byDeviceKey, socketId);
   await redis.del(presenceSocketKey(socketId));
 
   const remainingDeviceSockets = await redis.scard(deviceSocketsKey);
   if (remainingDeviceSockets === 0) {
     await redis.del(deviceSocketsKey);
+  }
+
+  const remainingByDeviceSockets = await redis.scard(byDeviceKey);
+  if (remainingByDeviceSockets === 0) {
+    await redis.del(byDeviceKey);
   }
 
   const remainingUserSockets = await redis.scard(userSocketsKey);
@@ -142,6 +219,20 @@ export async function unregisterPresenceSocket(
   }
 
   return remainingDeviceSockets === 0;
+}
+
+/**
+ * Cross-node connected-socket lookup keyed by deviceId alone (#341).
+ * Replaces deviceRevocation.ts's in-process Map, which only had visibility
+ * into sockets connected to the local gateway process.
+ */
+export async function getDeviceSocketIds(redis: Redis, deviceId: string): Promise<string[]> {
+  return redis.smembers(deviceSocketsByDeviceKey(deviceId));
+}
+
+export async function isDeviceConnectedInRegistry(redis: Redis, deviceId: string): Promise<boolean> {
+  const count = await redis.scard(deviceSocketsByDeviceKey(deviceId));
+  return count > 0;
 }
 
 /**
@@ -272,6 +363,13 @@ async function removeStaleSocketMapping(
     const remainingDeviceSockets = await redis.scard(deviceSocketsKey);
     if (remainingDeviceSockets === 0) {
       await redis.del(deviceSocketsKey);
+    }
+
+    const byDeviceKey = deviceSocketsByDeviceKey(deviceId);
+    await redis.srem(byDeviceKey, socketId);
+    const remainingByDeviceSockets = await redis.scard(byDeviceKey);
+    if (remainingByDeviceSockets === 0) {
+      await redis.del(byDeviceKey);
     }
   }
   await redis.del(presenceSocketKey(socketId));

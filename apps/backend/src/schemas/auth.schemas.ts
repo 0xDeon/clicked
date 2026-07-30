@@ -25,13 +25,10 @@ export const VerifySchema = z
      * Validated for correct base64 and exact byte length before any crypto operation.
      */
     identityPublicKey: IdentityPublicKeySchema,
-    device: DeviceSchema.partial().optional(),
+    device: DeviceSchema,
   })
   .superRefine((value, ctx) => {
-    if (
-      value.device?.identityPublicKey &&
-      value.device.identityPublicKey !== value.identityPublicKey
-    ) {
+    if (value.device.identityPublicKey !== value.identityPublicKey) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['device', 'identityPublicKey'],
@@ -40,6 +37,20 @@ export const VerifySchema = z
     }
   });
 
+/**
+ * Body for POST /devices/link/verify (#333).
+ *
+ * Everything DeviceSchema needs to create the device row, plus the fresh
+ * wallet signature over the server-issued device-link nonce. The signature is
+ * proof of wallet ownership *now* — the caller's JWT alone is not enough to
+ * add a device to an account.
+ */
+export const DeviceLinkVerifySchema = DeviceSchema.extend({
+  signature: z.string().min(1, 'signature is required'),
+  nonce: z.string().min(1, 'nonce is required'),
+});
+
 export type ChallengeBody = z.infer<typeof ChallengeSchema>;
 export type DeviceBody = z.infer<typeof DeviceSchema>;
 export type VerifyBody = z.infer<typeof VerifySchema>;
+export type DeviceLinkVerifyBody = z.infer<typeof DeviceLinkVerifySchema>;

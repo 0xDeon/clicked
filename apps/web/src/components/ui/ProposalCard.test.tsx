@@ -1,5 +1,6 @@
+import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { ProposalCard } from '../ProposalCard';
+import { ProposalCard } from './ProposalCard';
 
 describe('ProposalCard Action Requirements', () => {
   it('renders Execute button only if user is a member and proposal is approved', () => {
@@ -12,7 +13,7 @@ describe('ProposalCard Action Requirements', () => {
         onFinalize={() => {}}
       />,
     );
-    expect(screen.getByText('Execute Withdrawal')).toBeInTheDocument();
+    expect(screen.getByText('Execute Withdrawal')).toBeDefined();
 
     // Re-render with membership set to false
     rerender(
@@ -37,6 +38,6 @@ describe('ProposalCard Action Requirements', () => {
         onFinalize={() => {}}
       />,
     );
-    expect(screen.getByText('Finalize')).toBeInTheDocument();
+    expect(screen.getByText('Finalize')).toBeDefined();
   });
 });

@@ -12,6 +12,18 @@ import { isReplay } from '../services/replay-protection.service.js';
 type Handler = (payload: Record<string, unknown>) => Promise<void>;
 
 const IDEMPOTENCY_TTL_SECONDS = 86_400; // 24 h
+const SOCKET_EVENT_MAX_AGE_MS = parseInt(process.env['SOCKET_EVENT_MAX_AGE_MS'] ?? '300000', 10);
+const SOCKET_EVENT_MAX_FUTURE_SKEW_MS = parseInt(
+  process.env['SOCKET_EVENT_MAX_FUTURE_SKEW_MS'] ?? '30000',
+  10,
+);
+
+function isEnvelopeTimestampFresh(timestamp: number): boolean {
+  const now = Date.now();
+  return (
+    timestamp >= now - SOCKET_EVENT_MAX_AGE_MS && timestamp <= now + SOCKET_EVENT_MAX_FUTURE_SKEW_MS
+  );
+}
 
 export class EventDispatcher {
   private handlers = new Map<string, Handler>();
@@ -22,23 +34,12 @@ export class EventDispatcher {
     private redis: Redis | null,
   ) {}
 
-  // Register a handler for an event type.
-  // Also attaches a backward-compatible socket.on listener so legacy clients
-  // that emit raw events (without the standard envelope) continue to work.
+  // Register a handler for an event type. The handler only ever runs through
+  // the enveloped `dispatch` path (see listen()) — there is no raw
+  // socket.on(type, ...) fallback, so every event gets envelope validation
+  // and eventId idempotency (#342).
   register(type: string, handler: Handler): void {
     this.handlers.set(type, handler);
-
-    this.socket.on(type, async (rawPayload: unknown) => {
-      const payload =
-        rawPayload && typeof rawPayload === 'object' && !Array.isArray(rawPayload)
-          ? (rawPayload as Record<string, unknown>)
-          : {};
-      try {
-        await handler(payload);
-      } catch (err) {
-        console.error(`[dispatcher] handler error for "${type}":`, err);
-      }
-    });
   }
 
   // Attach the standard envelope listener. Call after all register() calls.
@@ -78,17 +79,14 @@ export class EventDispatcher {
         return;
       }
 
-      // Replay protection: check if this event has been seen before for this device
-      const deviceId = this.socket.auth.deviceId;
-      const isReplayEvent = await isReplay(this.redis, deviceId, envelope.eventId);
-      if (isReplayEvent) {
-        console.debug('[replay-protection] Dropping replay event', {
-          deviceId,
-          eventId: envelope.eventId,
-          timestamp: new Date().toISOString(),
-        });
-        // Acknowledge the duplicate without reprocessing
-        this.socket.emit('dispatch_ack', { eventId: envelope.eventId, duplicate: true });
+      if (!isEnvelopeTimestampFresh(envelope.timestamp)) {
+        this.socket.emit(
+          'error',
+          createEnvelope('error', {
+            message: 'Stale or invalid envelope timestamp',
+            eventId: envelope.eventId,
+          }),
+        );
         return;
       }
 
@@ -96,7 +94,7 @@ export class EventDispatcher {
       if (this.redis) {
         const idempotencyKey = `event:idempotency:${envelope.eventId}`;
         const set = await this.redis
-          .set(idempotencyKey, '1', 'EX', IDEMPOTENCY_TTL_SECONDS, 'NX')
+          .set(idempotencyKey, '1', 'EX', getIdempotencyTtlSeconds(), 'NX')
           .catch(() => null);
         if (set === null) {
           // Already processed — acknowledge without re-running.

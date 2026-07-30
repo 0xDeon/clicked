@@ -1,11 +1,18 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  HeadObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
-import { createObjectStore, createObjectStoreClient } from '../lib/objectStore.js';
+import {
+  createObjectStore,
+  createObjectStoreClient,
+  getObjectStore,
+  resetObjectStoreForTests,
+} from '../lib/objectStore.js';
+import { LocalDiskObjectStore } from '../lib/localObjectStore.js';
 
 const config = {
   OBJECT_STORE_ENDPOINT: 'http://localhost:9000',
@@ -70,5 +77,84 @@ describe('ObjectStore', () => {
     );
     expect(send).toHaveBeenNthCalledWith(2, expect.any(GetObjectCommand));
     expect(send).toHaveBeenNthCalledWith(3, expect.any(DeleteObjectCommand));
+  });
+
+  describe('headObject', () => {
+    it('returns exists: true and the object size when the object is present', async () => {
+      send.mockResolvedValue({ ContentLength: 4096 });
+      const store = createObjectStore(config);
+
+      const result = await store.headObject('uploads/conv-1/key');
+
+      expect(send).toHaveBeenCalledWith(expect.any(HeadObjectCommand));
+      expect(result).toEqual({ exists: true, size: 4096 });
+    });
+
+    it('returns exists: false when the SDK throws a NotFound error', async () => {
+      send.mockRejectedValue(Object.assign(new Error('not found'), { name: 'NotFound' }));
+      const store = createObjectStore(config);
+
+      const result = await store.headObject('uploads/conv-1/missing');
+
+      expect(result).toEqual({ exists: false });
+    });
+
+    it('returns exists: false when the SDK throws a NoSuchKey error', async () => {
+      send.mockRejectedValue(Object.assign(new Error('no such key'), { name: 'NoSuchKey' }));
+      const store = createObjectStore(config);
+
+      const result = await store.headObject('uploads/conv-1/missing');
+
+      expect(result).toEqual({ exists: false });
+    });
+
+    it('returns exists: false when the SDK throws with a 404 status code', async () => {
+      send.mockRejectedValue(
+        Object.assign(new Error('missing'), { $metadata: { httpStatusCode: 404 } }),
+      );
+      const store = createObjectStore(config);
+
+      const result = await store.headObject('uploads/conv-1/missing');
+
+      expect(result).toEqual({ exists: false });
+    });
+
+    it('re-throws unrelated errors instead of treating them as not-found', async () => {
+      send.mockRejectedValue(new Error('network error'));
+      const store = createObjectStore(config);
+
+      await expect(store.headObject('uploads/conv-1/key')).rejects.toThrow('network error');
+    });
+  });
+});
+
+describe('getObjectStore() environment selection (#330)', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    resetObjectStoreForTests();
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    resetObjectStoreForTests();
+  });
+
+  it('resolves to the local-disk store outside production', () => {
+    process.env['NODE_ENV'] = 'test';
+    expect(getObjectStore()).toBeInstanceOf(LocalDiskObjectStore);
+  });
+
+  it('resolves to the real S3-backed store in production', () => {
+    process.env['NODE_ENV'] = 'production';
+    // getObjectStore() validates the full env via loadEnv() in production —
+    // supply everything EnvSchema requires, not just OBJECT_STORE_*.
+    process.env['REDIS_URL'] = 'redis://localhost:6379';
+    process.env['PORT'] = '3001';
+    process.env['TOKEN_TRANSFER_CONTRACT_ID'] = 'CONTRACT123';
+
+    const store = getObjectStore();
+    expect(store).not.toBeInstanceOf(LocalDiskObjectStore);
+    expect(store.constructor.name).toBe('ObjectStore');
   });
 });
