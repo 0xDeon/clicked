@@ -1,18 +1,42 @@
 import { createHash } from 'node:crypto';
 import { Router, type Router as RouterType } from 'express';
+import rateLimit, { type RateLimitRequestHandler } from 'express-rate-limit';
 import { eq, and, or, ilike, exists, sql, isNull } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { users, wallets, devices, devicePrekeys, conversationMembers } from '../db/schema.js';
+import { users, wallets, devices, devicePrekeys, conversationMembers, deviceKeyHistory } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
+import { rateLimit } from '../middleware/rateLimit.js';
 import { redis } from '../lib/redis.js';
 import { isOnline, deriveDevicePresence } from '../services/presence.js';
 import { getSocketServer } from '../lib/socket.js';
 import { conversationRoom } from '../services/roomManager.js';
-import { normalizeCapabilities } from '../lib/capabilities.js';
+import { actorFromRequest, recordAuditEvent } from '../services/auditLog.js';
+import { prekeyConsumedTotal } from '../lib/metrics.js';
 
 export const usersRouter: RouterType = Router();
 
 usersRouter.use(requireAuth);
+
+const rateLimitedResponse = { error: 'Too many requests' };
+
+/**
+ * Limits key-bundle claims per authenticated caller and target device.
+ * Ten requests per minute permits normal parallel session establishment while
+ * making it impractical to drain a device's one-time prekey pool quickly.
+ */
+export const keyBundleLimiter: RateLimitRequestHandler = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 10,
+  keyGenerator: (req) => {
+    const callerId = (req as AuthRequest).auth?.userId ?? 'anonymous';
+    const targetUserId = req.params['userId'] ?? 'unknown-user';
+    const deviceId = req.params['deviceId'] ?? 'unknown-device';
+    return `${callerId}:${targetUserId}:${deviceId}`;
+  },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: rateLimitedResponse,
+});
 
 usersRouter.get('/search', async (req: AuthRequest, res) => {
   const raw = req.query['q'];
@@ -23,7 +47,6 @@ usersRouter.get('/search', async (req: AuthRequest, res) => {
     return;
   }
 
-  // Escape LIKE wildcards so user input is treated literally in the prefix match.
   const prefix = `${q.replace(/[\\%_]/g, '\\$&')}%`;
 
   try {
@@ -74,6 +97,10 @@ usersRouter.get('/me', async (req: AuthRequest, res) => {
         username: true,
         avatarUrl: true,
         presenceVisible: true,
+        lastSeenVisible: true,
+        sendReadReceipts: true,
+        allowDirectMessages: true,
+        allowGroupInvites: true,
         createdAt: true,
       },
       with: {
@@ -96,6 +123,10 @@ usersRouter.get('/me', async (req: AuthRequest, res) => {
       username: user.username,
       avatarUrl: user.avatarUrl,
       presenceVisible: user.presenceVisible,
+      lastSeenVisible: user.lastSeenVisible,
+      sendReadReceipts: user.sendReadReceipts,
+      allowDirectMessages: user.allowDirectMessages,
+      allowGroupInvites: user.allowGroupInvites,
       wallets: user.wallets.map((w) => ({
         address: w.address,
         isPrimary: w.isPrimary,
@@ -152,7 +183,7 @@ usersRouter.get('/:id/presence', async (req: AuthRequest, res) => {
   try {
     const user = await db.query.users.findFirst({
       where: eq(users.id, id),
-      columns: { presenceVisible: true },
+      columns: { presenceVisible: true, lastSeenVisible: true },
     });
 
     if (!user) {
@@ -165,7 +196,6 @@ usersRouter.get('/:id/presence', async (req: AuthRequest, res) => {
       return;
     }
 
-    // Check Redis for active WS connections first.
     if (redis) {
       const online = await isOnline(redis, id);
       if (online) {
@@ -174,10 +204,12 @@ usersRouter.get('/:id/presence', async (req: AuthRequest, res) => {
       }
     }
 
-    // Fall back to device-based presence from devices.lastSeenAt.
     try {
       const { online, lastSeen } = await deriveDevicePresence(id);
-      res.json({ online, ...(lastSeen ? { lastSeen } : {}) });
+      res.json({
+        online,
+        ...(user.lastSeenVisible && lastSeen ? { lastSeen } : {}),
+      });
     } catch {
       res.json({ online: false });
     }
@@ -189,34 +221,69 @@ usersRouter.get('/:id/presence', async (req: AuthRequest, res) => {
 /**
  * GET /users/:userId/devices/:deviceId/key-bundle
  *
- * X3DH prekey bundle (issue #110/#305): identity key + signed prekey + one
- * one-time prekey, atomically claimed so it is never handed out twice. Falls
- * back to a signed-prekey-only bundle once one-time prekeys are exhausted —
- * the initiator just runs 3-DH instead of 4-DH in that case. `:deviceId` must
- * belong to `:userId` — this route is the narrower, other-user-facing lookup;
- * callers checking their own devices use GET /devices instead.
+ * Returns an X3DH prekey bundle and atomically claims at most one one-time
+ * prekey. Falls back to a signed-prekey-only bundle when OTPs are exhausted.
  */
-usersRouter.get('/:userId/devices/:deviceId/key-bundle', async (req: AuthRequest, res) => {
-  const targetUserId = req.params['userId'] as string;
-  const deviceId = req.params['deviceId'] as string;
+usersRouter.get(
+  '/:userId/devices/:deviceId/key-bundle',
+  keyBundleLimiter,
+  // Two buckets guard the same endpoint (#375): the per-minute limit stops a
+  // scraper enumerating device bundles, and the daily quota stops a slow drip
+  // that never trips it from draining a victim's one-time prekeys — which
+  // would silently downgrade every new session with that device from 4-DH to
+  // 3-DH. Charged to the caller, not the target, so one abusive account cannot
+  // deny service to everyone fetching that device.
+  rateLimit(['key_bundle', 'key_bundle_daily']),
+  async (req: AuthRequest, res) => {
+    const targetUserId = req.params['userId'] as string;
+    const deviceId = req.params['deviceId'] as string;
 
-  const device = await db.query.devices.findFirst({
-    where: eq(devices.id, deviceId),
-  });
+    const device = await db.query.devices.findFirst({
+      where: eq(devices.id, deviceId),
+    });
 
-  if (!device || device.userId !== targetUserId || device.revokedAt) {
-    res.status(404).json({ error: 'Device not found or has been revoked' });
-    return;
-  }
+    if (!device || device.userId !== targetUserId || device.revokedAt) {
+      res.status(404).json({ error: 'Device not found or has been revoked' });
+      return;
+    }
 
-  const signedPreKey = await db.query.devicePrekeys.findFirst({
-    where: and(eq(devicePrekeys.deviceId, deviceId), eq(devicePrekeys.keyType, 'signed')),
-  });
+    const signedPreKey = await db.query.devicePrekeys.findFirst({
+      where: and(eq(devicePrekeys.deviceId, deviceId), eq(devicePrekeys.keyType, 'signed')),
+    });
 
-  if (!signedPreKey) {
-    res.status(409).json({ error: 'Device has not uploaded a signed prekey yet' });
-    return;
-  }
+    if (!signedPreKey) {
+      res.status(409).json({ error: 'Device has not uploaded a signed prekey yet' });
+      return;
+    }
+
+    const claimedOneTimePreKey = await db.transaction(async (tx) => {
+      const [candidate] = await tx
+        .select({
+          id: devicePrekeys.id,
+          keyId: devicePrekeys.keyId,
+          publicKey: devicePrekeys.publicKey,
+        })
+        .from(devicePrekeys)
+        .where(
+          and(
+            eq(devicePrekeys.deviceId, deviceId),
+            eq(devicePrekeys.keyType, 'one_time'),
+            eq(devicePrekeys.consumed, false),
+          ),
+        )
+        .orderBy(devicePrekeys.createdAt)
+        .limit(1)
+        .for('update', { skipLocked: true });
+
+      if (!candidate) return null;
+
+      await tx
+        .update(devicePrekeys)
+        .set({ consumed: true })
+        .where(eq(devicePrekeys.id, candidate.id));
+
+      return { keyId: candidate.keyId, publicKey: candidate.publicKey };
+    });
 
   const claimedOneTimePreKey = await db.transaction(async (tx) => {
     const [candidate] = await tx
@@ -246,6 +313,42 @@ usersRouter.get('/:userId/devices/:deviceId/key-bundle', async (req: AuthRequest
 
     return { keyId: candidate.keyId, publicKey: candidate.publicKey };
   });
+
+  // A one-time prekey was consumed and cannot be handed out again (#376).
+  // Draining a device's supply forces every later session with it down from
+  // 4-DH to 3-DH, and it happens quietly, so the count left is the signal an
+  // incident responder actually needs. Subject is the device owner — the
+  // account this was done *to* — while the actor is whoever fetched it.
+  if (claimedOneTimePreKey) {
+    // The remaining count is the useful part but only a nice-to-have: if the
+    // count query fails, still record that a prekey was consumed rather than
+    // losing the event, and never fail the bundle fetch over bookkeeping.
+    let remaining: number | null = null;
+    try {
+      const [remainingRow] = await db
+        .select({ remaining: sql<number>`count(*)::int` })
+        .from(devicePrekeys)
+        .where(
+          and(
+            eq(devicePrekeys.deviceId, deviceId),
+            eq(devicePrekeys.keyType, 'one_time'),
+            eq(devicePrekeys.consumed, false),
+          ),
+        );
+      remaining = remainingRow?.remaining ?? 0;
+    } catch {
+      // Leave it null — the event itself is what must not be lost.
+    }
+
+    void recordAuditEvent({
+      action: 'key_bundle_drained',
+      ...actorFromRequest(req),
+      subjectUserId: targetUserId,
+      targetType: 'device',
+      targetId: deviceId,
+      metadata: { oneTimePreKeysRemaining: remaining, exhausted: remaining === 0 },
+    });
+  }
 
   res.json({
     deviceId: device.id,
@@ -295,66 +398,47 @@ usersRouter.get('/:id/key-fingerprint', async (req: AuthRequest, res) => {
       columns: { id: true },
     });
 
-    if (!user) {
-      res.status(404).json({ error: 'User not found' });
+    if (!device || device.userId !== targetUserId || device.revokedAt) {
+      res.status(404).json({ error: 'Device not found or has been revoked' });
       return;
     }
 
-    // Fetch all active (non-revoked) device identity public keys.
-    const activeDevices = await db.query.devices.findMany({
-      where: and(eq(devices.userId, id), isNull(devices.revokedAt)),
-      columns: { identityPublicKey: true },
+    const signedPreKey = await db.query.devicePrekeys.findFirst({
+      where: and(eq(devicePrekeys.deviceId, deviceId), eq(devicePrekeys.keyType, 'signed')),
     });
 
-    if (activeDevices.length === 0) {
-      res.status(404).json({ error: 'No active devices found for this user' });
+    if (!signedPreKey) {
+      res.status(409).json({ error: 'Device has not uploaded a signed prekey yet' });
       return;
     }
 
-    // Step 2: sort lexicographically.
-    const sortedKeys = activeDevices
-      .map((d) => d.identityPublicKey)
-      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const claimedOneTimePreKey = await db.transaction(async (tx) => {
+      const [candidate] = await tx
+        .select({
+          id: devicePrekeys.id,
+          keyId: devicePrekeys.keyId,
+          publicKey: devicePrekeys.publicKey,
+        })
+        .from(devicePrekeys)
+        .where(
+          and(
+            eq(devicePrekeys.deviceId, deviceId),
+            eq(devicePrekeys.keyType, 'one_time'),
+            eq(devicePrekeys.consumed, false),
+          ),
+        )
+        .orderBy(devicePrekeys.createdAt)
+        .limit(1)
+        .for('update', { skipLocked: true });
 
-    // Step 3: concatenate with newline separator.
-    const concatenated = sortedKeys.join('\n');
+      if (!candidate) return null;
 
-    // Step 4: SHA-256.
-    const digest = createHash('sha256').update(concatenated, 'utf8').digest();
+      await tx
+        .update(devicePrekeys)
+        .set({ consumed: true })
+        .where(eq(devicePrekeys.id, candidate.id));
 
-    // Steps 5 & 6: produce two 30-digit segments from the 32-byte digest.
-    // Segment A: bytes 0–14 (15 bytes → 120 bits), reduce mod 10^30.
-    // Segment B: bytes 15–29 (15 bytes), reduce mod 10^30.
-    // (15 bytes gives well above the 30 decimal digits we need while keeping
-    // overlap-free regions within 32 digest bytes.)
-    function bytesToSafetySegment(buf: Buffer, offset: number, length: number): string {
-      let value = BigInt(0);
-      for (let i = 0; i < length; i++) {
-        value = (value << BigInt(8)) | BigInt(buf[offset + i]!);
-      }
-      const mod = value % BigInt('1' + '0'.repeat(30));
-      return mod.toString().padStart(30, '0');
-    }
-
-    const segmentA = bytesToSafetySegment(digest, 0, 15);
-    const segmentB = bytesToSafetySegment(digest, 15, 15);
-    const raw = segmentA + segmentB;
-
-    // Format: 12 groups of 5 digits, space-separated (Signal convention).
-    const formatted = raw.match(/.{5}/g)!.join(' ');
-
-    res.json({
-      userId: id,
-      /**
-       * Raw 60-digit numeric fingerprint.  Clients compare this string
-       * after stripping spaces; the formatted version is for display.
-       */
-      fingerprint: raw,
-      /**
-       * Human-readable version in groups of 5, matching Signal's safety
-       * number display format.
-       */
-      formatted,
+      return { keyId: candidate.keyId, publicKey: candidate.publicKey };
     });
   } catch {
     res.status(500).json({ error: 'Failed to compute key fingerprint' });
@@ -363,7 +447,15 @@ usersRouter.get('/:id/key-fingerprint', async (req: AuthRequest, res) => {
 
 usersRouter.patch('/me', async (req: AuthRequest, res) => {
   const userId = req.auth!.userId;
-  const { username, avatarUrl, presenceVisible } = req.body;
+  const {
+    username,
+    avatarUrl,
+    presenceVisible,
+    lastSeenVisible,
+    sendReadReceipts,
+    allowDirectMessages,
+    allowGroupInvites,
+  } = req.body;
 
   const updateData: Partial<typeof users.$inferInsert> = {};
 
@@ -379,6 +471,38 @@ usersRouter.patch('/me', async (req: AuthRequest, res) => {
     updateData.presenceVisible = presenceVisible;
   }
 
+  if (lastSeenVisible !== undefined) {
+    if (typeof lastSeenVisible !== 'boolean') {
+      res.status(400).json({ error: 'lastSeenVisible must be a boolean' });
+      return;
+    }
+    updateData.lastSeenVisible = lastSeenVisible;
+  }
+
+  if (sendReadReceipts !== undefined) {
+    if (typeof sendReadReceipts !== 'boolean') {
+      res.status(400).json({ error: 'sendReadReceipts must be a boolean' });
+      return;
+    }
+    updateData.sendReadReceipts = sendReadReceipts;
+  }
+
+  if (allowDirectMessages !== undefined) {
+    if (typeof allowDirectMessages !== 'boolean') {
+      res.status(400).json({ error: 'allowDirectMessages must be a boolean' });
+      return;
+    }
+    updateData.allowDirectMessages = allowDirectMessages;
+  }
+
+  if (allowGroupInvites !== undefined) {
+    if (typeof allowGroupInvites !== 'boolean') {
+      res.status(400).json({ error: 'allowGroupInvites must be a boolean' });
+      return;
+    }
+    updateData.allowGroupInvites = allowGroupInvites;
+  }
+
   if (username !== undefined) {
     if (typeof username !== 'string' || !/^[a-zA-Z0-9_]{3,30}$/.test(username)) {
       res
@@ -391,29 +515,19 @@ usersRouter.patch('/me', async (req: AuthRequest, res) => {
     const existing = await db.query.users.findFirst({
       where: eq(users.username, username),
     });
-    if (existing && existing.id !== userId) {
-      res.status(409).json({ error: 'Username is already taken' });
-      return;
-    }
+  },
+);
 
-    updateData.username = username;
-  }
-
-  updateData.updatedAt = new Date();
+usersRouter.get('/:id/key-fingerprint', async (req: AuthRequest, res) => {
+  const userId = req.params['id'] as string;
 
   try {
     const oldUser = await db.query.users.findFirst({
       where: eq(users.id, userId),
-      columns: { presenceVisible: true },
+      columns: { presenceVisible: true, lastSeenVisible: true },
     });
 
-    const [updatedUser] = await db
-      .update(users)
-      .set(updateData)
-      .where(eq(users.id, userId))
-      .returning();
-
-    if (!updatedUser) {
+    if (rows.length === 0) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
@@ -433,10 +547,15 @@ usersRouter.patch('/me', async (req: AuthRequest, res) => {
               io.to(conversationRoom(m.conversationId)).emit('presence_update', {
                 userId,
                 online: true,
+                ...(updatedUser.lastSeenVisible ? { lastSeen: Date.now() } : {}),
               });
               // Also emit to direct conversation room for backward compatibility
               io.to(m.conversationId).emit('user_online', { userId });
-              io.to(m.conversationId).emit('presence_update', { userId, online: true });
+              io.to(m.conversationId).emit('presence_update', {
+                userId,
+                online: true,
+                ...(updatedUser.lastSeenVisible ? { lastSeen: Date.now() } : {}),
+              });
             } else {
               io.to(conversationRoom(m.conversationId)).emit('user_offline', { userId });
               io.to(conversationRoom(m.conversationId)).emit('presence_update', {
@@ -452,8 +571,45 @@ usersRouter.patch('/me', async (req: AuthRequest, res) => {
       }
     }
 
-    res.json(updatedUser);
+    res.json({ userId, fingerprint });
   } catch {
-    res.status(409).json({ error: 'Username conflict or database error' });
+    res.status(404).json({ error: 'User not found' });
   }
+});
+
+// ── GET /users/:id/key-history (#379) ─────────────────────────────────────────
+// Returns the append-only device-key-change log for any user so that clients
+// can detect silent key swaps and display safety-number warnings.
+usersRouter.get('/:id/key-history', async (req: AuthRequest, res) => {
+  const targetUserId = req.params['id'];
+
+  if (!targetUserId) {
+    res.status(400).json({ error: 'User id is required' });
+    return;
+  }
+
+  const target = await db.query.users.findFirst({
+    where: eq(users.id, targetUserId),
+    columns: { id: true },
+  });
+
+  if (!target) {
+    res.status(404).json({ error: 'User not found' });
+    return;
+  }
+
+  const history = await db.query.deviceKeyHistory.findMany({
+    where: eq(deviceKeyHistory.userId, targetUserId),
+    orderBy: [asc(deviceKeyHistory.recordedAt)],
+    columns: {
+      id: true,
+      deviceId: true,
+      previousKey: true,
+      newKey: true,
+      changeReason: true,
+      recordedAt: true,
+    },
+  });
+
+  res.json({ userId: targetUserId, keyHistory: history });
 });

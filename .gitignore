@@ -12,6 +12,12 @@ target/
 .DS_Store
 .turbo/
 
+# Local-disk object store for dev/test (#330) — never committed.
+apps/backend/.local-storage/
+
+# Agent-tool isolated worktrees — internal tooling state, not project source.
+.claude/worktrees/
+
 # TypeScript build artifacts
 apps/backend/src/**/*.js
 apps/backend/src/**/*.js.map

@@ -92,8 +92,11 @@ vi.mock('../../lib/conversationCache.js', () => ({
 
 // Allow every event through — rate limiting is tested independently.
 vi.mock('../../services/rateLimit.js', () => ({
-  checkRateLimit: vi.fn().mockResolvedValue({ allowed: true }),
+  checkSocketEventRateLimit: vi
+    .fn()
+    .mockResolvedValue({ allowed: true, limit: 10, remaining: 10, resetSeconds: 1, used: 0 }),
   checkPayloadSize: vi.fn().mockReturnValue({ valid: true, size: 0 }),
+  checkEnvelopeSizes: vi.fn().mockReturnValue({ valid: true }),
   recordViolation: vi.fn().mockReturnValue(0),
   clearViolations: vi.fn(),
 }));
@@ -101,6 +104,7 @@ vi.mock('../../services/rateLimit.js', () => ({
 vi.mock('../../services/heartbeat.js', () => ({
   startHeartbeatTimer: vi.fn(),
   clearHeartbeatTimer: vi.fn(),
+  handleHeartbeat: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../services/backpressure.js', () => ({
@@ -113,12 +117,13 @@ vi.mock('../../services/backpressure.js', () => ({
 import { db } from '../../db/index.js';
 import { socketAuthMiddleware } from '../../middleware/socketAuth.js';
 import { registerMessagingHandlers } from '../../socket/messaging.js';
+import { startDeviceRevocationListener } from '../../services/deviceRevocation.js';
 import {
-  registerDeviceSocket,
-  unregisterDeviceSocket,
-  startDeviceRevocationListener,
-} from '../../services/deviceRevocation.js';
-import { setOnline, setOffline } from '../../services/presence.js';
+  setOnline,
+  setOffline,
+  registerPresenceSocket,
+  unregisterPresenceSocket,
+} from '../../services/presence.js';
 import { recordEphemeralEvent } from '../../services/resumeStream.js';
 import { setSocketServer } from '../../lib/socket.js';
 
@@ -161,7 +166,7 @@ async function createGatewayNode(port: number, redis: Redis): Promise<GatewayNod
   io.on('connection', async (socket) => {
     const { userId, deviceId } = (socket as { auth?: { userId: string; deviceId: string } }).auth!;
 
-    registerDeviceSocket(deviceId, socket.id);
+    await registerPresenceSocket(redis, userId, deviceId, socket.id);
     await setOnline(redis, userId, socket.id);
 
     // Auto-join every conversation the user belongs to (mirrors index.ts).
@@ -177,7 +182,7 @@ async function createGatewayNode(port: number, redis: Redis): Promise<GatewayNod
     registerMessagingHandlers(io, socket as never);
 
     socket.on('disconnect', async () => {
-      unregisterDeviceSocket(socket.id);
+      await unregisterPresenceSocket(redis, userId, deviceId, socket.id);
       await setOffline(redis, userId, socket.id);
     });
   });
@@ -228,6 +233,19 @@ function waitFor<T = unknown>(socket: ClientSocket, event: string, ms = 4000): P
 // Propagate a short pause so the Redis adapter can sync room subscriptions
 // across nodes before we send events.
 const adapterSync = () => new Promise((r) => setTimeout(r, 150));
+
+// All events now flow exclusively through the enveloped 'dispatch' channel
+// (#342) — there is no more backward-compat raw socket.on(type, ...) path.
+let envelopeSeq = 0;
+function emitEnvelope(socket: ClientSocket, type: string, payload: Record<string, unknown>): void {
+  envelopeSeq += 1;
+  socket.emit('dispatch', {
+    eventId: `test-evt-${envelopeSeq}`,
+    type,
+    timestamp: Date.now(),
+    payload,
+  });
+}
 
 // ── mock configurators ────────────────────────────────────────────────────────
 
@@ -364,7 +382,7 @@ describe('Gateway integration — issue #215', () => {
           'new_message',
         );
 
-        clientAlice.emit('send_message', {
+        emitEnvelope(clientAlice, 'send_message', {
           conversationId: CONV_ID,
           messageId: MSG_ID,
           ciphertext: 'hello from node-1',
@@ -441,7 +459,7 @@ describe('Gateway integration — issue #215', () => {
         const d1Promise = waitFor<{ id: string }>(aliceD1, 'new_message');
         const d2Promise = waitFor<{ id: string }>(aliceD2, 'new_message');
 
-        clientBob.emit('send_message', {
+        emitEnvelope(clientBob, 'send_message', {
           conversationId: CONV_ID,
           messageId: MSG_ID,
           ciphertext: 'broadcast',
@@ -517,7 +535,7 @@ describe('Gateway integration — issue #215', () => {
           return m;
         });
 
-        clientAlice.emit('send_message', {
+        emitEnvelope(clientAlice, 'send_message', {
           conversationId: CONV_ID,
           messageId: MSG_ID,
           ciphertext: 'persist-before-deliver',
@@ -620,7 +638,7 @@ describe('Gateway integration — issue #215', () => {
         );
 
         // Simulate a reconnect with no prior cursor → full replay.
-        client.emit('resume', { lastEventId: '' });
+        emitEnvelope(client, 'resume', { lastEventId: '' });
 
         const result = await complete;
 
@@ -635,7 +653,7 @@ describe('Gateway integration — issue #215', () => {
         const replays2: unknown[] = [];
         client.on('ephemeral_replay', (evt) => replays2.push(evt));
         const complete2 = waitFor(client, 'resume_complete');
-        client.emit('resume', { lastEventId: id2 });
+        emitEnvelope(client, 'resume', { lastEventId: id2 });
 
         await complete2;
         expect(replays2).toHaveLength(0);

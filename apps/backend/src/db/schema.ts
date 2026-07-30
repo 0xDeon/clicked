@@ -7,6 +7,7 @@ import {
   pgEnum,
   index,
   integer,
+  jsonb,
   uniqueIndex,
   check,
   jsonb,
@@ -19,11 +20,14 @@ export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
   username: text('username').unique(),
   avatarUrl: text('avatar_url'),
-  presenceVisible: boolean('presence_visible').notNull().default(true),
+  presenceVisible: boolean('presence_visible').notNull().default(false),
+  lastSeenVisible: boolean('last_seen_visible').notNull().default(false),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
   // Privacy setting: whether the user allows sending read receipts to others
-  sendReadReceipts: boolean('send_read_receipts').notNull().default(true),
+  sendReadReceipts: boolean('send_read_receipts').notNull().default(false),
+  allowDirectMessages: boolean('allow_direct_messages').notNull().default(true),
+  allowGroupInvites: boolean('allow_group_invites').notNull().default(false),
 });
 
 export const wallets = pgTable('wallets', {
@@ -45,6 +49,10 @@ export const conversations = pgTable('conversations', {
   type: conversationTypeEnum('type').notNull().default('dm'),
   name: text('name'),
   avatarUrl: text('avatar_url'),
+  // Group epoch (#369). Incremented by every group-control event; the row is
+  // also the serialization point for sequencing those events, so a concurrent
+  // join and leave can never be assigned the same sequence number.
+  epoch: integer('epoch').notNull().default(0),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
@@ -127,6 +135,12 @@ export const messages = pgTable(
     }),
     contentType: text('content_type').notNull().default('text'),
     ciphertext: text('ciphertext'),
+    // Structured, server-generated metadata for `content_type = 'system'` rows
+    // (device add/revoke, membership changes). Kept separate from `ciphertext`
+    // so genuine E2EE ciphertext — opaque, per-device-encrypted — is never
+    // conflated with plaintext system metadata. Null for every non-system row;
+    // enforced by `messages_system_payload_check` below.
+    systemPayload: jsonb('system_payload').$type<{ userId: string; change: string } | null>(),
     fileId: uuid('file_id').references(() => files.id, { onDelete: 'set null' }),
     editsMessageId: uuid('edits_message_id').references((): AnyPgColumn => messages.id, {
       onDelete: 'set null',
@@ -134,7 +148,19 @@ export const messages = pgTable(
     createdAt: timestamp('created_at').notNull().defaultNow(),
     deletedAt: timestamp('deleted_at'),
   },
-  (table) => [index('messages_conversation_created_idx').on(table.conversationId, table.createdAt)],
+  (table) => [
+    index('messages_conversation_created_idx').on(table.conversationId, table.createdAt),
+    // System messages carry structured metadata, never ciphertext; everything
+    // else carries ciphertext (or an envelope), never a system payload.
+    // Supersedes the looser `messages_system_payload_only_on_system_type`
+    // constraint (#398), which only forbade a payload on non-system rows —
+    // it didn't require a system row to actually have one, or forbid a
+    // system row from also carrying ciphertext.
+    check(
+      'messages_system_payload_check',
+      sql`${table.contentType} <> 'system' OR (${table.ciphertext} IS NULL AND ${table.systemPayload} IS NOT NULL)`,
+    ),
+  ],
 );
 
 export const messageEnvelopes = pgTable(
@@ -260,59 +286,36 @@ export const devicePrekeys = pgTable(
   ],
 );
 
-// ─── MLS key packages ─────────────────────────────────────────────────────────
+// ─── Device key history (#379 — key-transparency) ────────────────────────────
 //
-// One-time-use MLS KeyPackages a device publishes so it can be added to a
-// group's ratchet tree (mirrors `devicePrekeys`' one-time-prekey model:
-// `consumed` flips to true instead of deleting the row, so issuance stays
-// auditable). The background GC job (services/deviceGc.ts) prunes
-// consumed/expired rows on a retention window.
+// Append-only log of identity-key changes per device. Written whenever a
+// device's `identityPublicKey` changes (rotation or re-registration). Clients
+// use this log to detect silent key swaps and display safety-number warnings.
+// Never deleted — immutability is the whole point.
 
-export const mlsKeyPackages = pgTable(
-  'mls_key_packages',
+export const deviceKeyHistory = pgTable(
+  'device_key_history',
   {
     id: uuid('id').primaryKey().defaultRandom(),
     deviceId: uuid('device_id')
       .notNull()
       .references(() => devices.id, { onDelete: 'cascade' }),
-    // Base64-encoded MLS KeyPackage TLS encoding (see lib/keys.ts MlsKeyPackageSchema).
-    keyPackage: text('key_package').notNull(),
-    consumed: boolean('consumed').notNull().default(false),
-    consumedAt: timestamp('consumed_at'),
-    createdAt: timestamp('created_at').notNull().defaultNow(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    previousKey: text('previous_key'),
+    newKey: text('new_key').notNull(),
+    changeReason: text('change_reason'),
+    recordedAt: timestamp('recorded_at').notNull().defaultNow(),
   },
   (table) => [
-    index('mls_key_packages_device_available_idx')
-      .on(table.deviceId)
-      .where(sql`${table.consumed} = false`),
+    index('device_key_history_device_idx').on(table.deviceId, table.recordedAt),
+    index('device_key_history_user_idx').on(table.userId, table.recordedAt),
   ],
 );
 
-// ─── Archived plaintext (one-time ciphertext-only migration) ────────────────
-//
-// Holds plaintext copied out of `messages.content` before that column was
-// dropped (drizzle/0003_ciphertext_only_messages.sql). Deliberately not
-// wired into any route — see docs/message-encryption-migration.md for the
-// archive-then-purge policy this implements. `originalMessageId` is not a
-// foreign key on purpose: this table must outlive the `messages` row it was
-// copied from (e.g. message hard-deletion must not cascade into it).
-
-export const messageContentArchive = pgTable(
-  'message_content_archive',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    originalMessageId: uuid('original_message_id').notNull(),
-    conversationId: uuid('conversation_id'),
-    senderId: uuid('sender_id'),
-    content: text('content').notNull(),
-    originalCreatedAt: timestamp('original_created_at'),
-    archivedAt: timestamp('archived_at').notNull().defaultNow(),
-  },
-  (table) => [index('message_content_archive_original_message_idx').on(table.originalMessageId)],
-);
-
-export type MessageContentArchive = typeof messageContentArchive.$inferSelect;
-export type NewMessageContentArchive = typeof messageContentArchive.$inferInsert;
+export type DeviceKeyHistory = typeof deviceKeyHistory.$inferSelect;
+export type NewDeviceKeyHistory = typeof deviceKeyHistory.$inferInsert;
 
 // ─── Token transfers (#46) ────────────────────────────────────────────────────
 //
@@ -415,6 +418,73 @@ export const pushSubscriptions = pgTable('push_subscriptions', {
 export type PushSubscription = typeof pushSubscriptions.$inferSelect;
 export type NewPushSubscription = typeof pushSubscriptions.$inferInsert;
 
+// ─── Audit log (#376) ─────────────────────────────────────────────────────────
+//
+// Append-only record of security-relevant events, for incident response.
+// Nothing here may contain message content: an audit trail that leaks
+// plaintext would undo the end-to-end encryption it exists to protect. Rows
+// carry identifiers, counts and outcomes only — `services/auditLog.ts`
+// strips anything content-shaped before it reaches the database.
+//
+// Append-only is enforced in the database itself (see the migration's
+// `audit_logs_no_mutation` trigger), not just by convention, because the
+// value of the log to an incident responder depends on it not being editable
+// by the same application account an attacker would already have reached.
+//
+// `actorUserId` is who did it; `subjectUserId` is whose account it happened
+// to. They differ for exactly the events that matter most — someone else's
+// device fetching your key bundle, a failed sign-in against your wallet — and
+// the account-scoped query indexes on the subject so a user's own history
+// includes what was done *to* them, not just by them.
+
+export const auditActionEnum = pgEnum('audit_action', [
+  'device_linked',
+  'device_revoked',
+  'logout_everywhere',
+  'key_bundle_drained',
+  'auth_failed',
+  'file_access_denied',
+  'group_member_added',
+  'group_member_removed',
+]);
+
+export type AuditAction = (typeof auditActionEnum.enumValues)[number];
+
+export const auditLogs = pgTable(
+  'audit_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    action: auditActionEnum('action').notNull(),
+    // Deliberately *not* foreign keys. An audit row must record what was true
+    // when it was written and stay that way: a cascade would delete history
+    // along with the account it incriminates, and ON DELETE SET NULL would
+    // issue an UPDATE that the append-only trigger correctly refuses. Ids are
+    // stored plain, and a responder resolves them (or finds them gone) at
+    // read time. Nullable because a failed sign-in has no established actor.
+    actorUserId: uuid('actor_user_id'),
+    actorDeviceId: uuid('actor_device_id'),
+    subjectUserId: uuid('subject_user_id'),
+    /** Kind of thing acted on: 'device', 'file', 'conversation', 'wallet'. */
+    targetType: text('target_type'),
+    targetId: text('target_id'),
+    ipAddress: text('ip_address'),
+    userAgent: text('user_agent'),
+    /** Sanitised, bounded key/value context. Never message content. */
+    metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    // Account-scoped queries are the primary read path.
+    index('audit_logs_subject_created_idx').on(table.subjectUserId, table.createdAt),
+    index('audit_logs_actor_created_idx').on(table.actorUserId, table.createdAt),
+    // "Show me every failed auth in the last hour" during an incident.
+    index('audit_logs_action_created_idx').on(table.action, table.createdAt),
+  ],
+);
+
+export type AuditLog = typeof auditLogs.$inferSelect;
+export type NewAuditLog = typeof auditLogs.$inferInsert;
+
 // ─── Relations ────────────────────────────────────────────────────────────────
 
 export const usersRelations = relations(users, ({ many }) => ({
@@ -436,6 +506,17 @@ export const conversationsRelations = relations(conversations, ({ many }) => ({
   transfers: many(tokenTransfers),
   treasuryProposals: many(treasuryProposals),
   files: many(files),
+  groupControlEvents: many(groupControlEvents),
+}));
+
+export const groupControlEventsRelations = relations(groupControlEvents, ({ one }) => ({
+  conversation: one(conversations, {
+    fields: [groupControlEvents.conversationId],
+    references: [conversations.id],
+  }),
+  actor: one(users, { fields: [groupControlEvents.actorUserId], references: [users.id] }),
+  target: one(users, { fields: [groupControlEvents.targetUserId], references: [users.id] }),
+  message: one(messages, { fields: [groupControlEvents.messageId], references: [messages.id] }),
 }));
 
 export const filesRelations = relations(files, ({ one, many }) => ({
@@ -505,6 +586,12 @@ export const devicesRelations = relations(devices, ({ one, many }) => ({
   mlsKeyPackages: many(mlsKeyPackages),
   messages: many(messages),
   pushSubscriptions: many(pushSubscriptions),
+  keyHistory: many(deviceKeyHistory),
+}));
+
+export const deviceKeyHistoryRelations = relations(deviceKeyHistory, ({ one }) => ({
+  device: one(devices, { fields: [deviceKeyHistory.deviceId], references: [devices.id] }),
+  user: one(users, { fields: [deviceKeyHistory.userId], references: [users.id] }),
 }));
 
 export const devicePrekeysRelations = relations(devicePrekeys, ({ one }) => ({

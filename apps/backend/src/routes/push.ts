@@ -4,9 +4,28 @@ import { eq, and, isNull } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { pushSubscriptions } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
+import { rateLimit } from '../middleware/rateLimit.js';
 
 export const pushRouter: IRouter = Router();
 pushRouter.use(requireAuth);
+
+/**
+ * Issue #349 — single source of truth for the VAPID public key, so the
+ * frontend never configures it independently of the backend's own
+ * VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY pair (a drift between the two silently
+ * breaks push delivery). `configured: false` lets the frontend skip push
+ * registration gracefully when the backend has no VAPID keys set up.
+ */
+pushRouter.get('/vapid-public-key', (_req: AuthRequest, res) => {
+  const vapidPublicKey = process.env['VAPID_PUBLIC_KEY'];
+
+  if (!vapidPublicKey) {
+    res.status(200).json({ configured: false, vapidPublicKey: null });
+    return;
+  }
+
+  res.status(200).json({ configured: true, vapidPublicKey });
+});
 
 pushRouter.post('/subscriptions', async (req: AuthRequest, res) => {
   const deviceId = req.auth!.deviceId;
