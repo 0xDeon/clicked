@@ -7,6 +7,7 @@ import {
   createEnvelope,
   type EventEnvelope,
 } from '../lib/eventEnvelope.js';
+import { isReplay } from '../services/replay-protection.service.js';
 
 type Handler = (payload: Record<string, unknown>) => Promise<void>;
 
