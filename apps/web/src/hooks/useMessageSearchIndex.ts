@@ -5,10 +5,12 @@ import { indexMessages } from '@/lib/search/searchClient';
 import { decryptMessageText } from '@/lib/crypto/messageCrypto';
 import type { DecryptedMessage } from '@/lib/search/types';
 
-type IndexableMessage = {
+export type IndexableMessage = {
   id: string;
   conversationId: string;
   senderId: string;
+  senderDeviceId?: string | null;
+  senderIdentityPublicKey?: string | null;
   ciphertext?: string | null;
   content?: string; // fallback for legacy plaintext field
   contentType?: string;
@@ -18,10 +20,8 @@ type IndexableMessage = {
 
 /**
  * Indexes an array of messages into the local search store.
- * Decrypts ciphertext client-side, stores plaintext in IndexedDB,
- * and updates the Web Worker inverted index.
- *
- * This is the E2EE local search cache (#185).
+ * Decrypts ciphertext client-side via the real decryption pipeline,
+ * stores encrypted-at-rest in IndexedDB, and updates the Web Worker inverted index.
  */
 export function useMessageSearchIndex(messages: IndexableMessage[]) {
   useEffect(() => {
@@ -31,7 +31,11 @@ export function useMessageSearchIndex(messages: IndexableMessage[]) {
       const toIndex: DecryptedMessage[] = [];
       for (const m of messages) {
         const ciphertext = m.ciphertext ?? m.content ?? null;
-        const plaintext = await decryptMessageText(ciphertext);
+        const plaintext = await decryptMessageText(
+          ciphertext,
+          m.senderDeviceId,
+          m.senderIdentityPublicKey,
+        );
         if (!plaintext) continue;
         toIndex.push({
           id: m.id,

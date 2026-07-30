@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Socket } from 'socket.io-client';
 import { useMessageSearchIndex } from './useMessageSearchIndex';
+import { emitSocketEnvelope } from '@/lib/realtime';
 
 /**
  * Shape we keep in client state. Mirrors the columns the backend currently
@@ -176,7 +177,7 @@ export function useMessageHistory({
   const loadOlder = useCallback(() => {
     if (!socket || loadingOlder || hasReachedStart) return;
     setLoadingOlder(true);
-    socket.emit('message_history', {
+    emitSocketEnvelope(socket, 'message_history', {
       conversationId,
       before: oldestIdRef.current ?? undefined,
     });

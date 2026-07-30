@@ -16,10 +16,9 @@ import { filesRouter } from './routes/files.js';
 import { pushRouter } from './routes/push.js';
 import { syncRouter } from './routes/sync.js';
 import { userDevicesRouter } from './routes/userDevices.js';
-import { securityRouter } from './routes/security.js';
+import { localStorageRouter } from './routes/localStorage.js';
 import { requireAuth, type AuthRequest } from './middleware/auth.js';
-import { enforceOriginPolicy, enforceTransportSecurity } from './middleware/transportSecurity.js';
-import { allowedOrigins, isOriginAllowed, trustProxyHops } from './lib/transportSecurity.js';
+import { registry } from './lib/metrics.js';
 
 const packageJson = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
@@ -79,6 +78,14 @@ app.use('/push', pushRouter);
 app.use('/sync', syncRouter);
 app.use('/user-devices', userDevicesRouter);
 app.use('/security', securityRouter);
+
+// #393 — Prometheus scrape endpoint. Never includes message content: only
+// counters/histograms defined in lib/metrics.ts, which take no ciphertext
+// or free-text labels.
+app.get('/metrics', async (_req, res) => {
+  res.set('Content-Type', registry.contentType);
+  res.end(await registry.metrics());
+});
 
 app.get('/me', requireAuth, (req, res) => {
   res.json({ user: (req as AuthRequest).auth });
