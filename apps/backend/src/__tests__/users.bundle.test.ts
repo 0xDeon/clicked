@@ -132,19 +132,21 @@ describe('GET /users/:userId/devices/:deviceId/key-bundle', () => {
 
     const claimed = { id: 'otp-row-1', keyId: 10, publicKey: 'otp-pub' };
     const updateWhere = vi.fn().mockResolvedValue(undefined);
+    const updateSet = vi.fn().mockReturnValue({ where: updateWhere });
+    const lockFor = vi.fn().mockResolvedValue([claimed]);
     const tx = {
       select: vi.fn().mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             orderBy: vi.fn().mockReturnValue({
               limit: vi.fn().mockReturnValue({
-                for: vi.fn().mockResolvedValue([claimed]),
+                for: lockFor,
               }),
             }),
           }),
         }),
       }),
-      update: vi.fn().mockReturnValue({ set: vi.fn().mockReturnValue({ where: updateWhere }) }),
+      update: vi.fn().mockReturnValue({ set: updateSet }),
     };
     mockTransaction.mockImplementation(async (cb: (txArg: typeof tx) => unknown) => cb(tx));
 
@@ -156,7 +158,15 @@ describe('GET /users/:userId/devices/:deviceId/key-bundle', () => {
     expect(res.body.registrationId).toBe(42);
     expect(res.body.signedPreKey).toEqual(SIGNED_PRE_KEY);
     expect(res.body.oneTimePreKey).toEqual({ keyId: 10, publicKey: 'otp-pub' });
-    expect(updateWhere).toHaveBeenCalled(); // consumed flipped to true, not deleted
+    // Claim runs inside a transaction, and the candidate row is row-locked with
+    // SKIP LOCKED so concurrent bundle fetches take different rows instead of
+    // handing the same prekey out twice.
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
+    expect(lockFor).toHaveBeenCalledWith('update', { skipLocked: true });
+    // consumed flipped to true — the row is never deleted, so bundle-fetch
+    // history stays auditable.
+    expect(updateSet).toHaveBeenCalledWith({ consumed: true });
+    expect(updateWhere).toHaveBeenCalled();
   });
 
   it('uses skipLocked so concurrent bundle reads only consume one OTP', async () => {
