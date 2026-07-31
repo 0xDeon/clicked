@@ -3,6 +3,7 @@ export default defineConfig({
     test: {
         environment: 'node',
         setupFiles: ['./src/__tests__/setup.ts'],
+        testTimeout: 15000,
     },
 });
 //# sourceMappingURL=vitest.config.js.map

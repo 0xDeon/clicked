@@ -182,6 +182,7 @@ describe('GET /devices', () => {
         'platform',
         'lastSeenAt',
         'revokedAt',
+        'capabilities',
         'oneTimePreKeysRemaining',
       ].sort(),
     );
