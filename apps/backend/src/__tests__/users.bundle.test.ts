@@ -54,7 +54,13 @@ vi.mock('drizzle-orm', () => ({
   ilike: vi.fn(),
   exists: vi.fn(),
   isNull: vi.fn((col: unknown) => ({ op: 'isNull', col })),
+  count: vi.fn(() => 'count(*)'),
   sql: vi.fn(),
+}));
+
+const mockSignalPrekeysLow = vi.fn().mockResolvedValue(undefined);
+vi.mock('../services/prekeyLowSignal.js', () => ({
+  signalPrekeysLowIfNeeded: mockSignalPrekeysLow,
 }));
 
 vi.mock('../lib/redis.js', () => ({ redis: null }));
@@ -135,17 +141,26 @@ describe('GET /users/:userId/devices/:deviceId/key-bundle', () => {
     const updateSet = vi.fn().mockReturnValue({ where: updateWhere });
     const lockFor = vi.fn().mockResolvedValue([claimed]);
     const tx = {
-      select: vi.fn().mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            orderBy: vi.fn().mockReturnValue({
-              limit: vi.fn().mockReturnValue({
-                for: lockFor,
+      // Two selects run inside the claiming transaction: the row-locked claim,
+      // then the post-consumption remaining count that drives `prekeys_low`.
+      select: vi
+        .fn()
+        .mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              orderBy: vi.fn().mockReturnValue({
+                limit: vi.fn().mockReturnValue({
+                  for: lockFor,
+                }),
               }),
             }),
           }),
+        })
+        .mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{ total: 4 }]),
+          }),
         }),
-      }),
       update: vi.fn().mockReturnValue({ set: updateSet }),
     };
     mockTransaction.mockImplementation(async (cb: (txArg: typeof tx) => unknown) => cb(tx));
@@ -167,6 +182,9 @@ describe('GET /users/:userId/devices/:deviceId/key-bundle', () => {
     // history stays auditable.
     expect(updateSet).toHaveBeenCalledWith({ consumed: true });
     expect(updateWhere).toHaveBeenCalled();
+    // The post-consumption count feeds the low-prekey signal, which decides on
+    // its own whether this crossed the threshold.
+    expect(mockSignalPrekeysLow).toHaveBeenCalledWith('device-2', 4);
   });
 
   it('uses skipLocked so concurrent bundle reads only consume one OTP', async () => {
@@ -234,5 +252,8 @@ describe('GET /users/:userId/devices/:deviceId/key-bundle', () => {
     expect(res.status).toBe(200);
     expect(res.body.oneTimePreKey).toBeNull();
     expect(tx.update).not.toHaveBeenCalled();
+    // Nothing was consumed, so the count did not move — the crossing already
+    // signalled on the fetch that drained the last key.
+    expect(mockSignalPrekeysLow).not.toHaveBeenCalled();
   });
 });

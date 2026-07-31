@@ -25,6 +25,11 @@ import { SignedPreKeyEntrySchema, PreKeyEntrySchema, verifyEd25519Signature } fr
 import { conversationRoom } from '../services/roomManager.js';
 import { redis } from '../lib/redis.js';
 import { markDeviceRevoked } from '../services/deviceRevocation.js';
+import {
+  PREKEY_LOW_THRESHOLD,
+  countAvailableOneTimePreKeys,
+  releasePrekeysLowLatch,
+} from '../services/prekeyLowSignal.js';
 import { actorFromRequest, recordAuditEvent } from '../services/auditLog.js';
 
 export const devicesRouter: RouterType = Router();
@@ -127,6 +132,10 @@ async function revokeDeviceRow(deviceId: string): Promise<Date> {
 
   await db.update(devices).set({ revokedAt, updatedAt: revokedAt }).where(eq(devices.id, deviceId));
   await db.delete(devicePrekeys).where(eq(devicePrekeys.deviceId, deviceId));
+
+  // The device's prekeys are gone; leaving a latch behind would suppress the
+  // first low signal if this identity key is later re-registered.
+  await releasePrekeysLowLatch(deviceId);
 
   // Force-disconnect any live socket for this device, on this node or any
   // other (cross-node via Redis pub/sub — see services/deviceRevocation.ts).
@@ -347,10 +356,20 @@ devicesRouter.post('/:id/prekeys', validate(UploadPreKeysSchema), async (req: Au
       });
   }
 
+  // Re-arm the low-prekey signal once the device is back at or above the
+  // threshold, so a future crossing fires again. Recounted rather than derived
+  // from `currentCount + trimmedBatch.length` because duplicate keyIds are
+  // dropped by ON CONFLICT DO NOTHING and would inflate the derived figure.
+  const replenishedCount = await countAvailableOneTimePreKeys(deviceId);
+  if (replenishedCount >= PREKEY_LOW_THRESHOLD) {
+    await releasePrekeysLowLatch(deviceId);
+  }
+
   res.status(200).json({
     uploadedSignedPreKey: true,
     uploadedOneTimePreKeys: trimmedBatch.length,
     capped: trimmedBatch.length < otpBatch.length,
+    oneTimePreKeysRemaining: replenishedCount,
   });
 });
 
