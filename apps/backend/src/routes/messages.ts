@@ -15,9 +15,86 @@ export const messagesRouter: IRouter = Router();
 
 messagesRouter.use(requireAuth);
 
-// ── POST /messages ─────────────────────────────────────────────────────────────
-// REST send path – mirrors the WebSocket `send_message` handler.
-// Both paths share `validateMessagePayload` for content-type-specific rules.
+type MembershipChange = {
+  phase?: 'proposal' | 'commit';
+  kind?: 'proposal' | 'commit';
+  action?: 'add' | 'remove';
+  operation?: 'add' | 'remove';
+  userId?: string;
+  memberId?: string;
+  targetUserId?: string;
+};
+
+function membershipChangeFromBody(body: Record<string, unknown>): MembershipChange | undefined {
+  const value = body['membershipChange'];
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as MembershipChange;
+  }
+
+  const action = body['membershipAction'] ?? body['membershipOperation'];
+  const targetUserId = body['membershipUserId'] ?? body['memberId'];
+  const phase = body['membershipPhase'] ?? body['membershipKind'];
+  if (
+    (action === 'add' || action === 'remove') &&
+    typeof targetUserId === 'string' &&
+    (phase === 'proposal' || phase === 'commit')
+  ) {
+    return { action, phase, userId: targetUserId };
+  }
+
+  return undefined;
+}
+
+function isCommit(change: MembershipChange): boolean {
+  return change.phase === 'commit' || change.kind === 'commit';
+}
+
+function membershipAction(change: MembershipChange): 'add' | 'remove' | undefined {
+  const action = change.action ?? change.operation;
+  return action === 'add' || action === 'remove' ? action : undefined;
+}
+
+function membershipTarget(change: MembershipChange): string | undefined {
+  const target = change.userId ?? change.memberId ?? change.targetUserId;
+  return typeof target === 'string' && target.length > 0 ? target : undefined;
+}
+
+async function applyMembershipCommit(
+  tx: any,
+  conversationId: string,
+  change: MembershipChange,
+): Promise<void> {
+  const action = membershipAction(change);
+  const targetUserId = membershipTarget(change);
+  if (!action || !targetUserId) return;
+
+  if (action === 'remove') {
+    await tx
+      .delete(conversationMembers)
+      .where(
+        and(
+          eq(conversationMembers.conversationId, conversationId),
+          eq(conversationMembers.userId, targetUserId),
+        ),
+      );
+    return;
+  }
+
+  const existing = await tx.query.conversationMembers.findFirst({
+    where: and(
+      eq(conversationMembers.conversationId, conversationId),
+      eq(conversationMembers.userId, targetUserId),
+    ),
+  });
+
+  if (!existing) {
+    await tx.insert(conversationMembers).values({
+      conversationId,
+      userId: targetUserId,
+    });
+  }
+}
+
 messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, res) => {
   const userId = req.auth!.userId;
   const deviceId = req.auth!.deviceId as string | undefined;
@@ -31,8 +108,27 @@ messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, r
       fileId?: string;
       mlsEpoch?: number;
     };
+  const body = req.body as Record<string, unknown>;
+  const { conversationId, messageId, contentType, ciphertext, envelopes, fileId } = body as {
+    conversationId: string;
+    messageId: string;
+    contentType?: string;
+    ciphertext?: string;
+    envelopes?: Array<{ recipientDeviceId: string; ciphertext: string }>;
+    fileId?: string;
+  };
+  const membershipChange = membershipChangeFromBody(body);
 
-  // ── content-type-specific validation ──────────────────────────────────────
+  if (membershipChange) {
+    const action = membershipAction(membershipChange);
+    const target = membershipTarget(membershipChange);
+    const phase = membershipChange.phase ?? membershipChange.kind;
+    if (!action || !target || (phase !== 'proposal' && phase !== 'commit')) {
+      res.status(400).json({ error: 'Invalid membership change metadata' });
+      return;
+    }
+  }
+
   const validation = validateMessagePayload({
     ...(contentType !== undefined ? { contentType } : {}),
     ...(ciphertext !== undefined ? { ciphertext } : {}),
@@ -45,7 +141,6 @@ messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, r
     return;
   }
 
-  // ── membership check ───────────────────────────────────────────────────────
   const membership = await db.query.conversationMembers.findFirst({
     where: and(
       eq(conversationMembers.conversationId, conversationId),
@@ -58,7 +153,6 @@ messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, r
     return;
   }
 
-  // ── idempotency ────────────────────────────────────────────────────────────
   const existing = await db.query.messages.findFirst({
     where: eq(messages.id, messageId),
     columns: { createdAt: true },
@@ -69,7 +163,6 @@ messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, r
     return;
   }
 
-  // ── persist in transaction ─────────────────────────────────────────────────
   let message;
   try {
     message = await db.transaction(async (tx) => {
@@ -93,7 +186,7 @@ messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, r
           where: inArray(devices.id, deviceIds),
           columns: { id: true, userId: true },
         });
-        const deviceToUser = new Map(devicesList.map((d) => [d.id, d.userId]));
+        const deviceToUser = new Map(devicesList.map((d: { id: string; userId: string }) => [d.id, d.userId]));
 
         const validEnvelopes = envelopes
           .filter((env) => deviceToUser.has(env.recipientDeviceId))
@@ -109,6 +202,10 @@ messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, r
         }
       }
 
+      if (membershipChange && isCommit(membershipChange)) {
+        await applyMembershipCommit(tx, conversationId, membershipChange);
+      }
+
       return insertedMessage;
     });
   } catch (error) {
@@ -117,7 +214,6 @@ messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, r
     return;
   }
 
-  // ── broadcast via Socket.IO ────────────────────────────────────────────────
   if (message) {
     getSocketServer()?.to(conversationId).emit('new_message', message);
   }
@@ -128,11 +224,9 @@ messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, r
   });
 
   await invalidateConversationCaches(members.map((member) => member.userId));
-
   res.status(201).json(message);
 });
 
-// ── DELETE /messages/:id ───────────────────────────────────────────────────────
 messagesRouter.delete('/:id', async (req: AuthRequest, res) => {
   const userId = req.auth!.userId;
   const messageId = req.params['id'] as string | undefined;
@@ -163,7 +257,6 @@ messagesRouter.delete('/:id', async (req: AuthRequest, res) => {
 
   await db.delete(messageEnvelopes).where(eq(messageEnvelopes.messageId, messageId));
 
-  // #231 – soft-delete file record when message has a file attachment
   if (message.fileId) {
     await softDeleteFile(message.fileId);
   }
@@ -179,6 +272,5 @@ messagesRouter.delete('/:id', async (req: AuthRequest, res) => {
   });
 
   await invalidateConversationCaches(members.map((member) => member.userId));
-
   res.status(204).send();
 });

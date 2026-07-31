@@ -7,6 +7,8 @@ import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { generatePresignedGet } from '../lib/storage.js';
 import { mlsUnavailableReason, type MlsUnavailableReason } from '../lib/mlsVisibility.js';
 import { getConversationEpochWindow } from '../services/mlsGroups.js';
+import { actorFromRequest, recordAuditEvent } from '../services/auditLog.js';
+import { rateLimit } from '../middleware/rateLimit.js';
 
 export const filesRouter: IRouter = Router();
 filesRouter.use(requireAuth);
@@ -23,6 +25,8 @@ filesRouter.use(requireAuth);
 // who could decrypt the message that carried the key. This route mirrors that
 // decision rather than inventing a second, weaker rule.
 filesRouter.get('/:fileId', async (req: AuthRequest, res) => {
+// and decrypt it locally (#166).  Access is gated on conversation membership.
+filesRouter.get('/:fileId', rateLimit('file_download'), async (req: AuthRequest, res) => {
   const userId = req.auth!.userId;
   const deviceId = req.auth!.deviceId as string | undefined;
   const fileId = req.params['fileId'] as string;
@@ -74,6 +78,17 @@ filesRouter.get('/:fileId', async (req: AuthRequest, res) => {
   const reachable = referencing.filter((m) => memberOf.has(m.conversationId));
 
   if (reachable.length === 0) {
+  if (!membership) {
+    // A non-member reaching for a file id is the clearest signal of an
+    // attempt to read someone else's attachments (#376).
+    void recordAuditEvent({
+      action: 'file_access_denied',
+      ...actorFromRequest(req),
+      targetType: 'file',
+      targetId: fileId,
+      metadata: { conversationId: message.conversationId, reason: 'not_a_member' },
+    });
+
     res.status(403).json({ error: 'Not authorized to access this file' });
     return;
   }

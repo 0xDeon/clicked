@@ -71,7 +71,11 @@ describe('GET /users/me', () => {
       id: 'auth-user-id',
       username: 'alice',
       avatarUrl: null,
-      presenceVisible: true,
+      presenceVisible: false,
+      lastSeenVisible: false,
+      sendReadReceipts: false,
+      allowDirectMessages: true,
+      allowGroupInvites: false,
       wallets: MOCK_USER.wallets,
       createdAt: MOCK_CREATED_AT,
     } as never);
@@ -83,7 +87,11 @@ describe('GET /users/me', () => {
       id: 'auth-user-id',
       username: 'alice',
       avatarUrl: null,
-      presenceVisible: true,
+      presenceVisible: false,
+      lastSeenVisible: false,
+      sendReadReceipts: false,
+      allowDirectMessages: true,
+      allowGroupInvites: false,
       wallets: [
         { address: 'GABCDEFG', isPrimary: true },
         { address: 'GHIJKLMN', isPrimary: false },
@@ -302,11 +310,22 @@ describe('PATCH /users/me', () => {
     vi.mocked(db.query.users.findFirst).mockResolvedValue({
       id: 'auth-user-id',
       presenceVisible: true,
+      lastSeenVisible: false,
     } as any);
 
     const mockReturning = vi
       .fn()
-      .mockResolvedValue([{ id: 'auth-user-id', username: 'alice', presenceVisible: false }]);
+      .mockResolvedValue([
+        {
+          id: 'auth-user-id',
+          username: 'alice',
+          presenceVisible: false,
+          lastSeenVisible: false,
+          sendReadReceipts: false,
+          allowDirectMessages: true,
+          allowGroupInvites: false,
+        },
+      ]);
     const mockWhere = vi.fn(() => ({ returning: mockReturning }));
     const mockSet = vi.fn(() => ({ where: mockWhere }));
     vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
@@ -320,6 +339,60 @@ describe('PATCH /users/me', () => {
     expect(res.body.presenceVisible).toBe(false);
   });
 
+  it('allows updating all privacy settings together', async () => {
+    vi.mocked(db.query.users.findFirst).mockResolvedValue({
+      id: 'auth-user-id',
+      presenceVisible: false,
+      lastSeenVisible: false,
+    } as any);
+
+    const mockReturning = vi.fn().mockResolvedValue([
+      {
+        id: 'auth-user-id',
+        username: 'alice',
+        presenceVisible: true,
+        lastSeenVisible: true,
+        sendReadReceipts: true,
+        allowDirectMessages: false,
+        allowGroupInvites: true,
+      },
+    ]);
+    const mockWhere = vi.fn(() => ({ returning: mockReturning }));
+    const mockSet = vi.fn(() => ({ where: mockWhere }));
+    vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
+
+    const res = await request(app)
+      .patch('/users/me')
+      .set('Authorization', AUTH_HEADER)
+      .send({
+        presenceVisible: true,
+        lastSeenVisible: true,
+        sendReadReceipts: true,
+        allowDirectMessages: false,
+        allowGroupInvites: true,
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        presenceVisible: true,
+        lastSeenVisible: true,
+        sendReadReceipts: true,
+        allowDirectMessages: false,
+        allowGroupInvites: true,
+      }),
+    );
+    expect(res.body).toEqual(
+      expect.objectContaining({
+        presenceVisible: true,
+        lastSeenVisible: true,
+        sendReadReceipts: true,
+        allowDirectMessages: false,
+        allowGroupInvites: true,
+      }),
+    );
+  });
+
   it('returns 400 when presenceVisible is not a boolean', async () => {
     const res = await request(app)
       .patch('/users/me')
@@ -328,6 +401,16 @@ describe('PATCH /users/me', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('presenceVisible must be a boolean');
+  });
+
+  it('returns 400 when allowGroupInvites is not a boolean', async () => {
+    const res = await request(app)
+      .patch('/users/me')
+      .set('Authorization', AUTH_HEADER)
+      .send({ allowGroupInvites: 'nope' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('allowGroupInvites must be a boolean');
   });
 });
 
@@ -366,6 +449,7 @@ describe('GET /users/:id/presence', () => {
     vi.mocked(db.query.users.findFirst).mockResolvedValue({
       id: 'user-uuid-123',
       presenceVisible: true,
+      lastSeenVisible: true,
     } as any);
     // requireAuth's own device lookup succeeds; deriveDevicePresence's two
     // subsequent lookups (active-device check, then most-recent fallback)
@@ -375,6 +459,26 @@ describe('GET /users/:id/presence', () => {
       .mockReset()
       .mockResolvedValueOnce({ id: 'device-test-id', revokedAt: null })
       .mockResolvedValue(undefined);
+
+    const res = await request(app)
+      .get('/users/user-uuid-123/presence')
+      .set('Authorization', AUTH_HEADER);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ online: false });
+  });
+
+  it('omits lastSeen when the user hides offline timestamps', async () => {
+    vi.mocked(db.query.users.findFirst).mockResolvedValue({
+      id: 'user-uuid-123',
+      presenceVisible: true,
+      lastSeenVisible: false,
+    } as any);
+    mockDeviceFindFirst
+      .mockReset()
+      .mockResolvedValueOnce({ id: 'device-test-id', revokedAt: null })
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ lastSeenAt: new Date('2026-06-01T00:00:00.000Z') });
 
     const res = await request(app)
       .get('/users/user-uuid-123/presence')
