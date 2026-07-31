@@ -104,6 +104,23 @@ function makeIo() {
   return io;
 }
 
+// Handlers now run exclusively through the enveloped 'dispatch' path (#342)
+// — there's no more raw socket.on(type, ...) listener to grab directly.
+// Trigger through the real EventEmitter (not the mocked .emit used to record
+// client-bound emits) with the same envelope shape a real client would send,
+// then flush the fake-timer microtask queue so the async handler settles.
+let envelopeSeq = 0;
+async function dispatchEnvelope(socket: EventEmitter, type: string, payload: unknown) {
+  envelopeSeq += 1;
+  EventEmitter.prototype.emit.call(socket, 'dispatch', {
+    eventId: `test-evt-${envelopeSeq}`,
+    type,
+    timestamp: Date.now(),
+    payload,
+  });
+  await vi.advanceTimersByTimeAsync(0);
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 describe('Typing indicator Socket events (typing_start / typing_stop)', () => {
@@ -125,10 +142,7 @@ describe('Typing indicator Socket events (typing_start / typing_stop)', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('typing_start')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await handler({ conversationId });
+    await dispatchEnvelope(socket, 'typing_start', { conversationId });
 
     // Zero DB writes
     expect(mockInsert).not.toHaveBeenCalled();
@@ -153,10 +167,7 @@ describe('Typing indicator Socket events (typing_start / typing_stop)', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('typing_start')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await handler({
+    await dispatchEnvelope(socket, 'typing_start', {
       conversationId,
       deviceId,
       content: 'SUPER SECRET CONFIDENTIAL TEXT',
@@ -183,10 +194,7 @@ describe('Typing indicator Socket events (typing_start / typing_stop)', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const startHandler = (socket as EventEmitter).listeners('typing_start')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await startHandler({ conversationId });
+    await dispatchEnvelope(socket, 'typing_start', { conversationId });
 
     // Relayed to both the direct room and the conversationRoom()-prefixed
     // room (backward-compat dual broadcast used throughout messaging.ts).
@@ -195,11 +203,11 @@ describe('Typing indicator Socket events (typing_start / typing_stop)', () => {
     expect(socket.roomEmitted[1]?.event).toBe('typing_start');
 
     // Advance time by 4.9 seconds - should not clear yet
-    vi.advanceTimersByTime(4900);
+    await vi.advanceTimersByTimeAsync(4900);
     expect(socket.roomEmitted).toHaveLength(2);
 
     // Advance time past 5 seconds
-    vi.advanceTimersByTime(100);
+    await vi.advanceTimersByTimeAsync(100);
     expect(socket.roomEmitted).toHaveLength(4);
     expect(socket.roomEmitted[2]).toEqual({
       room: conversationId,
@@ -218,22 +226,15 @@ describe('Typing indicator Socket events (typing_start / typing_stop)', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const startHandler = (socket as EventEmitter).listeners('typing_start')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    const stopHandler = (socket as EventEmitter).listeners('typing_stop')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-
-    await startHandler({ conversationId });
-    await stopHandler({ conversationId });
+    await dispatchEnvelope(socket, 'typing_start', { conversationId });
+    await dispatchEnvelope(socket, 'typing_stop', { conversationId });
 
     expect(socket.roomEmitted).toHaveLength(4);
     expect(socket.roomEmitted[2]?.event).toBe('typing_stop');
     expect(socket.roomEmitted[3]?.event).toBe('typing_stop');
 
     // Advance time by 10 seconds - timer should have been cancelled, no duplicate typing_stop
-    vi.advanceTimersByTime(10000);
+    await vi.advanceTimersByTimeAsync(10000);
     expect(socket.roomEmitted).toHaveLength(4);
   });
 
@@ -248,10 +249,7 @@ describe('Typing indicator Socket events (typing_start / typing_stop)', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const startHandler = (socket as EventEmitter).listeners('typing_start')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await startHandler({ conversationId });
+    await dispatchEnvelope(socket, 'typing_start', { conversationId });
 
     expect(socket.to).not.toHaveBeenCalled();
     expect(socket.emit).toHaveBeenCalledWith(
@@ -273,10 +271,7 @@ describe('Typing indicator Socket events (typing_start / typing_stop)', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const startHandler = (socket as EventEmitter).listeners('typing_start')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    await startHandler({ conversationId, deviceId });
+    await dispatchEnvelope(socket, 'typing_start', { conversationId, deviceId });
 
     expect(socket.roomEmitted).toHaveLength(2);
 
@@ -315,17 +310,10 @@ describe('Typing indicator Socket events (typing_start / typing_stop)', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const startHandler = (socket as EventEmitter).listeners('typing_start')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-    const sendHandler = (socket as EventEmitter).listeners('send_message')[0] as (
-      p: unknown,
-    ) => Promise<void>;
-
-    await startHandler({ conversationId });
+    await dispatchEnvelope(socket, 'typing_start', { conversationId });
     expect(socket.roomEmitted).toHaveLength(2);
 
-    await sendHandler({ conversationId, content: 'Done typing!' });
+    await dispatchEnvelope(socket, 'send_message', { conversationId, content: 'Done typing!' });
 
     // Should emit new_message (io.to) AND typing_stop (socket.to)
     expect(socket.roomEmitted).toContainEqual({

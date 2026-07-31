@@ -1,35 +1,31 @@
 {
   "name": "web",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint",
-    "lint:fix": "eslint --fix",
+    "lint": "next lint",
     "test": "vitest run"
   },
   "dependencies": {
-    "@noble/curves": "^1.9",
-    "@noble/hashes": "^1.8",
-    "@stellar/freighter-api": "^6.0.1",
-    "framer-motion": "^12.41.0",
-    "idb": "^8.0.2",
-    "lucide-react": "^1.21.0",
-    "next": "16.2.0",
-    "react": "19.2.4",
-    "react-dom": "19.2.4",
-    "socket.io-client": "^4.5.0",
-    "stellar-sdk": "^11.0.0"
+    "@openmls/wasm": "^0.5.0",
+    "@stellar/stellar-sdk": "^11.2.0",
+    "next": "^14.2.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.0",
+    "fake-indexeddb": "^6.2.5",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^4"

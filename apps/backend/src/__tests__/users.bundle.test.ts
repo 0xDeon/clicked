@@ -54,7 +54,13 @@ vi.mock('drizzle-orm', () => ({
   ilike: vi.fn(),
   exists: vi.fn(),
   isNull: vi.fn((col: unknown) => ({ op: 'isNull', col })),
+  count: vi.fn(() => 'count(*)'),
   sql: vi.fn(),
+}));
+
+const mockSignalPrekeysLow = vi.fn().mockResolvedValue(undefined);
+vi.mock('../services/prekeyLowSignal.js', () => ({
+  signalPrekeysLowIfNeeded: mockSignalPrekeysLow,
 }));
 
 vi.mock('../lib/redis.js', () => ({ redis: null }));
@@ -132,19 +138,30 @@ describe('GET /users/:userId/devices/:deviceId/key-bundle', () => {
 
     const claimed = { id: 'otp-row-1', keyId: 10, publicKey: 'otp-pub' };
     const updateWhere = vi.fn().mockResolvedValue(undefined);
+    const updateSet = vi.fn().mockReturnValue({ where: updateWhere });
+    const lockFor = vi.fn().mockResolvedValue([claimed]);
     const tx = {
-      select: vi.fn().mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            orderBy: vi.fn().mockReturnValue({
-              limit: vi.fn().mockReturnValue({
-                for: vi.fn().mockResolvedValue([claimed]),
+      // Two selects run inside the claiming transaction: the row-locked claim,
+      // then the post-consumption remaining count that drives `prekeys_low`.
+      select: vi
+        .fn()
+        .mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              orderBy: vi.fn().mockReturnValue({
+                limit: vi.fn().mockReturnValue({
+                  for: lockFor,
+                }),
               }),
             }),
           }),
+        })
+        .mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{ total: 4 }]),
+          }),
         }),
-      }),
-      update: vi.fn().mockReturnValue({ set: vi.fn().mockReturnValue({ where: updateWhere }) }),
+      update: vi.fn().mockReturnValue({ set: updateSet }),
     };
     mockTransaction.mockImplementation(async (cb: (txArg: typeof tx) => unknown) => cb(tx));
 
@@ -156,7 +173,58 @@ describe('GET /users/:userId/devices/:deviceId/key-bundle', () => {
     expect(res.body.registrationId).toBe(42);
     expect(res.body.signedPreKey).toEqual(SIGNED_PRE_KEY);
     expect(res.body.oneTimePreKey).toEqual({ keyId: 10, publicKey: 'otp-pub' });
-    expect(updateWhere).toHaveBeenCalled(); // consumed flipped to true, not deleted
+    // Claim runs inside a transaction, and the candidate row is row-locked with
+    // SKIP LOCKED so concurrent bundle fetches take different rows instead of
+    // handing the same prekey out twice.
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
+    expect(lockFor).toHaveBeenCalledWith('update', { skipLocked: true });
+    // consumed flipped to true — the row is never deleted, so bundle-fetch
+    // history stays auditable.
+    expect(updateSet).toHaveBeenCalledWith({ consumed: true });
+    expect(updateWhere).toHaveBeenCalled();
+    // The post-consumption count feeds the low-prekey signal, which decides on
+    // its own whether this crossed the threshold.
+    expect(mockSignalPrekeysLow).toHaveBeenCalledWith('device-2', 4);
+  });
+
+  it('uses skipLocked so concurrent bundle reads only consume one OTP', async () => {
+    mockDeviceFindFirst.mockResolvedValue(DEVICE);
+    mockPrekeyFindFirst.mockResolvedValue(SIGNED_PRE_KEY);
+
+    const claimed = { id: 'otp-row-1', keyId: 10, publicKey: 'otp-pub' };
+    let locked = false;
+    const updateWhere = vi.fn().mockResolvedValue(undefined);
+    const tx = {
+      select: vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            orderBy: vi.fn().mockReturnValue({
+              limit: vi.fn().mockReturnValue({
+                for: vi.fn().mockImplementation(async (_mode: string, options: { skipLocked?: boolean }) => {
+                  expect(_mode).toBe('update');
+                  expect(options).toEqual({ skipLocked: true });
+                  if (locked) return [];
+                  locked = true;
+                  return [claimed];
+                }),
+              }),
+            }),
+          }),
+        }),
+      }),
+      update: vi.fn().mockReturnValue({ set: vi.fn().mockReturnValue({ where: updateWhere }) }),
+    };
+    mockTransaction.mockImplementation(async (cb: (txArg: typeof tx) => unknown) => cb(tx));
+
+    const [firstRes, secondRes] = await Promise.all([
+      request(makeApp()).get(`/users/${OWNER_ID}/devices/device-2/key-bundle`),
+      request(makeApp()).get(`/users/${OWNER_ID}/devices/device-2/key-bundle`),
+    ]);
+
+    expect(firstRes.status).toBe(200);
+    expect(secondRes.status).toBe(200);
+    expect([firstRes.body.oneTimePreKey, secondRes.body.oneTimePreKey].filter(Boolean)).toHaveLength(1);
+    expect(updateWhere).toHaveBeenCalledTimes(1);
   });
 
   it('falls back to signed-prekey-only when OTPs are exhausted', async () => {
@@ -184,5 +252,8 @@ describe('GET /users/:userId/devices/:deviceId/key-bundle', () => {
     expect(res.status).toBe(200);
     expect(res.body.oneTimePreKey).toBeNull();
     expect(tx.update).not.toHaveBeenCalled();
+    // Nothing was consumed, so the count did not move — the crossing already
+    // signalled on the fetch that drained the last key.
+    expect(mockSignalPrekeysLow).not.toHaveBeenCalled();
   });
 });

@@ -11,6 +11,7 @@ import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { conversationMembers, devices } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
+import { normalizeCapabilities } from '../lib/capabilities.js';
 
 export const userDevicesRouter: RouterType = Router();
 
@@ -27,6 +28,7 @@ userDevicesRouter.get('/:id/public-key', async (req: AuthRequest, res) => {
         id: true,
         userId: true,
         identityPublicKey: true,
+        capabilities: true,
       },
     });
 
@@ -61,6 +63,7 @@ userDevicesRouter.get('/:id/public-key', async (req: AuthRequest, res) => {
       id: device.id,
       userId: device.userId,
       identityPublicKey: device.identityPublicKey,
+      capabilities: normalizeCapabilities(device.capabilities),
     });
   } catch {
     res.status(500).json({ error: 'Failed to fetch device public key' });
