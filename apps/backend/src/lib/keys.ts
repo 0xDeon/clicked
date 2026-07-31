@@ -83,8 +83,10 @@ export const SignatureSchema = z
   .superRefine(b64LengthRefinement(ED25519_SIG_BYTES, 'signature'));
 
 /**
- * No endpoint currently accepts MLS key packages — this schema exists so one
- * is ready to route through it as soon as such an endpoint is added.
+ * Validates a base64 TLS-serialised MLS KeyPackage. Used by
+ * `POST /devices/:id/mls-key-packages` (#365) — the size window is the only
+ * structural check the server can make without an MLS implementation, so the
+ * endpoint pairs it with device-ownership and expiry checks.
  */
 export const MlsKeyPackageSchema = z
   .string()

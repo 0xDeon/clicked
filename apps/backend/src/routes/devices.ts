@@ -14,6 +14,13 @@ import { Keypair } from '@stellar/stellar-sdk';
 import { eq, and, ne, count, desc, isNull, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db/index.js';
+import {
+  devices,
+  devicePrekeys,
+  mlsKeyPackages,
+  conversationMembers,
+  messages,
+} from '../db/schema.js';
 import { devices, devicePrekeys, conversationMembers, messages, wallets } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
@@ -21,11 +28,21 @@ import { DeviceLinkVerifySchema, type DeviceLinkVerifyBody } from '../schemas/au
 import { createDeviceLinkNonce, consumeDeviceLinkNonce } from '../lib/nonce.js';
 import { getSocketServer } from '../lib/socket.js';
 import { invalidateConversationCaches } from '../lib/conversationCache.js';
-import { SignedPreKeyEntrySchema, PreKeyEntrySchema, verifyEd25519Signature } from '../lib/keys.js';
+import {
+  SignedPreKeyEntrySchema,
+  PreKeyEntrySchema,
+  MlsKeyPackageSchema,
+  verifyEd25519Signature,
+} from '../lib/keys.js';
 import { conversationRoom } from '../services/roomManager.js';
 import { redis } from '../lib/redis.js';
 import { markDeviceRevoked } from '../services/deviceRevocation.js';
 import {
+  MLS_KEY_PACKAGE_CAP,
+  MLS_KEY_PACKAGE_MAX_BATCH,
+  countAvailableKeyPackages,
+  hashKeyPackage,
+} from '../services/mlsKeyPackages.js';
   PREKEY_LOW_THRESHOLD,
   countAvailableOneTimePreKeys,
   releasePrekeysLowLatch,
@@ -43,6 +60,29 @@ devicesRouter.use(requireAuth);
 const UploadPreKeysSchema = z.object({
   signedPreKey: SignedPreKeyEntrySchema,
   oneTimePreKeys: z.array(PreKeyEntrySchema).min(1, 'At least one one-time prekey is required'),
+});
+
+const RegisterDeviceSchema = DeviceSchema;
+
+/**
+ * MLS key package batch upload. `keyPackage` is validated as base64 of a
+ * 32–4096 byte TLS-serialised KeyPackage by the shared key validator; the
+ * handler additionally rejects already-expired packages.
+ */
+const UploadMlsKeyPackagesSchema = z.object({
+  cipherSuite: z.number().int().positive(),
+  keyPackages: z
+    .array(
+      z.object({
+        keyPackage: MlsKeyPackageSchema,
+        expiresAt: z.iso.datetime().optional(),
+      }),
+    )
+    .min(1, 'At least one key package is required')
+    .max(
+      MLS_KEY_PACKAGE_MAX_BATCH,
+      `At most ${MLS_KEY_PACKAGE_MAX_BATCH} key packages per request`,
+    ),
 });
 
 /** Maximum number of stored one-time prekeys per device. */
@@ -373,6 +413,103 @@ devicesRouter.post('/:id/prekeys', validate(UploadPreKeysSchema), async (req: Au
   });
 });
 
+// ─── POST /devices/:id/mls-key-packages ────────────────────────────────────────
+//
+// Publishes a batch of public MLS KeyPackages for a device (#365). Only the
+// owning device's user may upload, and only public material is accepted — the
+// HPKE init private key stays on the device.
+//
+// Uploads are idempotent: re-sending a package the device already published is
+// counted as a duplicate rather than stored twice, so a client that retries a
+// timed-out request does not inflate its inventory.
+
+devicesRouter.post(
+  '/:id/mls-key-packages',
+  validate(UploadMlsKeyPackagesSchema),
+  async (req: AuthRequest, res) => {
+    const deviceId = req.params['id'] as string;
+    const callerId = req.auth!.userId;
+
+    const device = await db.query.devices.findFirst({
+      where: eq(devices.id, deviceId),
+    });
+
+    if (!device) {
+      res.status(404).json({ error: 'Device not found' });
+      return;
+    }
+
+    if (device.userId !== callerId) {
+      res.status(403).json({ error: 'Only the device owner may upload MLS key packages' });
+      return;
+    }
+
+    if (device.revokedAt) {
+      res.status(403).json({ error: 'Device is revoked' });
+      return;
+    }
+
+    const { cipherSuite, keyPackages } = req.body as z.infer<typeof UploadMlsKeyPackagesSchema>;
+
+    // Reject packages that are already past their expiry — storing them would
+    // only produce inventory that can never be claimed.
+    const now = Date.now();
+    const expired = keyPackages.filter(
+      (k) => k.expiresAt !== undefined && Date.parse(k.expiresAt) <= now,
+    );
+
+    if (expired.length > 0) {
+      res.status(400).json({ error: 'expiresAt must be in the future' });
+      return;
+    }
+
+    // Enforce the per-device cap on *available* packages before inserting.
+    const currentCount = await countAvailableKeyPackages(deviceId);
+    const available = MLS_KEY_PACKAGE_CAP - currentCount;
+
+    if (available <= 0) {
+      res.status(422).json({
+        error: `MLS key package cap of ${MLS_KEY_PACKAGE_CAP} reached. Wait for existing packages to be consumed before uploading more.`,
+      });
+      return;
+    }
+
+    // Drop duplicates inside the batch itself so the row count we report back
+    // reflects distinct packages, then trim to the remaining cap space.
+    const seen = new Set<string>();
+    const distinct = keyPackages.filter((k) => {
+      const hash = hashKeyPackage(k.keyPackage);
+      if (seen.has(hash)) return false;
+      seen.add(hash);
+      return true;
+    });
+
+    const trimmed = distinct.slice(0, available);
+
+    const inserted = await db
+      .insert(mlsKeyPackages)
+      .values(
+        trimmed.map((k) => ({
+          deviceId,
+          cipherSuite,
+          keyPackage: k.keyPackage,
+          packageHash: hashKeyPackage(k.keyPackage),
+          expiresAt: k.expiresAt ? new Date(k.expiresAt) : null,
+        })),
+      )
+      .onConflictDoNothing({ target: [mlsKeyPackages.deviceId, mlsKeyPackages.packageHash] })
+      .returning({ id: mlsKeyPackages.id });
+
+    res.status(200).json({
+      uploaded: inserted.length,
+      duplicates: trimmed.length - inserted.length,
+      capped: trimmed.length < distinct.length,
+      remaining: currentCount + inserted.length,
+    });
+  },
+);
+
+// ─── POST /devices — register a new device for an existing user --------------
 // ─── Device linking / re-authentication challenge (#333) ─────────────────────
 //
 // Adding a device to an account used to require nothing more than a valid JWT

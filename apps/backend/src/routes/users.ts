@@ -9,6 +9,11 @@ import { redis } from '../lib/redis.js';
 import { isOnline, deriveDevicePresence } from '../services/presence.js';
 import { getSocketServer } from '../lib/socket.js';
 import { conversationRoom } from '../services/roomManager.js';
+import {
+  claimKeyPackage,
+  countAvailableKeyPackages,
+  signalReplenishmentIfLow,
+} from '../services/mlsKeyPackages.js';
 import { signalPrekeysLowIfNeeded } from '../services/prekeyLowSignal.js';
 import { actorFromRequest, recordAuditEvent } from '../services/auditLog.js';
 import { prekeyConsumedTotal } from '../lib/metrics.js';
@@ -386,6 +391,80 @@ usersRouter.get(
     },
     oneTimePreKey: claimedOneTimePreKey,
   });
+});
+
+/**
+ * GET /users/:userId/devices/:deviceId/mls-key-package
+ *
+ * Claims one MLS KeyPackage for a device so the caller can put it in an Add
+ * proposal (#365). The package is public material; the matching init private
+ * key never leaves the target device.
+ *
+ * The claim is atomic — `consumed` flips inside the same transaction that
+ * selects the row, so two members adding the same device concurrently get two
+ * different packages. Reusing a KeyPackage across two Adds would break forward
+ * secrecy for the joining device, so exhaustion is reported as `409` rather
+ * than silently handing back an already-used package.
+ *
+ * Optional `?cipherSuite=<n>` restricts the claim to packages published for
+ * that MLS cipher suite; a group can only add a device whose package matches
+ * the group's suite.
+ *
+ * Whenever the remaining stock drops to the low-water mark, an
+ * `mls_key_packages_low` event is emitted to the device and to its owner —
+ * the same replenishment prompt the one-time prekey inventory relies on.
+ */
+usersRouter.get('/:userId/devices/:deviceId/mls-key-package', async (req: AuthRequest, res) => {
+  const targetUserId = req.params['userId'] as string;
+  const deviceId = req.params['deviceId'] as string;
+
+  const rawSuite = req.query['cipherSuite'];
+  let cipherSuite: number | undefined;
+
+  if (typeof rawSuite === 'string' && rawSuite !== '') {
+    cipherSuite = Number(rawSuite);
+    if (!Number.isInteger(cipherSuite) || cipherSuite <= 0) {
+      res.status(400).json({ error: 'cipherSuite must be a positive integer' });
+      return;
+    }
+  }
+
+  const device = await db.query.devices.findFirst({
+    where: eq(devices.id, deviceId),
+    columns: { id: true, userId: true, revokedAt: true },
+  });
+
+  if (!device || device.userId !== targetUserId || device.revokedAt) {
+    res.status(404).json({ error: 'Device not found or has been revoked' });
+    return;
+  }
+
+  try {
+    const claimed = await claimKeyPackage(deviceId, cipherSuite);
+    const remaining = await countAvailableKeyPackages(deviceId, cipherSuite);
+
+    // Zero remaining is by definition below the watermark, so an exhausted
+    // device still gets told to replenish before the 409 goes out.
+    signalReplenishmentIfLow(deviceId, targetUserId, remaining);
+
+    if (!claimed) {
+      res.status(409).json({
+        error: 'No MLS key packages available for this device',
+        remaining: 0,
+      });
+      return;
+    }
+
+    res.json({
+      deviceId: device.id,
+      cipherSuite: claimed.cipherSuite,
+      keyPackage: claimed.keyPackage,
+      expiresAt: claimed.expiresAt,
+      remaining,
+    });
+  } catch {
+    res.status(500).json({ error: 'Failed to claim MLS key package' });
+  }
 });
 
 /**
