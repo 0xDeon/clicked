@@ -16,6 +16,7 @@ import { filesRouter } from './routes/files.js';
 import { pushRouter } from './routes/push.js';
 import { syncRouter } from './routes/sync.js';
 import { userDevicesRouter } from './routes/userDevices.js';
+import { mlsRouter } from './routes/mls.js';
 import { localStorageRouter } from './routes/localStorage.js';
 import { requireAuth, type AuthRequest } from './middleware/auth.js';
 import { registry } from './lib/metrics.js';
@@ -73,6 +74,9 @@ app.use(rateLimit('global_ip', { identifier: ipIdentifier }));
 
 app.use('/auth', authRouter);
 app.use('/conversations', conversationsRouter);
+// MLS group state lives on /conversations/:id/mls/* but in its own router so
+// conversations.ts does not keep growing (#372).
+app.use('/conversations', mlsRouter);
 app.use('/devices', devicesRouter);
 app.use('/messages', messagesRouter);
 app.use('/users', usersRouter);

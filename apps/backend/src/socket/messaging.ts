@@ -26,6 +26,8 @@ import { deliverMessage } from '../services/deliveryPipeline.js';
 import { publishEphemeral, readMissedEvents } from '../services/resumeStream.js';
 import { handleDeviceDeliveryReceipt } from '../services/deliveryAggregation.js';
 import { conversationRoom } from '../services/roomManager.js';
+import { applyMlsVisibility } from '../lib/mlsVisibility.js';
+import { getConversationEpochWindow } from '../services/mlsGroups.js';
 import { handleHeartbeat } from '../services/heartbeat.js';
 import { cleanupStaleSockets } from '../services/presence.js';
 import { EventDispatcher } from './dispatcher.js';
@@ -132,6 +134,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       ciphertext,
       envelopes,
       fileId: inputFileId,
+      mlsEpoch,
     } = payload as {
       conversationId: string;
       messageId?: string;
@@ -140,6 +143,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       ciphertext?: string;
       envelopes?: Array<{ recipientDeviceId: string; ciphertext: string }>;
       fileId?: string;
+      mlsEpoch?: number;
     };
     const deviceId = socket.auth!.deviceId;
 
@@ -172,6 +176,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       ciphertext: effectiveCiphertext,
       envelopes,
       fileId: inputFileId,
+      mlsEpoch,
     });
     if (!validation.ok) {
       socket.emit('error', {
@@ -214,6 +219,21 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       return;
     }
 
+    // Enforce full sibling-device coverage (#188). MLS group messages are
+    // exempt: a single group ciphertext already reaches every member device in
+    // the tree, so there are no per-device envelopes that could be missing.
+    const siblingIds = mlsEpoch === undefined ? await fetchSiblingDeviceIds(userId, deviceId) : [];
+    if (siblingIds.length > 0) {
+      const providedIds = new Set(envelopes?.map((e) => e.recipientDeviceId) ?? []);
+      const missing = siblingIds.filter((id) => !providedIds.has(id));
+      if (missing.length > 0) {
+        socket.emit('error', {
+          event: 'device_set_mismatch',
+          message: `Missing envelopes for ${missing.length} sibling device(s)`,
+          missingDeviceIds: missing,
+        });
+        return;
+      }
     // Enforce full sibling-device coverage (#188).
     const missingSiblings = await findMissingSiblingDeviceIds(userId, deviceId, envelopes);
     if (missingSiblings.length > 0) {
@@ -256,6 +276,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
             contentType: resolvedContentType,
             ciphertext: effectiveCiphertext || null,
             fileId: fileId,
+            mlsEpoch: mlsEpoch ?? null,
           })
           .returning();
 
@@ -601,9 +622,21 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       },
     });
 
+    // #372 — same MLS epoch visibility rule as GET /conversations/:id/messages:
+    // messages outside this device's membership window come back as
+    // placeholders instead of undecryptable ciphertext.
+    const { hasGroup, window } = await getConversationEpochWindow(
+      conversationId,
+      socket.auth!.deviceId,
+    );
+
     socket.emit('message_history', {
       conversationId,
-      messages: history.reverse().map((message) => serializeMessage(message)),
+      messages: history
+        .reverse()
+        .map((message) =>
+          serializeMessage(hasGroup ? applyMlsVisibility(message, window) : message),
+        ),
     });
   });
 

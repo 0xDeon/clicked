@@ -17,6 +17,8 @@ import { invalidateConversationCaches } from '../lib/conversationCache.js';
 import { serializeMessage, type MessageLike } from '../lib/messages.js';
 import { getSocketServer } from '../lib/socket.js';
 import { MAX_MESSAGES_LIMIT, DEFAULT_MESSAGES_LIMIT } from '../constants.js';
+import { applyMlsVisibility } from '../lib/mlsVisibility.js';
+import { getConversationEpochWindow } from '../services/mlsGroups.js';
 import { checkGroupInviteLimit } from '../services/rateLimit.js';
 import { actorFromRequest, recordAuditEvent } from '../services/auditLog.js';
 
@@ -617,7 +619,14 @@ conversationsRouter.get('/:id/messages', async (req: AuthRequest, res) => {
 
   const nextCursor = hasMore ? (page[0]?.id ?? null) : null;
 
-  res.json({ messages: page, nextCursor });
+  // #372 — MLS group messages from epochs outside this device's membership
+  // window are returned as placeholders rather than as ciphertext the device
+  // is guaranteed to fail on. Non-MLS conversations skip the lookup entirely.
+  const { hasGroup, window } = await getConversationEpochWindow(conversationId, req.auth!.deviceId);
+
+  const visible = hasGroup ? page.map((message) => applyMlsVisibility(message, window)) : page;
+
+  res.json({ messages: visible, nextCursor });
 });
 
 conversationsRouter.get('/:id/search', async (req: AuthRequest, res) => {

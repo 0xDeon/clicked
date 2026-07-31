@@ -157,3 +157,82 @@ describe('acceptance criteria', () => {
     if (!result.ok) expect(result.code).toBe(400);
   });
 });
+
+// ─── MLS group messages (#372) ───────────────────────────────────────────────
+//
+// An MLS group message carries one ciphertext encrypted to the group's epoch
+// secrets, so the per-device envelope requirement does not apply to it.
+
+describe('MLS group messages', () => {
+  it('accepts a text message with mlsEpoch and no envelopes', () => {
+    const result = validateMessagePayload({
+      contentType: 'text',
+      ciphertext: 'group-ciphertext',
+      mlsEpoch: 7,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts epoch 0 — the founding epoch is a real epoch', () => {
+    const result = validateMessagePayload({
+      contentType: 'text',
+      ciphertext: 'group-ciphertext',
+      mlsEpoch: 0,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('rejects an MLS message that also carries per-device envelopes', () => {
+    const result = validateMessagePayload({
+      contentType: 'text',
+      ciphertext: 'group-ciphertext',
+      envelopes: [envelope],
+      mlsEpoch: 7,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe(400);
+  });
+
+  it('rejects an MLS message with no ciphertext', () => {
+    const result = validateMessagePayload({ contentType: 'text', mlsEpoch: 7 });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe(400);
+  });
+
+  it('still requires a fileId for MLS file messages', () => {
+    const result = validateMessagePayload({
+      contentType: 'image',
+      ciphertext: 'group-ciphertext',
+      mlsEpoch: 7,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe(400);
+  });
+
+  it('accepts an MLS file message with a fileId', () => {
+    const result = validateMessagePayload({
+      contentType: 'image',
+      ciphertext: 'group-ciphertext',
+      fileId: 'file-1',
+      mlsEpoch: 7,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('still refuses system messages from clients', () => {
+    const result = validateMessagePayload({
+      contentType: 'system',
+      ciphertext: 'c',
+      mlsEpoch: 7,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe(403);
+  });
+});
