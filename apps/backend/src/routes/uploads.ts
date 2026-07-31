@@ -6,6 +6,7 @@ import { db } from '../db/index.js';
 import { files, conversationMembers } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { generatePresignedPut, generateStorageKey } from '../lib/storage.js';
+import { getGroupByConversation, isActiveMember } from '../services/mlsGroups.js';
 import { getObjectStore } from '../lib/objectStore.js';
 import { verifyFileIntegrity } from '../lib/fileIntegrity.js';
 
@@ -71,6 +72,20 @@ uploadsRouter.post('/', rateLimit('upload_slot'), async (req: AuthRequest, res) 
     return;
   }
 
+  // ── MLS group uploads (#371) ────────────────────────────────────────────────
+  // The file is encrypted once to a random file key, and that key is delivered
+  // by putting it inside the MLS group message that references the file — so
+  // the uploading device has to be able to send into the group in the first
+  // place. `mlsEpoch` comes back with the slot so the client knows which epoch
+  // to encrypt that message to.
+  const group = await getGroupByConversation(conversationId);
+  const deviceId = req.auth!.deviceId as string | undefined;
+
+  if (group) {
+    if (!deviceId || !(await isActiveMember(group.id, deviceId))) {
+      res.status(403).json({ error: 'Device is not a member of this conversation MLS group' });
+      return;
+    }
   // Daily volume quota (#375). Charged in bytes rather than requests: the
   // per-minute slot limit says nothing about a caller requesting twenty
   // hundred-megabyte slots an hour, which is the shape that actually fills
@@ -104,7 +119,7 @@ uploadsRouter.post('/', rateLimit('upload_slot'), async (req: AuthRequest, res) 
     })
     .returning({ id: files.id });
 
-  res.status(201).json({ fileId: file!.id, uploadUrl });
+  res.status(201).json({ fileId: file!.id, uploadUrl, mlsEpoch: group?.currentEpoch ?? null });
 });
 
 // POST /uploads/:fileId/confirm — mark file as ready after client PUT succeeds

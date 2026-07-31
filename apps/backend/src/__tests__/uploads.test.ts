@@ -53,13 +53,22 @@ vi.mock('../lib/storage.js', () => ({
   generateStorageKey: vi.fn(() => 'uploads/conv-123/abc123def456'),
 }));
 
+// These cases cover non-MLS conversations, so the group lookup finds nothing
+// and the upload path behaves exactly as before (#371). MLS group uploads are
+// covered in mlsGroupFiles.test.ts.
+vi.mock('../services/mlsGroups.js', () => ({
+  getGroupByConversation: vi.fn().mockResolvedValue(null),
+  isActiveMember: vi.fn().mockResolvedValue(false),
 vi.mock('../lib/fileIntegrity.js', () => ({
   verifyFileIntegrity: mockVerifyFileIntegrity,
 }));
 
 vi.mock('../middleware/auth.js', () => ({
   requireAuth: (req: express.Request, _res: express.Response, next: express.NextFunction) => {
-    (req as express.Request & { auth?: { userId: string } }).auth = { userId: 'user-abc' };
+    (req as express.Request & { auth?: { userId: string; deviceId: string } }).auth = {
+      userId: 'user-abc',
+      deviceId: 'device-abc',
+    };
     next();
   },
 }));
