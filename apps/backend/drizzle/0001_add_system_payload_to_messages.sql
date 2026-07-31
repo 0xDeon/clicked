@@ -1,0 +1,2 @@
+ALTER TABLE "messages" ADD COLUMN "system_payload" jsonb;--> statement-breakpoint
+ALTER TABLE "messages" ADD CONSTRAINT "messages_system_payload_only_on_system_type" CHECK ("messages"."content_type" = 'system' OR "messages"."system_payload" IS NULL);

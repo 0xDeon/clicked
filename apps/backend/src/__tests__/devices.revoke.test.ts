@@ -38,6 +38,7 @@ vi.mock('../db/index.js', () => ({
 vi.mock('../db/schema.js', () => ({
   devices: { id: 'id', userId: 'userId', revokedAt: 'revokedAt' },
   devicePrekeys: { deviceId: 'deviceId' },
+  wallets: { userId: 'userId', address: 'address', isPrimary: 'isPrimary' },
   conversationMembers: { userId: 'userId', conversationId: 'conversationId' },
   messages: {},
 }));
@@ -49,6 +50,18 @@ vi.mock('../services/deviceRevocation.js', () => ({
 }));
 
 vi.mock('../lib/socket.js', () => ({ getSocketServer: vi.fn(() => null) }));
+
+// #376 — revocation is a security event; assert it reaches the audit log.
+const mockRecordAuditEvent = vi.fn().mockResolvedValue(undefined);
+vi.mock('../services/auditLog.js', () => ({
+  recordAuditEvent: mockRecordAuditEvent,
+  actorFromRequest: (req: { auth?: { userId: string; deviceId: string } }) => ({
+    actorUserId: req.auth?.userId ?? null,
+    actorDeviceId: req.auth?.deviceId ?? null,
+    ipAddress: '127.0.0.1',
+    userAgent: 'test',
+  }),
+}));
 
 vi.mock('drizzle-orm', () => ({
   eq: vi.fn((col: unknown, val: unknown) => ({ op: 'eq', col, val })),
@@ -175,6 +188,27 @@ describe('DELETE /devices/:id', () => {
     expect(mockMarkDeviceRevoked).toHaveBeenCalledWith('device-2');
     expect(mockPublish).toHaveBeenCalledWith('device_revoked:device-2', '1');
   });
+
+  it('records the revocation in the audit log with actor, device and context (#376)', async () => {
+    mockDeviceFindFirst.mockResolvedValue(ACTIVE_DEVICE);
+    setupActiveCount(2);
+
+    await request(makeApp()).delete('/devices/device-2');
+
+    expect(mockRecordAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'device_revoked',
+        actorUserId: 'owner-user-id',
+        actorDeviceId: 'device-1',
+        targetType: 'device',
+        targetId: 'device-2',
+        metadata: expect.objectContaining({
+          selfRevocation: false,
+          remainingActiveDevices: 1,
+        }),
+      }),
+    );
+  });
 });
 
 describe('POST /devices/logout-everywhere', () => {
@@ -198,5 +232,41 @@ describe('POST /devices/logout-everywhere', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ revokedCount: 0 });
     expect(mockPublish).not.toHaveBeenCalled();
+  });
+
+  it('audits the account-wide action and each device it revoked (#376)', async () => {
+    mockFindMany.mockResolvedValue([{ id: 'device-2' }, { id: 'device-3' }]);
+
+    await request(makeApp()).post('/devices/logout-everywhere');
+
+    expect(mockRecordAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'logout_everywhere',
+        actorUserId: 'owner-user-id',
+        metadata: expect.objectContaining({ revokedCount: 2, retainedDeviceId: 'device-1' }),
+      }),
+    );
+    for (const id of ['device-2', 'device-3']) {
+      expect(mockRecordAuditEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'device_revoked',
+          targetId: id,
+          metadata: { viaLogoutEverywhere: true },
+        }),
+      );
+    }
+  });
+
+  it('audits the attempt even when there was nothing to revoke (#376)', async () => {
+    mockFindMany.mockResolvedValue([]);
+
+    await request(makeApp()).post('/devices/logout-everywhere');
+
+    expect(mockRecordAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'logout_everywhere',
+        metadata: expect.objectContaining({ revokedCount: 0 }),
+      }),
+    );
   });
 });

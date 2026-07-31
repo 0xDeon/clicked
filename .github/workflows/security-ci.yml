@@ -1,0 +1,69 @@
+# Issue #388 — Security regression checks.
+#
+# Runs on every PR and push to main. Two jobs:
+#   - regression: the ciphertext-only guard and the private-key/session-state
+#     field scan (apps/backend/src/__tests__/security.regression.test.ts).
+#   - dependency-audit: `pnpm audit` scoped to the crypto-relevant backend
+#     dependencies (ioredis, jsonwebtoken, web-push, @stellar/stellar-sdk,
+#     drizzle-orm, socket.io), surfacing CVEs without failing on advisories
+#     in unrelated transitive deps.
+
+name: Security CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  regression:
+    name: Ciphertext-only guard + secret-field scan
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: apps/backend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: .
+
+      - name: Run security regression tests
+        run: pnpm test -- security.regression.test.ts
+        env:
+          JWT_SECRET: ci-test-secret
+          REDIS_URL: redis://localhost:6379
+
+  dependency-audit:
+    name: Crypto dependency CVE audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit crypto-relevant dependencies
+        run: node scripts/audit-crypto-deps.mjs

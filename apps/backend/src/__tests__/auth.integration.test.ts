@@ -54,11 +54,14 @@ vi.mock('../services/deviceDelivery.js', () => ({
 // ── Import app after mocks are registered ─────────────────────────────────
 
 const { app } = await import('../app.js');
-const { challengeLimiter, verifyLimiter } = await import('../routes/auth.js');
+const { resetRateLimitBucket } = await import('../services/rateLimiter.js');
 
-function resetRateLimiters() {
-  challengeLimiter.resetKey('127.0.0.1');
-  verifyLimiter.resetKey('127.0.0.1');
+// Counters are shared across nodes now (#375), so a test must clear the whole
+// bucket rather than one process-local key.
+async function resetRateLimiters(): Promise<void> {
+  await resetRateLimitBucket('auth_challenge');
+  await resetRateLimitBucket('auth_verify');
+  await resetRateLimitBucket('global_ip');
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -94,9 +97,9 @@ function setupExistingUserInsert(deviceId = 'device-id') {
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 describe('POST /auth/challenge', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
-    resetRateLimiters();
+    await resetRateLimiters();
   });
 
   it('returns 200 with message and nonce for valid walletAddress', async () => {
@@ -129,9 +132,9 @@ describe('POST /auth/challenge', () => {
 });
 
 describe('POST /auth/verify', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
-    resetRateLimiters();
+    await resetRateLimiters();
   });
 
   it('returns 200 with JWT token for valid new-user flow', async () => {
@@ -277,9 +280,9 @@ describe('POST /auth/verify', () => {
 });
 
 describe('Auth rate limiting', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
-    resetRateLimiters();
+    await resetRateLimiters();
     mockConsumeNonce.mockReturnValue(true);
     mockVerify.mockReturnValue(true);
     mockWalletFindFirst.mockResolvedValue({ userId: 'existing-user-id', address: WALLET });

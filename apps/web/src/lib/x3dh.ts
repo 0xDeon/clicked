@@ -27,11 +27,20 @@ const ED25519_SPKI_HEADER = new Uint8Array([
 ]);
 
 export function toBase64(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString('base64');
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 1) {
+    binary += String.fromCharCode(bytes[i]!);
+  }
+  return btoa(binary);
 }
 
 export function fromBase64(b64: string): Uint8Array {
-  return new Uint8Array(Buffer.from(b64, 'base64'));
+  const binary = atob(b64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    out[i] = binary.charCodeAt(i);
+  }
+  return out;
 }
 
 export function rawEd25519PublicKeyToSpki(rawPublicKey: Uint8Array): Uint8Array {
