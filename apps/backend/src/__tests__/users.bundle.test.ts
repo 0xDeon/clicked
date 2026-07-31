@@ -187,6 +187,46 @@ describe('GET /users/:userId/devices/:deviceId/key-bundle', () => {
     expect(mockSignalPrekeysLow).toHaveBeenCalledWith('device-2', 4);
   });
 
+  it('uses skipLocked so concurrent bundle reads only consume one OTP', async () => {
+    mockDeviceFindFirst.mockResolvedValue(DEVICE);
+    mockPrekeyFindFirst.mockResolvedValue(SIGNED_PRE_KEY);
+
+    const claimed = { id: 'otp-row-1', keyId: 10, publicKey: 'otp-pub' };
+    let locked = false;
+    const updateWhere = vi.fn().mockResolvedValue(undefined);
+    const tx = {
+      select: vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            orderBy: vi.fn().mockReturnValue({
+              limit: vi.fn().mockReturnValue({
+                for: vi.fn().mockImplementation(async (_mode: string, options: { skipLocked?: boolean }) => {
+                  expect(_mode).toBe('update');
+                  expect(options).toEqual({ skipLocked: true });
+                  if (locked) return [];
+                  locked = true;
+                  return [claimed];
+                }),
+              }),
+            }),
+          }),
+        }),
+      }),
+      update: vi.fn().mockReturnValue({ set: vi.fn().mockReturnValue({ where: updateWhere }) }),
+    };
+    mockTransaction.mockImplementation(async (cb: (txArg: typeof tx) => unknown) => cb(tx));
+
+    const [firstRes, secondRes] = await Promise.all([
+      request(makeApp()).get(`/users/${OWNER_ID}/devices/device-2/key-bundle`),
+      request(makeApp()).get(`/users/${OWNER_ID}/devices/device-2/key-bundle`),
+    ]);
+
+    expect(firstRes.status).toBe(200);
+    expect(secondRes.status).toBe(200);
+    expect([firstRes.body.oneTimePreKey, secondRes.body.oneTimePreKey].filter(Boolean)).toHaveLength(1);
+    expect(updateWhere).toHaveBeenCalledTimes(1);
+  });
+
   it('falls back to signed-prekey-only when OTPs are exhausted', async () => {
     mockDeviceFindFirst.mockResolvedValue(DEVICE);
     mockPrekeyFindFirst.mockResolvedValue(SIGNED_PRE_KEY);
