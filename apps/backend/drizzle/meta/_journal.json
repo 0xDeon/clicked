@@ -12,8 +12,26 @@
     {
       "idx": 1,
       "version": "7",
-      "when": 1785397530059,
-      "tag": "0001_signal_migration",
+      "when": 1785395646991,
+      "tag": "0001_mls_group_state",
+      "when": 1785395076224,
+      "tag": "0001_mls_key_packages",
+      "when": 1785129818340,
+      "tag": "0001_add_system_payload_to_messages",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785412264325,
+      "tag": "0002_strengthen_system_payload_check",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785700000000,
+      "tag": "0004_envelope_protocol",
       "breakpoints": true
     }
   ]

@@ -1,173 +1,183 @@
 /**
- * Phase-1 → Signal migration (#364).
+ * Phase-1 → Signal migration enforcement (#364).
  *
  * The product shipped on the Phase-1 sealed box (ECDH + HKDF + AES-256-GCM,
- * one independent box per message). Signal's Double Ratchet replaces it, but
- * not everywhere at once: clients update at their own pace, and a conversation
- * contains devices on both sides of that line for as long as the slowest one
- * takes.
+ * one independent box per recipient device). Signal's Double Ratchet replaces
+ * it, but not everywhere at once: clients update at their own pace, so a
+ * conversation contains devices on both sides of that line for as long as the
+ * slowest one takes.
  *
- * The rules this module encodes:
+ * *Which* protocol a pair of devices should use is already answered by
+ * `selectProtocol` over `devices.capabilities` (lib/capabilities.ts, #180
+ * follow-on). This module adds the two things negotiation alone does not give
+ * the migration:
  *
- *   1. **History is never re-encrypted.** Old envelopes keep `protocol =
- *      'sealed_box'` and stay decryptable by the Phase-1 path forever. The
- *      cutover changes what is written next, never what was written before.
- *   2. **A conversation cuts over only when every active device on every side
- *      advertises Signal support.** One un-upgraded device holds the whole
- *      conversation on sealed box, because the sender has to produce an
- *      envelope that device can actually open.
- *   3. **After cutover, sealed box is refused.** Otherwise a patched or
- *      compromised client could keep everyone on the weaker construction
- *      indefinitely, and no one would notice.
+ *   1. **Enforcement on the way in.** A sender can claim any protocol it likes
+ *      on an envelope. Two claims must be rejected: one the recipient cannot
+ *      decrypt, and one weaker than what both sides can actually do.
+ *   2. **A record of what was used.** `message_envelopes.protocol` stores the
+ *      construction each envelope was built with, so history written before a
+ *      pair cut over keeps decrypting on the Phase-1 path forever.
+ *
+ * Negotiation is deliberately *per device pair*, not per conversation. The
+ * envelope model already encrypts once per recipient device, so there is no
+ * reason to hold a Signal-capable device back because some other member of the
+ * conversation is still on an old client — that device gets Signal today and
+ * the laggard keeps sealed box until it upgrades.
  */
 
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { conversationMembers, devices } from '../db/schema.js';
+import { devices } from '../db/schema.js';
+import {
+  BASELINE_PROTOCOL,
+  normalizeCapabilities,
+  selectProtocol,
+  type KnownProtocol,
+} from '../lib/capabilities.js';
 
-export type E2eeProtocol = 'sealed_box' | 'signal';
-
-export interface BlockingDevice {
-  deviceId: string;
-  userId: string;
-  deviceName: string | null;
-  platform: string | null;
-}
-
-export interface ProtocolNegotiation {
-  /** What new messages in this conversation must use. */
-  protocol: E2eeProtocol;
-  totalActiveDevices: number;
-  signalCapableDevices: number;
-  /** Active devices still on sealed box — what is holding the cutover back. */
-  blockingDevices: BlockingDevice[];
-}
-
-/** Active devices belonging to every member of a conversation. */
-async function activeConversationDevices(conversationId: string) {
-  const memberRows = await db.query.conversationMembers.findMany({
-    where: eq(conversationMembers.conversationId, conversationId),
-    columns: { userId: true },
-  });
-
-  const userIds = memberRows.map((m) => m.userId);
-  if (userIds.length === 0) return [];
-
-  return db.query.devices.findMany({
-    where: and(inArray(devices.userId, userIds), isNull(devices.revokedAt)),
-    columns: {
-      id: true,
-      userId: true,
-      deviceName: true,
-      platform: true,
-      supportsSignal: true,
-    },
-  });
-}
-
-/**
- * Resolves which protocol new messages in a conversation must use.
- *
- * A conversation with no active devices reports `sealed_box`: there is nothing
- * to negotiate with, and defaulting an empty set to `signal` would flip the
- * conversation to a mode no device can read the moment one joins.
- */
-export async function negotiateConversationProtocol(
-  conversationId: string,
-): Promise<ProtocolNegotiation> {
-  const deviceRows = await activeConversationDevices(conversationId);
-
-  const blockingDevices = deviceRows
-    .filter((d) => !d.supportsSignal)
-    .map((d) => ({
-      deviceId: d.id,
-      userId: d.userId,
-      deviceName: d.deviceName,
-      platform: d.platform,
-    }));
-
-  const capable = deviceRows.length - blockingDevices.length;
-
-  return {
-    protocol: deviceRows.length > 0 && blockingDevices.length === 0 ? 'signal' : 'sealed_box',
-    totalActiveDevices: deviceRows.length,
-    signalCapableDevices: capable,
-    blockingDevices,
-  };
-}
+export type E2eeProtocol = KnownProtocol;
 
 export interface EnvelopeProtocolInput {
   recipientDeviceId: string;
   protocol: E2eeProtocol;
 }
 
+export interface ProtocolViolation {
+  recipientDeviceId: string;
+  /** What the envelope claimed. */
+  declared: E2eeProtocol;
+  /** What the two devices should have used. */
+  expected: E2eeProtocol;
+  reason: 'unsupported_by_recipient' | 'downgrade';
+}
+
 export type EnvelopeProtocolCheck =
-  | { ok: true; negotiated: E2eeProtocol }
-  | {
-      ok: false;
-      code: 400 | 409;
-      error: string;
-      negotiated: E2eeProtocol;
-      offendingDeviceIds: string[];
-    };
+  | { ok: true }
+  | { ok: false; code: 400 | 409; error: string; violations: ProtocolViolation[] };
 
 /**
- * Validates the protocol each outgoing envelope claims.
+ * Validates the protocol each outgoing envelope claims against what the sender
+ * device and each recipient device actually advertise.
  *
  * Two failures are possible, and they are different problems:
  *
- * - **`signal` to a device that cannot read it** (`400`). The sender got ahead
- *   of the recipient. That envelope would be undecryptable on arrival, which
- *   the recipient cannot distinguish from tampering.
- * - **`sealed_box` after the conversation has cut over** (`409`). Everyone can
- *   do Signal, so falling back is a downgrade. The sender is told the
- *   negotiated protocol and re-sends.
+ * - **`unsupported_by_recipient` (`400`).** The envelope names a protocol the
+ *   recipient does not advertise. It would be undecryptable on arrival, which
+ *   the recipient cannot distinguish from tampering — so it is refused at the
+ *   door rather than delivered as a message that mysteriously fails to open.
+ * - **`downgrade` (`409`).** Both devices can do better than what the envelope
+ *   claims. Without this check a patched or compromised client could quietly
+ *   keep a peer on the weaker construction forever and nobody would notice.
  *
- * Both surface the offending device ids so the client can re-fetch the device
- * set and rebuild rather than retrying blind.
+ * Envelopes naming a device that does not resolve are skipped; the send paths
+ * already drop those before persisting.
  */
 export async function checkEnvelopeProtocols(
-  conversationId: string,
+  senderDeviceId: string | undefined,
   envelopes: EnvelopeProtocolInput[],
 ): Promise<EnvelopeProtocolCheck> {
-  const negotiation = await negotiateConversationProtocol(conversationId);
-  const negotiated = negotiation.protocol;
+  if (envelopes.length === 0) return { ok: true };
 
-  const signalEnvelopes = envelopes.filter((e) => e.protocol === 'signal');
+  const senderDevice = senderDeviceId
+    ? await db.query.devices.findFirst({
+        where: eq(devices.id, senderDeviceId),
+        columns: { capabilities: true },
+      })
+    : undefined;
 
-  if (signalEnvelopes.length > 0) {
-    const incapable = new Set(negotiation.blockingDevices.map((d) => d.deviceId));
-    const offending = signalEnvelopes
-      .filter((e) => incapable.has(e.recipientDeviceId))
-      .map((e) => e.recipientDeviceId);
+  const recipientIds = [...new Set(envelopes.map((e) => e.recipientDeviceId))];
+  const recipientRows = await db.query.devices.findMany({
+    where: inArray(devices.id, recipientIds),
+    columns: { id: true, capabilities: true },
+  });
+  const capabilitiesByDevice = new Map(recipientRows.map((d) => [d.id, d.capabilities]));
 
-    if (offending.length > 0) {
-      return {
-        ok: false,
-        code: 400,
-        error: 'Signal envelope addressed to a device that does not support Signal',
-        negotiated,
-        offendingDeviceIds: offending,
-      };
+  const violations: ProtocolViolation[] = [];
+
+  for (const envelope of envelopes) {
+    if (!capabilitiesByDevice.has(envelope.recipientDeviceId)) continue;
+
+    const recipientCapabilities = capabilitiesByDevice.get(envelope.recipientDeviceId);
+    const recipientProtocols = new Set(normalizeCapabilities(recipientCapabilities).protocols);
+    const expected = selectProtocol(senderDevice?.capabilities, recipientCapabilities).protocol;
+
+    if (!recipientProtocols.has(envelope.protocol)) {
+      violations.push({
+        recipientDeviceId: envelope.recipientDeviceId,
+        declared: envelope.protocol,
+        expected,
+        reason: 'unsupported_by_recipient',
+      });
+      continue;
+    }
+
+    if (envelope.protocol !== expected) {
+      violations.push({
+        recipientDeviceId: envelope.recipientDeviceId,
+        declared: envelope.protocol,
+        expected,
+        reason: 'downgrade',
+      });
     }
   }
 
-  if (negotiated === 'signal') {
-    const downgraded = envelopes
-      .filter((e) => e.protocol === 'sealed_box')
-      .map((e) => e.recipientDeviceId);
+  if (violations.length === 0) return { ok: true };
 
-    if (downgraded.length > 0) {
-      return {
-        ok: false,
-        code: 409,
-        error:
-          'This conversation has cut over to Signal; sealed-box envelopes are no longer accepted',
-        negotiated,
-        offendingDeviceIds: downgraded,
-      };
-    }
+  // An undecryptable envelope is the more specific failure, so it decides the
+  // status code when a batch contains both kinds.
+  const hasUnsupported = violations.some((v) => v.reason === 'unsupported_by_recipient');
+
+  if (hasUnsupported) {
+    return {
+      ok: false,
+      code: 400,
+      error: 'Envelope protocol is not supported by the recipient device',
+      violations,
+    };
   }
 
-  return { ok: true, negotiated };
+  return {
+    ok: false,
+    code: 409,
+    error: 'Envelope protocol is weaker than both devices support',
+    violations,
+  };
+}
+
+/**
+ * The protocol a sender device should use with each recipient device. Exposed
+ * so callers can answer "what should I use here" with the same rule the send
+ * path enforces, rather than re-deriving it.
+ *
+ * Devices that do not resolve fall back to the universal baseline.
+ */
+export async function protocolsForRecipients(
+  senderDeviceId: string | undefined,
+  recipientDeviceIds: string[],
+): Promise<Map<string, E2eeProtocol>> {
+  const result = new Map<string, E2eeProtocol>();
+  if (recipientDeviceIds.length === 0) return result;
+
+  const senderDevice = senderDeviceId
+    ? await db.query.devices.findFirst({
+        where: eq(devices.id, senderDeviceId),
+        columns: { capabilities: true },
+      })
+    : undefined;
+
+  const rows = await db.query.devices.findMany({
+    where: inArray(devices.id, [...new Set(recipientDeviceIds)]),
+    columns: { id: true, capabilities: true },
+  });
+
+  for (const row of rows) {
+    result.set(row.id, selectProtocol(senderDevice?.capabilities, row.capabilities).protocol);
+  }
+
+  for (const id of recipientDeviceIds) {
+    if (!result.has(id)) result.set(id, BASELINE_PROTOCOL);
+  }
+
+  return result;
 }

@@ -35,6 +35,14 @@ vi.mock('../db/schema.js', () => ({
 
 vi.mock('../lib/redis.js', () => ({ redis: null }));
 
+// Real threshold + count logic, but the latch release is spied so we can assert
+// the upload route re-arms the signal only once the device is back in range.
+const mockReleaseLatch = vi.fn().mockResolvedValue(undefined);
+vi.mock('../services/prekeyLowSignal.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/prekeyLowSignal.js')>()),
+  releasePrekeysLowLatch: mockReleaseLatch,
+}));
+
 vi.mock('drizzle-orm', () => ({
   eq: vi.fn((col: unknown, val: unknown) => ({ col, val })),
   and: vi.fn((...args: unknown[]) => args),
@@ -190,6 +198,30 @@ describe('POST /devices/:id/prekeys', () => {
     expect(mockInsert).toHaveBeenCalledTimes(2); // signed + OTP
   });
 
+  it('re-arms the low-prekey signal once replenished to the threshold', async () => {
+    mockDeviceFindFirst.mockResolvedValue(ACTIVE_DEVICE);
+    setupOtpCount(50); // post-upload recount lands at or above the threshold
+    setupInsertChain();
+
+    const res = await request(makeApp()).post('/devices/device-1/prekeys').send(VALID_BODY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.oneTimePreKeysRemaining).toBe(50);
+    expect(mockReleaseLatch).toHaveBeenCalledWith('device-1');
+  });
+
+  it('leaves the signal armed when still below the threshold after upload', async () => {
+    mockDeviceFindFirst.mockResolvedValue(ACTIVE_DEVICE);
+    setupOtpCount(3);
+    setupInsertChain();
+
+    const res = await request(makeApp()).post('/devices/device-1/prekeys').send(VALID_BODY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.oneTimePreKeysRemaining).toBe(3);
+    expect(mockReleaseLatch).not.toHaveBeenCalled();
+  });
+
   it('trims the OTP batch to the remaining cap space', async () => {
     mockDeviceFindFirst.mockResolvedValue(ACTIVE_DEVICE);
     setupOtpCount(199); // 1 slot left
@@ -200,5 +232,23 @@ describe('POST /devices/:id/prekeys', () => {
     expect(res.status).toBe(200);
     expect(res.body.uploadedOneTimePreKeys).toBe(1); // capped at 1
     expect(res.body.capped).toBe(true);
+  });
+
+  // Replenishment threshold boundary (issue: Signal invariant assertions) —
+  // the cap check must be an exact `<=` on remaining slots, not off-by-one
+  // in either direction: a batch that exactly fits the remaining space must
+  // upload in full and NOT be reported as capped.
+  it('replenishes exactly up to the cap boundary without marking it capped', async () => {
+    mockDeviceFindFirst.mockResolvedValue(ACTIVE_DEVICE);
+    setupOtpCount(199); // exactly 1 slot left
+    setupInsertChain();
+
+    const res = await request(makeApp())
+      .post('/devices/device-1/prekeys')
+      .send({ ...VALID_BODY, oneTimePreKeys: [VALID_BODY.oneTimePreKeys[0]!] }); // sends exactly 1 OTP
+
+    expect(res.status).toBe(200);
+    expect(res.body.uploadedOneTimePreKeys).toBe(1);
+    expect(res.body.capped).toBe(false);
   });
 });

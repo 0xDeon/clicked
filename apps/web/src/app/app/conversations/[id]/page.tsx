@@ -1,13 +1,37 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Fingerprint, RefreshCw, ShieldCheck, X } from 'lucide-react';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  FileUp,
+  Fingerprint,
+  RefreshCw,
+  ShieldCheck,
+  X,
+} from 'lucide-react';
 import { useParams } from 'next/navigation';
 import { API_BASE_URL } from '@/lib/api';
 import { useSocket } from '@/hooks/useSocket';
+import { emitSocketEnvelope } from '@/lib/realtime';
 import { useAuth } from '@/components/auth/useAuth';
 import { Avatar } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';
+import TransferCard from '@/components/chat/TransferCard';
+import { clearSessionKeys } from '@/lib/crypto/sessionStore';
+import { sessionStore } from '@/lib/sessionStore';
+
+import { useInboundPipeline } from '@/hooks/useInboundPipeline';
+import { sendEncryptedMessage, fetchConversationDevices } from '@/lib/crypto';
+import type { InboundMessage } from '@/lib/crypto/types';
+import {
+  sendEncryptedFile,
+  downloadAndDecryptFile,
+  parseFileMessagePayload,
+} from '@/lib/fileEncryption';
+import { generateEncryptedThumbnail } from '@/lib/thumbnail';
+import { EncryptedThumbnail } from '@/components/messaging/EncryptedThumbnail';
+import { UnavailableMessagePlaceholder } from '@/components/messaging/UnavailableMessagePlaceholder';
 
 type Wallet = {
   address?: string;
@@ -36,9 +60,21 @@ type Message = {
   content?: string | null;
   ciphertext?: string | null;
   contentType?: string | null;
+  /** Structured metadata for system messages; null for every other type. */
+  systemPayload?: { userId?: string; change?: string } | null;
   createdAt: string;
   sender?: Sender;
   unavailable?: boolean;
+  /** File message payload (decrypted envelope plaintext for file messages) */
+  filePayload?: {
+    fileId: string;
+    fileName: string;
+    mimeType: string;
+    size: number;
+    fileKey: string;
+    iv: string;
+    thumbnail?: { fileId: string; fileKey: string; iv: string; mimeType: string };
+  };
 };
 
 type Conversation = {
@@ -131,11 +167,58 @@ function writeVerification(userId: string, fingerprint: string) {
   return record;
 }
 
+const SYSTEM_EVENT_LABELS: Record<string, string> = {
+  device_added: 'A new device was added',
+  device_revoked: 'A device was revoked',
+};
+
+function systemMessageBody(message: Message) {
+  const change = message.systemPayload?.change;
+  if (change) return SYSTEM_EVENT_LABELS[change] ?? 'System event';
+  return message.content ?? 'System event';
+}
+
 function messageBody(message: Message) {
   if (message.unavailable) return 'Encrypted message unavailable on this device';
-  if (message.contentType === 'system')
-    return message.content ?? message.ciphertext ?? 'System event';
+  // System messages carry structured metadata in `systemPayload`; `ciphertext`
+  // is always null for them and must never be rendered as body text.
+  if (message.contentType === 'system') return systemMessageBody(message);
+  if (message.contentType === 'file' && message.filePayload) {
+    return `📎 ${message.filePayload.fileName}`;
+  }
+  if (message.contentType === 'image' && message.filePayload) {
+    return `🖼️ ${message.filePayload.fileName}`;
+  }
+  if (message.contentType === 'video' && message.filePayload) {
+    return `🎬 ${message.filePayload.fileName}`;
+  }
   return message.content ?? message.ciphertext ?? 'Encrypted message';
+}
+
+type TransferPayload = {
+  amount: number;
+  token?: string;
+  txHash: string;
+};
+
+function parseTransferPayload(message: Message): TransferPayload | null {
+  if (message.unavailable) return null;
+  const raw = message.content ?? message.ciphertext;
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<TransferPayload> & { type?: string };
+    if (parsed?.type !== 'transfer' || typeof parsed.txHash !== 'string') return null;
+    const amount = typeof parsed.amount === 'number' ? parsed.amount : Number(parsed.amount);
+    if (!Number.isFinite(amount)) return null;
+    return {
+      amount,
+      token: typeof parsed.token === 'string' ? parsed.token : undefined,
+      txHash: parsed.txHash,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function isRelevantKeyChangeEvent(payload: unknown, userIds: Set<string>, conversationId: string) {
@@ -169,6 +252,85 @@ export default function ConversationPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [sendText, setSendText] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const { messages: inboundMessages } = useInboundPipeline({
+    socket,
+    token,
+    conversationId: id,
+  });
+
+  const allMessages = useMemo(() => {
+    const inboundById = new Map<string, InboundMessage>();
+    for (const m of inboundMessages) {
+      if (!inboundById.has(m.messageId)) inboundById.set(m.messageId, m);
+    }
+
+    const merged: Message[] = [];
+    for (const msg of messages) {
+      const inbound = inboundById.get(msg.id);
+      if (inbound && inbound.status === 'decrypted' && inbound.plaintext) {
+        let filePayload: Message['filePayload'];
+        if (msg.contentType === 'file' || msg.contentType === 'image' || msg.contentType === 'video') {
+          try {
+            filePayload = parseFileMessagePayload(inbound.plaintext);
+          } catch {
+            // Not a valid file payload, treat as text
+          }
+        }
+        merged.push({
+          ...msg,
+          content: inbound.plaintext,
+          filePayload,
+          unavailable: false,
+        });
+      } else if (inbound && inbound.status === 'unavailable') {
+        merged.push({ ...msg, unavailable: true });
+      } else {
+        merged.push(msg);
+      }
+    }
+
+    for (const inbound of inboundMessages) {
+      const exists = merged.some((m) => m.id === inbound.messageId);
+      if (!exists) {
+        if (inbound.status === 'decrypted' && inbound.plaintext) {
+          let filePayload: Message['filePayload'];
+          if (inbound.contentType === 'file' || inbound.contentType === 'image' || inbound.contentType === 'video') {
+            try {
+              filePayload = parseFileMessagePayload(inbound.plaintext);
+            } catch {
+              // Not a valid file payload
+            }
+          }
+          merged.push({
+            id: inbound.messageId,
+            conversationId: inbound.conversationId,
+            senderId: inbound.senderId,
+            content: inbound.plaintext,
+            contentType: inbound.contentType,
+            createdAt: inbound.createdAt,
+            filePayload,
+          });
+        } else if (inbound.status === 'unavailable') {
+          merged.push({
+            id: inbound.messageId,
+            conversationId: inbound.conversationId,
+            senderId: inbound.senderId,
+            contentType: inbound.contentType,
+            createdAt: inbound.createdAt,
+            unavailable: true,
+          });
+        }
+      }
+    }
+
+    return merged.sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+    );
+  }, [messages, inboundMessages]);
 
   const contacts = useMemo(() => {
     const members = conversation?.members ?? [];
@@ -305,23 +467,14 @@ export default function ConversationPage() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length]);
+  }, [allMessages.length]);
 
   useEffect(() => {
     if (!socket) return;
 
-    socket.emit('join_room', { conversationId: id });
+    emitSocketEnvelope(socket, 'join_room', { conversationId: id });
 
-    function onNewMessage(message: Message) {
-      if (message.conversationId === id) {
-        setMessages((prev) => [...prev, message]);
-      }
-    }
-
-    socket.on('new_message', onNewMessage);
-    return () => {
-      socket.off('new_message', onNewMessage);
-    };
+    return () => {};
   }, [id, socket]);
 
   useEffect(() => {
@@ -336,6 +489,9 @@ export default function ConversationPage() {
           : typeof record.contactId === 'string'
             ? record.contactId
             : (record.subjectUserId as string);
+
+      clearSessionKeys();
+      void sessionStore.clear();
 
       setSafetyByUser((prev) => ({
         ...prev,
@@ -363,6 +519,79 @@ export default function ConversationPage() {
       eventNames.forEach((eventName) => socket.off(eventName, handleKeyChange));
     };
   }, [contactIds, id, loadSafetyNumber, socket]);
+
+  async function handleSendEncrypted() {
+    if (!sendText.trim() || !socket || !token) return;
+    setSending(true);
+    try {
+      const messageId = crypto.randomUUID();
+      await sendEncryptedMessage({
+        conversationId: id,
+        messageId,
+        plaintext: sendText.trim(),
+        contentType: 'text',
+        authToken: token,
+        apiBaseUrl: API_BASE_URL,
+      });
+      socket.emit('send_message', {
+        conversationId: id,
+        messageId,
+        content: sendText.trim(),
+      });
+      setSendText('');
+    } catch (err) {
+      console.error('Failed to send encrypted message:', err);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleSendFile() {
+    const file = fileInputRef.current?.files?.[0];
+    if (!file || !token || !socket) return;
+    setSending(true);
+    try {
+      const messageId = crypto.randomUUID();
+      const devices = await fetchConversationDevices(id, token, API_BASE_URL);
+      const thumbnail = await generateEncryptedThumbnail({ file, authToken: token, apiBaseUrl: API_BASE_URL });
+      const result = await sendEncryptedFile({
+        file,
+        conversationId: id,
+        messageId,
+        devices,
+        thumbnail: thumbnail ?? undefined,
+        authToken: token,
+        apiBaseUrl: API_BASE_URL,
+      });
+      socket.emit('send_file_message', {
+        conversationId: id,
+        messageId,
+        fileId: result.fileId,
+        contentType: file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : 'file',
+        envelopes: result.envelopes,
+      });
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch (err) {
+      console.error('Failed to send encrypted file:', err);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function handleFileDownload(message: Message) {
+    if (!message.filePayload || !token) return;
+    const { fileId, fileKey, iv, mimeType, fileName } = message.filePayload;
+    downloadAndDecryptFile(fileId, fileKey, iv, mimeType, token, API_BASE_URL)
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        a.click();
+        URL.revokeObjectURL(url);
+      })
+      .catch((err) => console.error('File download failed:', err));
+  }
 
   function verifyContact(userId: string) {
     const state = safetyByUser[userId];
@@ -441,7 +670,7 @@ export default function ConversationPage() {
         ) : null}
 
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
-          {messages.length === 0 ? (
+          {allMessages.length === 0 ? (
             <EmptyState
               icon="."
               title="No messages yet"
@@ -449,9 +678,10 @@ export default function ConversationPage() {
             />
           ) : (
             <div className="space-y-4">
-              {messages.map((message) => {
+              {allMessages.map((message) => {
                 const isSelf = message.senderId === currentUser?.id;
                 const senderName = message.sender?.username ?? 'Unknown';
+                const transfer = parseTransferPayload(message);
 
                 return (
                   <div
@@ -467,15 +697,51 @@ export default function ConversationPage() {
                       {!isSelf ? (
                         <p className="mb-1 px-1 text-xs text-foreground/45">{senderName}</p>
                       ) : null}
-                      <div
-                        className={`rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-                          isSelf
-                            ? 'rounded-br-sm bg-accent text-white'
-                            : 'rounded-bl-sm border border-border bg-background/60 text-foreground/90'
-                        }`}
-                      >
-                        {messageBody(message)}
-                      </div>
+                      {transfer ? (
+                        <TransferCard
+                          amount={transfer.amount}
+                          token={transfer.token}
+                          txHash={transfer.txHash}
+                        />
+                      {message.unavailable ? (
+                        <UnavailableMessagePlaceholder reason="undecryptable" />
+                      ) : message.filePayload &&
+                        (message.contentType === 'image' || message.contentType === 'video') ? (
+                        <div className="space-y-1">
+                          <EncryptedThumbnail
+                            thumbnail={message.filePayload.thumbnail}
+                            authToken={token ?? ''}
+                            apiBaseUrl={API_BASE_URL}
+                            alt={message.filePayload.fileName}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleFileDownload(message)}
+                            className="text-xs text-accent underline"
+                          >
+                            Download {message.filePayload.fileName}
+                          </button>
+                        </div>
+                      ) : message.filePayload && message.contentType === 'file' ? (
+                        <button
+                          type="button"
+                          onClick={() => handleFileDownload(message)}
+                          className="flex items-center gap-2 rounded-2xl border border-border bg-background/60 px-4 py-3 text-sm text-foreground/90 hover:bg-background/80"
+                        >
+                          <FileUp className="h-4 w-4" />
+                          {message.filePayload.fileName}
+                        </button>
+                      ) : (
+                        <div
+                          className={`rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+                            isSelf
+                              ? 'rounded-br-sm bg-accent text-white'
+                              : 'rounded-bl-sm border border-border bg-background/60 text-foreground/90'
+                          }`}
+                        >
+                          {messageBody(message)}
+                        </div>
+                      )}
                       <p className="mt-1 px-1 text-[10px] text-foreground/35">
                         {formatTime(message.createdAt)}
                       </p>
@@ -486,6 +752,45 @@ export default function ConversationPage() {
               <div ref={bottomRef} />
             </div>
           )}
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2 border-t border-border bg-card/60 px-5 py-3">
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            onChange={handleSendFile}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="rounded-full p-2 text-foreground/50 transition-colors hover:bg-background/70 hover:text-foreground"
+            title="Attach file"
+            disabled={sending}
+          >
+            <FileUp className="h-5 w-5" />
+          </button>
+          <input
+            className="flex-1 rounded-full border border-border bg-background/40 px-4 py-2 text-sm text-foreground placeholder-foreground/40 focus:border-accent focus:outline-none"
+            placeholder="Type a message..."
+            value={sendText}
+            onChange={(e) => setSendText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                void handleSendEncrypted();
+              }
+            }}
+            disabled={sending}
+          />
+          <button
+            type="button"
+            onClick={() => void handleSendEncrypted()}
+            disabled={!sendText.trim() || sending}
+            className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Send
+          </button>
         </div>
       </section>
 

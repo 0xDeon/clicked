@@ -1,5 +1,5 @@
 import type { Server } from 'socket.io';
-import { and, eq, lt, desc, sql, inArray, isNull, ne, or } from 'drizzle-orm';
+import { and, eq, lt, desc, sql, inArray, isNull, or, lte } from 'drizzle-orm';
 
 import { db } from '../db/index.js';
 import {
@@ -7,41 +7,55 @@ import {
   conversationMembers,
   messages,
   messageEnvelopes,
-  devices,
   files,
+  users,
 } from '../db/schema.js';
 import type { AuthSocket } from '../middleware/socketAuth.js';
 import { invalidateConversationCaches } from '../lib/conversationCache.js';
 import { serializeMessage } from '../lib/messages.js';
 import { redis } from '../lib/redis.js';
-import { sendPushForMessage } from '../services/push.js';
+import {
+  buildBroadcastEnvelopes,
+  findMissingSiblingDeviceIds,
+  insertMessageEnvelopes,
+} from '../lib/messageFanout.js';
 import { validateMessagePayload } from '../lib/validateMessagePayload.js';
+import { checkEnvelopeSizes } from '../services/rateLimit.js';
 import { dispatchOfflinePush, FILE_CONTENT_TYPES } from '../services/pushNotification.js';
 import { deliverMessage } from '../services/deliveryPipeline.js';
 import { publishEphemeral, readMissedEvents } from '../services/resumeStream.js';
 import { handleDeviceDeliveryReceipt } from '../services/deliveryAggregation.js';
 import { conversationRoom } from '../services/roomManager.js';
 import { checkEnvelopeProtocols, type E2eeProtocol } from '../services/e2eeProtocol.js';
+import { BASELINE_PROTOCOL } from '../lib/capabilities.js';
+import { applyMlsVisibility } from '../lib/mlsVisibility.js';
+import { getConversationEpochWindow } from '../services/mlsGroups.js';
+import { handleHeartbeat } from '../services/heartbeat.js';
+import { cleanupStaleSockets } from '../services/presence.js';
 import { EventDispatcher } from './dispatcher.js';
+import { findForbiddenSessionStateField } from '../lib/signalInvariants.js';
+import { checkFirstContactLimit } from '../services/rateLimit.js';
 
 const PAGE_SIZE = 30;
 
-/**
- * Returns the UUIDs of all active (non-revoked) devices that belong to
- * `userId` but are NOT the sending device (`senderDeviceId`). These are the
- * "sibling" devices that must each receive their own envelope so they can
- * decrypt the message locally. Issue #188.
- */
-async function fetchSiblingDeviceIds(userId: string, senderDeviceId: string): Promise<string[]> {
-  const siblings = await db.query.devices.findMany({
-    where: and(
-      eq(devices.userId, userId),
-      ne(devices.id, senderDeviceId),
-      isNull(devices.revokedAt),
-    ),
-    columns: { id: true },
+async function findUsersBlockingConversationAccess(
+  type: 'dm' | 'group',
+  memberIds: string[],
+): Promise<string[]> {
+  if (memberIds.length === 0) return [];
+
+  const invitedUsers = await db.query.users.findMany({
+    where: inArray(users.id, memberIds),
+    columns: {
+      id: true,
+      allowDirectMessages: true,
+      allowGroupInvites: true,
+    },
   });
-  return siblings.map((d) => d.id);
+
+  return invitedUsers
+    .filter((user) => (type === 'dm' ? !user.allowDirectMessages : !user.allowGroupInvites))
+    .map((user) => user.id);
 }
 
 export function registerMessagingHandlers(io: Server, socket: AuthSocket): void {
@@ -66,6 +80,15 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     typingTimers.clear();
   });
 
+  // ── heartbeat ──────────────────────────────────────────────────────────────
+  dispatcher.register('heartbeat', async () => {
+    const deviceId = socket.auth!.deviceId;
+    await handleHeartbeat(socket, userId, deviceId, redis);
+    if (redis) {
+      await cleanupStaleSockets(io, redis, userId, socket.id);
+    }
+  });
+
   // ── join_room ──────────────────────────────────────────────────────────────
   dispatcher.register('join_room', async (payload) => {
     const { conversationId } = payload as { conversationId: string };
@@ -88,6 +111,18 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
 
   // ── send_message ───────────────────────────────────────────────────────────
   dispatcher.register('send_message', async (payload) => {
+    // Signal invariant: the server never accepts session/ratchet/private-key
+    // state, only opaque ciphertext and public routing metadata.
+    const forbiddenField = findForbiddenSessionStateField(payload);
+    if (forbiddenField) {
+      socket.emit('error', {
+        event: 'send_message',
+        code: 400,
+        message: `Field "${forbiddenField}" is not permitted: the server never stores session or private-key state`,
+      });
+      return;
+    }
+
     const {
       conversationId,
       messageId,
@@ -96,6 +131,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       ciphertext,
       envelopes,
       fileId: inputFileId,
+      mlsEpoch,
     } = payload as {
       conversationId: string;
       messageId?: string;
@@ -108,6 +144,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         protocol?: E2eeProtocol;
       }>;
       fileId?: string;
+      mlsEpoch?: number;
     };
     const deviceId = socket.auth!.deviceId;
 
@@ -140,12 +177,23 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       ciphertext: effectiveCiphertext,
       envelopes,
       fileId: inputFileId,
+      mlsEpoch,
     });
     if (!validation.ok) {
       socket.emit('error', {
         event: 'send_message',
         code: validation.code,
         message: validation.message,
+      });
+      return;
+    }
+
+    const envelopeSizeCheck = checkEnvelopeSizes(envelopes);
+    if (!envelopeSizeCheck.valid) {
+      socket.emit('error', {
+        event: 'send_message',
+        code: 'envelope_too_large',
+        message: `Envelope for device ${envelopeSizeCheck.oversizedDeviceId} exceeds size limit`,
       });
       return;
     }
@@ -172,28 +220,27 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       return;
     }
 
-    // Enforce full sibling-device coverage (#188).
-    const siblingIds = await fetchSiblingDeviceIds(userId, deviceId);
-    if (siblingIds.length > 0) {
-      const providedIds = new Set(envelopes?.map((e) => e.recipientDeviceId) ?? []);
-      const missing = siblingIds.filter((id) => !providedIds.has(id));
-      if (missing.length > 0) {
-        socket.emit('error', {
-          event: 'device_set_mismatch',
-          message: `Missing envelopes for ${missing.length} sibling device(s)`,
-          missingDeviceIds: missing,
-        });
-        return;
-      }
+    // Enforce full sibling-device coverage (#188). MLS group messages are
+    // exempt (#372): a single group ciphertext already reaches every member
+    // device in the tree, so there are no per-device envelopes to be missing.
+    const missingSiblings =
+      mlsEpoch === undefined ? await findMissingSiblingDeviceIds(userId, deviceId, envelopes) : [];
+    if (missingSiblings.length > 0) {
+      socket.emit('error', {
+        event: 'device_set_mismatch',
+        message: `Missing envelopes for ${missingSiblings.length} sibling device(s)`,
+        missingDeviceIds: missingSiblings,
+      });
+      return;
     }
 
     // Enforce the negotiated E2EE protocol (#364) — same rule as POST /messages.
     if (envelopes && envelopes.length > 0) {
       const protocolCheck = await checkEnvelopeProtocols(
-        conversationId,
+        deviceId,
         envelopes.map((e) => ({
           recipientDeviceId: e.recipientDeviceId,
-          protocol: e.protocol ?? 'sealed_box',
+          protocol: e.protocol ?? BASELINE_PROTOCOL,
         })),
       );
 
@@ -202,8 +249,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
           event: 'protocol_mismatch',
           code: protocolCheck.code,
           message: protocolCheck.error,
-          negotiatedProtocol: protocolCheck.negotiated,
-          offendingDeviceIds: protocolCheck.offendingDeviceIds,
+          violations: protocolCheck.violations,
         });
         return;
       }
@@ -240,32 +286,11 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
             contentType: resolvedContentType,
             ciphertext: effectiveCiphertext || null,
             fileId: fileId,
+            mlsEpoch: mlsEpoch ?? null,
           })
           .returning();
 
-        if (envelopes && envelopes.length > 0) {
-          const deviceIds = envelopes.map((e) => e.recipientDeviceId);
-          const devicesList = await tx.query.devices.findMany({
-            where: inArray(devices.id, deviceIds),
-            columns: { id: true, userId: true },
-          });
-          const deviceToUser = new Map(devicesList.map((d) => [d.id, d.userId]));
-
-          const validEnvelopes = envelopes
-            .filter((env) => deviceToUser.has(env.recipientDeviceId))
-            .map((env) => ({
-              messageId,
-              recipientDeviceId: env.recipientDeviceId,
-              recipientUserId: deviceToUser.get(env.recipientDeviceId)!,
-              ciphertext: env.ciphertext,
-              protocol: env.protocol ?? ('sealed_box' as const),
-            }));
-
-          if (validEnvelopes.length > 0) {
-            await tx.insert(messageEnvelopes).values(validEnvelopes);
-            recipientDeviceIds = validEnvelopes.map((e) => e.recipientDeviceId);
-          }
-        }
+        recipientDeviceIds = await insertMessageEnvelopes(tx, messageId, envelopes);
 
         return insertedMessage!;
       });
@@ -284,12 +309,24 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         columns: { userId: true },
       });
       await invalidateConversationCaches(members.map((m) => m.userId));
-      void dispatchOfflinePush(conversationId, messageId, recipientDeviceIds);
+      void dispatchOfflinePush(conversationId, messageId, recipientDeviceIds, userId);
     }
   });
 
   // ── edit_message ───────────────────────────────────────────────────────────
   dispatcher.register('edit_message', async (payload) => {
+    // Signal invariant: the server never accepts session/ratchet/private-key
+    // state, only opaque ciphertext and public routing metadata.
+    const forbiddenField = findForbiddenSessionStateField(payload);
+    if (forbiddenField) {
+      socket.emit('error', {
+        event: 'edit_message',
+        code: 400,
+        message: `Field "${forbiddenField}" is not permitted: the server never stores session or private-key state`,
+      });
+      return;
+    }
+
     const { originalMessageId, messageId, contentType, ciphertext, envelopes } = payload as {
       originalMessageId: string;
       messageId: string;
@@ -311,6 +348,16 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       socket.emit('error', {
         event: 'edit_message',
         message: 'Content (envelope ciphertext) must not be empty',
+      });
+      return;
+    }
+
+    const envelopeSizeCheck = checkEnvelopeSizes(envelopes);
+    if (!envelopeSizeCheck.valid) {
+      socket.emit('error', {
+        event: 'edit_message',
+        code: 'envelope_too_large',
+        message: `Envelope for device ${envelopeSizeCheck.oversizedDeviceId} exceeds size limit`,
       });
       return;
     }
@@ -343,18 +390,14 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     }
 
     // Enforce full sibling-device coverage (#188).
-    const siblingIds = await fetchSiblingDeviceIds(userId, deviceId);
-    if (siblingIds.length > 0) {
-      const providedIds = new Set(envelopes?.map((e) => e.recipientDeviceId) ?? []);
-      const missing = siblingIds.filter((id) => !providedIds.has(id));
-      if (missing.length > 0) {
-        socket.emit('error', {
-          event: 'device_set_mismatch',
-          message: `Missing envelopes for ${missing.length} sibling device(s)`,
-          missingDeviceIds: missing,
-        });
-        return;
-      }
+    const missingSiblings = await findMissingSiblingDeviceIds(userId, deviceId, envelopes);
+    if (missingSiblings.length > 0) {
+      socket.emit('error', {
+        event: 'device_set_mismatch',
+        message: `Missing envelopes for ${missingSiblings.length} sibling device(s)`,
+        missingDeviceIds: missingSiblings,
+      });
+      return;
     }
 
     const rootMessageId = original.editsMessageId ?? original.id;
@@ -376,28 +419,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
           })
           .returning();
 
-        if (envelopes && envelopes.length > 0) {
-          const deviceIds = envelopes.map((e) => e.recipientDeviceId);
-          const devicesList = await tx.query.devices.findMany({
-            where: inArray(devices.id, deviceIds),
-            columns: { id: true, userId: true },
-          });
-          const deviceToUser = new Map(devicesList.map((d) => [d.id, d.userId]));
-
-          const validEnvelopes = envelopes
-            .filter((env) => deviceToUser.has(env.recipientDeviceId))
-            .map((env) => ({
-              messageId,
-              recipientDeviceId: env.recipientDeviceId,
-              recipientUserId: deviceToUser.get(env.recipientDeviceId)!,
-              ciphertext: env.ciphertext,
-              protocol: (env as { protocol?: E2eeProtocol }).protocol ?? ('sealed_box' as const),
-            }));
-
-          if (validEnvelopes.length > 0) {
-            await tx.insert(messageEnvelopes).values(validEnvelopes);
-          }
-        }
+        await insertMessageEnvelopes(tx, messageId, envelopes);
 
         return insertedMessage!;
       });
@@ -425,15 +447,32 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
   });
 
   // ── send_file_message ──────────────────────────────────────────────────────
+  // Issue #347: routes through the same deliverMessage pipeline send_message
+  // uses, so file messages get identical per-device receipts, resume/sync
+  // backfill, and fan-out validation. `content` is the message-body envelope
+  // ciphertext (as before); `envelopes` carries the file's symmetric
+  // encryption key, individually sealed per recipient device — the key is
+  // never accepted or stored as a server-visible plaintext field, only
+  // inside each envelope's opaque ciphertext.
   socket.on(
     'send_file_message',
     async (payload: {
       conversationId: string;
+      messageId?: string;
       fileId: string;
       content: string;
+      ciphertext?: string;
       contentType: 'file' | 'image' | 'video' | 'audio';
     }) => {
-      const { conversationId, fileId, content, contentType } = payload;
+      const { conversationId, messageId, fileId, content, contentType } = payload;
+
+      if (!messageId) {
+        socket.emit('error', {
+          event: 'send_file_message',
+          message: 'messageId is required',
+        });
+        return;
+      }
 
       if (!content?.trim()) {
         socket.emit('error', {
@@ -464,6 +503,16 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
           event: 'send_file_message',
           message: 'Not a member of this conversation',
         });
+        return;
+      }
+
+      const existing = await db.query.messages.findFirst({
+        where: eq(messages.id, messageId),
+        columns: { createdAt: true },
+      });
+
+      if (existing) {
+        socket.emit('message_ack', { messageId, createdAt: existing.createdAt });
         return;
       }
 
@@ -506,6 +555,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
           const [insertedMessage] = await tx
             .insert(messages)
             .values({
+              id: messageId,
               conversationId,
               senderId: userId,
               ciphertext: content.trim(),
@@ -526,6 +576,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       }
 
       if (message) {
+        socket.emit('message_ack', { messageId, createdAt: message.createdAt });
         io.to(conversationId).emit('new_message', message);
 
         const members = await db.query.conversationMembers.findMany({
@@ -594,9 +645,21 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       },
     });
 
+    // #372 — same MLS epoch visibility rule as GET /conversations/:id/messages:
+    // messages outside this device's membership window come back as
+    // placeholders instead of undecryptable ciphertext.
+    const { hasGroup, window } = await getConversationEpochWindow(
+      conversationId,
+      socket.auth!.deviceId,
+    );
+
     socket.emit('message_history', {
       conversationId,
-      messages: history.reverse().map((message) => serializeMessage(message)),
+      messages: history
+        .reverse()
+        .map((message) =>
+          serializeMessage(hasGroup ? applyMlsVisibility(message, window) : message),
+        ),
     });
   });
 
@@ -636,29 +699,48 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       conversationId: string;
       lastReadMessageId: string;
     };
+    const deviceId = socket.auth!.deviceId;
 
-    const membership = await db.query.conversationMembers.findFirst({
-      where: and(
-        eq(conversationMembers.conversationId, conversationId),
-        eq(conversationMembers.userId, userId),
-      ),
-    });
+    const [user, membership] = await Promise.all([
+      db.query.users.findFirst({
+        where: eq(users.id, userId),
+        columns: { sendReadReceipts: true },
+      }),
+      db.query.conversationMembers.findFirst({
+        where: and(
+          eq(conversationMembers.conversationId, conversationId),
+          eq(conversationMembers.userId, userId),
+        ),
+      }),
+    ]);
 
     if (!membership) {
       socket.emit('error', { event: 'message_read', message: 'Not a member of this conversation' });
       return;
     }
 
-    const message = await db.query.messages.findFirst({
+    const newMessage = await db.query.messages.findFirst({
       where: and(eq(messages.id, lastReadMessageId), eq(messages.conversationId, conversationId)),
     });
 
-    if (!message) {
+    if (!newMessage) {
       socket.emit('error', {
         event: 'message_read',
         message: 'Message not found in conversation',
       });
       return;
+    }
+
+    // Monotonicity check: only advance lastReadMessageId
+    if (membership.lastReadMessageId) {
+      const lastReadMessage = await db.query.messages.findFirst({
+        where: eq(messages.id, membership.lastReadMessageId),
+        columns: { createdAt: true },
+      });
+
+      if (lastReadMessage && newMessage.createdAt <= lastReadMessage.createdAt) {
+        return; // Stale or backwards update, ignore
+      }
     }
 
     await db
@@ -671,11 +753,41 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         ),
       );
 
-    io.to(conversationId).volatile.emit('read_receipt', {
+    // Stamp readAt on all envelopes for this device up to the read point
+    const messagesToUpdate = await db.query.messages.findMany({
+      where: and(
+        eq(messages.conversationId, conversationId),
+        lte(messages.createdAt, newMessage.createdAt),
+      ),
+      columns: { id: true },
+    });
+
+    if (messagesToUpdate.length > 0) {
+      const messageIds = messagesToUpdate.map((m) => m.id);
+      await db
+        .update(messageEnvelopes)
+        .set({ readAt: new Date() })
+        .where(
+          and(
+            eq(messageEnvelopes.recipientDeviceId, deviceId),
+            inArray(messageEnvelopes.messageId, messageIds),
+            isNull(messageEnvelopes.readAt),
+          ),
+        );
+    }
+
+    // Privacy check: only broadcast if user has read receipts enabled
+    if (!user?.sendReadReceipts) {
+      return;
+    }
+
+    const receipt = {
       conversationId,
       userId,
       lastReadMessageId,
-    });
+    };
+
+    io.to(conversationId).volatile.emit('read_receipt', receipt);
 
     if (redis) {
       const members = await db.query.conversationMembers.findMany({
@@ -685,7 +797,7 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       await publishEphemeral(
         redis,
         members.map((member) => member.userId),
-        { type: 'read_receipt', data: { conversationId, userId, lastReadMessageId } },
+        { type: 'read_receipt', data: receipt },
       );
     }
   });
@@ -810,7 +922,36 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       memberIds: string[];
     };
 
-    const allMembers = Array.from(new Set([userId, ...memberIds]));
+    const requestedMembers = Array.from(
+      new Set(memberIds.filter((memberId) => memberId !== userId)),
+    );
+    const blockedMemberIds = await findUsersBlockingConversationAccess(type, requestedMembers);
+
+    if (blockedMemberIds.length > 0) {
+      socket.emit('error', {
+        event: 'create_conversation',
+        message:
+          type === 'dm'
+            ? 'One or more recipients are not accepting direct messages'
+            : 'One or more recipients are not accepting group invites',
+        blockedUserIds: blockedMemberIds,
+      });
+      return;
+    }
+
+    const allMembers = Array.from(new Set([userId, ...requestedMembers]));
+
+    // #378: throttle first-contact DM spam (e.g. mass unsolicited DMs)
+    if (type === 'dm') {
+      const dmCheck = await checkFirstContactLimit(redis, userId);
+      if (!dmCheck.allowed) {
+        socket.emit('error', {
+          event: 'create_conversation',
+          message: 'Too many new conversations. Please wait before starting another.',
+        });
+        return;
+      }
+    }
 
     const [conversation] = await db.insert(conversations).values({ type, name }).returning();
 
@@ -967,18 +1108,19 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       return;
     }
 
-    if (redis) {
-      const rlKey = `rl:ask_assistant:${userId}`;
-      const count = await redis.incr(rlKey);
-
-      if (count === 1) {
-        await redis.expire(rlKey, 60);
-      }
-
-      if (count > 5) {
-        socket.emit('error', { event: 'rate_limited', message: 'Rate limit exceeded' });
-        return;
-      }
+    // Budget lives in config/rateLimits.ts with every other limit (#375).
+    // Charged per user rather than per device: the cost being protected is the
+    // downstream AI call, which one account can run up from any device.
+    const assistantLimit = await consumeRateLimit('socket_ask_assistant', `user:${userId}`);
+    if (!assistantLimit.allowed) {
+      socket.emit('error', {
+        event: 'rate_limited',
+        message: 'Rate limit exceeded',
+        limitedEvent: 'ask_assistant',
+        limit: assistantLimit.limit,
+        retryAfterSeconds: assistantLimit.resetSeconds,
+      });
+      return;
     }
 
     try {
@@ -1010,6 +1152,25 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         ON CONFLICT DO NOTHING
       `);
 
+      // Membership is resolved before the insert so the reply can be fanned
+      // out to every active device of every member (and reused afterwards for
+      // cache invalidation).
+      const members = await db.query.conversationMembers.findMany({
+        where: eq(conversationMembers.conversationId, conversationId),
+        columns: { userId: true },
+      });
+
+      // A server-authored reply has no per-recipient key material, so every
+      // device's envelope necessarily carries the same content — same as the
+      // shared column did before. What changes is the fan-out *shape*: the
+      // reply now flows through message_envelopes like every other message.
+      // The sender's own devices are included: the assistant reply must reach
+      // all of them, not just the device that asked.
+      const replyEnvelopes = await buildBroadcastEnvelopes(
+        members.map((member) => member.userId),
+        data.reply,
+      );
+
       const replyMessage = await db.transaction(async (tx) => {
         const [inserted] = await tx
           .insert(messages)
@@ -1020,15 +1181,15 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
             ciphertext: data.reply,
           })
           .returning();
+
+        await insertMessageEnvelopes(tx, inserted!.id, replyEnvelopes);
+
         return inserted;
       });
 
-      io.to(conversationId).volatile.emit('new_message', replyMessage);
-
-      const members = await db.query.conversationMembers.findMany({
-        where: eq(conversationMembers.conversationId, conversationId),
-        columns: { userId: true },
-      });
+      if (replyMessage) {
+        await deliverMessage(io, replyMessage, conversationId);
+      }
 
       await invalidateConversationCaches(members.map((member) => member.userId));
     } catch (err) {

@@ -16,7 +16,11 @@
  */
 
 import type { DeviceRecord, MessageEnvelope } from './crypto.js';
-import { buildEnvelopes as phase1BuildEnvelopes, sealedBoxEncrypt } from './crypto.js';
+import {
+  assertDevicesTrusted,
+  buildEnvelopes as phase1BuildEnvelopes,
+  sealedBoxEncrypt,
+} from './crypto.js';
 
 // ─── Interface ────────────────────────────────────────────────────────────────
 
@@ -55,6 +59,9 @@ export interface SessionCrypto {
  */
 export class Phase1SessionCrypto implements SessionCrypto {
   async encryptToDevice(plaintext: string, device: DeviceRecord): Promise<string> {
+    // Session reset / re-handshake on key change: refuse to encrypt to a
+    // device whose identity key no longer matches what we last trusted.
+    assertDevicesTrusted([device]);
     return sealedBoxEncrypt(plaintext, device.identityPublicKey);
   }
 
@@ -66,12 +73,17 @@ export class Phase1SessionCrypto implements SessionCrypto {
 // ─── Phase-2 implementation (@signalapp/libsignal-client) ────────────────────
 
 /**
- * LibsignalSessionCrypto — wraps @signalapp/libsignal-client (Signal Protocol).
+ * LibsignalSessionCrypto — wraps signalClient.ts's Signal session layer
+ * (X3DH + per-device sessions today, @signalapp/libsignal-client once
+ * activated — see docs/signal-integration.md).
  *
  * The library is loaded lazily via a dynamic import so it does not bloat the
  * initial bundle for users who have not yet established a Signal session.
  *
- * Audit status and bundle-size analysis: see docs/signal-integration.md
+ * Requires `configureSignalClient({ myIdentity, fetchKeyBundle })`
+ * (signalClient.ts) to have been called once — e.g. during sign-in, right
+ * after getOrCreateDeviceIdentity() — before the first send; otherwise
+ * encryptToDevice/buildEnvelopes reject with a clear "not configured" error.
  *
  * This implementation satisfies the SessionCrypto interface; no callsite
  * changes are required when activating this path.
@@ -87,6 +99,12 @@ export class LibsignalSessionCrypto implements SessionCrypto {
    * production deployments.
    */
   async encryptToDevice(plaintext: string, device: DeviceRecord): Promise<string> {
+    // Session reset / re-handshake on key change: refuse to encrypt to a
+    // device whose identity key no longer matches what we last trusted.
+    // Must run before the dynamic import so a stale ratchet session never
+    // even gets the chance to encrypt under a superseded key.
+    assertDevicesTrusted([device]);
+
     // Dynamic import — tree-shake libsignal out of the initial bundle.
     // @signalapp/libsignal-client ships WASM; the dynamic import also avoids
     // SSR issues in Next.js since WASM cannot be initialised server-side.
@@ -95,6 +113,7 @@ export class LibsignalSessionCrypto implements SessionCrypto {
   }
 
   async buildEnvelopes(plaintext: string, devices: DeviceRecord[]): Promise<MessageEnvelope[]> {
+    assertDevicesTrusted(devices);
     const { SignalClient } = await import('./signalClient.js');
     return SignalClient.buildEnvelopes(plaintext, devices);
   }

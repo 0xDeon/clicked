@@ -1,14 +1,17 @@
 import { createHash } from 'node:crypto';
 import { Router } from 'express';
 import type { Request, Response, IRouter } from 'express';
-import rateLimit, { type RateLimitRequestHandler } from 'express-rate-limit';
+import type { RequestHandler } from 'express';
 import { Keypair } from '@stellar/stellar-sdk';
 import { db } from '../db/index.js';
 import { users, wallets, devices } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
 import { createNonce, consumeNonce } from '../lib/nonce.js';
 import { signToken } from '../lib/jwt.js';
+import { normalizeCapabilities } from '../lib/capabilities.js';
 import { validate } from '../middleware/validate.js';
+import { recordAuditEvent, requestContext } from '../services/auditLog.js';
+import { ipIdentifier, rateLimit } from '../middleware/rateLimit.js';
 import {
   ChallengeSchema,
   VerifySchema,
@@ -18,22 +21,15 @@ import {
 
 export const authRouter: IRouter = Router();
 
-const rateLimitedResponse = { error: 'Too many requests' };
-
-export const challengeLimiter: RateLimitRequestHandler = rateLimit({
-  windowMs: 60 * 1000,
-  limit: 10,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: rateLimitedResponse,
+// Both limiters are keyed on the client IP — there is no authenticated
+// identity yet — and are counted in Redis so the budget is shared across
+// every gateway node instead of being multiplied by the node count (#375).
+export const challengeLimiter: RequestHandler = rateLimit('auth_challenge', {
+  identifier: ipIdentifier,
 });
 
-export const verifyLimiter: RateLimitRequestHandler = rateLimit({
-  windowMs: 60 * 1000,
-  limit: 5,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: rateLimitedResponse,
+export const verifyLimiter: RequestHandler = rateLimit('auth_verify', {
+  identifier: ipIdentifier,
 });
 
 // Step 1: client requests a challenge nonce for a wallet address
@@ -61,14 +57,24 @@ authRouter.post(
     const deviceName = device?.deviceName;
     const platform = device?.platform;
     const registrationId = device?.registrationId;
-    // Signal capability is monotonic (#364): sign-in can raise it but never
-    // clear it, so a downgraded client cannot walk the conversation back onto
-    // the Phase-1 sealed box.
-    const supportsSignal = device?.supportsSignal;
+    const capabilities = device?.capabilities;
+
+    // Every failed sign-in is audited (#376). The wallet address is the only
+    // identity available before verification succeeds, and it is a public
+    // value, so it is safe to record as the target.
+    const auditFailure = (reason: string) =>
+      recordAuditEvent({
+        action: 'auth_failed',
+        ...requestContext(req),
+        targetType: 'wallet',
+        targetId: walletAddress,
+        metadata: { reason },
+      });
 
     // Validate and consume nonce
     const valid = consumeNonce(walletAddress, nonce);
     if (!valid) {
+      void auditFailure('invalid_or_expired_nonce');
       res.status(401).json({ error: 'Invalid or expired nonce' });
       return;
     }
@@ -89,10 +95,12 @@ authRouter.post(
         keypair.verify(freighterMessageBytes, base64SignatureBytes);
 
       if (!isValidSignature) {
+        void auditFailure('signature_verification_failed');
         res.status(401).json({ error: 'Signature verification failed' });
         return;
       }
     } catch {
+      void auditFailure('malformed_signature_or_wallet');
       res.status(401).json({ error: 'Invalid signature or wallet address' });
       return;
     }
@@ -126,6 +134,17 @@ authRouter.post(
 
     if (existingDevice) {
       if (existingDevice.revokedAt) {
+        // A revoked device still holding valid wallet credentials is the
+        // single most interesting failed sign-in there is.
+        void recordAuditEvent({
+          action: 'auth_failed',
+          ...requestContext(req),
+          subjectUserId: userId,
+          actorDeviceId: existingDevice.id,
+          targetType: 'device',
+          targetId: existingDevice.id,
+          metadata: { reason: 'device_revoked' },
+        });
         res.status(401).json({ error: 'Device has been revoked' });
         return;
       }
@@ -137,7 +156,9 @@ authRouter.post(
           ...(deviceName ? { deviceName } : {}),
           ...(platform ? { platform } : {}),
           ...(registrationId !== undefined ? { registrationId } : {}),
-          ...(supportsSignal === true ? { supportsSignal: true } : {}),
+          // A client re-verifying with a newer `capabilities` set is the
+          // "upgrade" path (#180-follow-on) — no re-registration needed.
+          ...(capabilities !== undefined ? { capabilities: normalizeCapabilities(capabilities) } : {}),
         })
         .where(eq(devices.id, deviceId));
     } else {
@@ -149,8 +170,8 @@ authRouter.post(
           deviceName: deviceName ?? null,
           platform: platform ?? null,
           registrationId: registrationId ?? null,
-          supportsSignal: supportsSignal ?? false,
           lastSeenAt: new Date(),
+          ...(capabilities !== undefined ? { capabilities: normalizeCapabilities(capabilities) } : {}),
         })
         .returning({ id: devices.id });
       if (!newDevice) {

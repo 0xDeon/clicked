@@ -83,8 +83,10 @@ export const SignatureSchema = z
   .superRefine(b64LengthRefinement(ED25519_SIG_BYTES, 'signature'));
 
 /**
- * No endpoint currently accepts MLS key packages — this schema exists so one
- * is ready to route through it as soon as such an endpoint is added.
+ * Validates a base64 TLS-serialised MLS KeyPackage. Used by
+ * `POST /devices/:id/mls-key-packages` (#365) — the size window is the only
+ * structural check the server can make without an MLS implementation, so the
+ * endpoint pairs it with device-ownership and expiry checks.
  */
 export const MlsKeyPackageSchema = z
   .string()
@@ -105,14 +107,22 @@ export const MlsKeyPackageSchema = z
 
 // ─── Composite schemas ────────────────────────────────────────────────────────
 
-export const PreKeyEntrySchema = z.object({
-  keyId: z.number().int().nonnegative(),
-  publicKey: PreKeyPublicKeySchema,
-});
+// `.strict()` is deliberate: these schemas gate every endpoint that accepts
+// key material, and any extra field (e.g. a client mistakenly/maliciously
+// attaching `privateKey` or `sessionState`) must fail validation (400) rather
+// than being silently stripped — the server never has a code path that reads
+// or stores private/session state, and these schemas are the enforcement
+// point for that invariant.
+export const PreKeyEntrySchema = z
+  .object({
+    keyId: z.number().int().nonnegative(),
+    publicKey: PreKeyPublicKeySchema,
+  })
+  .strict();
 
 export const SignedPreKeyEntrySchema = PreKeyEntrySchema.extend({
   signature: SignatureSchema,
-});
+}).strict();
 
 // ─── Signature verification ───────────────────────────────────────────────────
 

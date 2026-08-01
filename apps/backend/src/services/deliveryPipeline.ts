@@ -4,6 +4,8 @@ import { db } from '../db/index.js';
 import { conversationMembers, messageEnvelopes, devices } from '../db/schema.js';
 import type { Message } from '../db/schema.js';
 import { conversationRoom } from './roomManager.js';
+import { isMlsWelcomeContentType, mlsWelcomeTransport } from '../lib/mls.js';
+import { fanoutSize, deliveryLatency } from '../lib/metrics.js';
 
 /**
  * Room name for per-device targeting. Each socket joins this room on connect
@@ -23,12 +25,17 @@ export function deviceRoom(deviceId: string): string {
  *   3. Load persisted envelopes — only devices that have one get delivered.
  *   4. Emit message_envelope to each device's scoped room with its ciphertext.
  *   5. Emit new_message to the conversation room so clients update their UI.
+ *
+ * MLS Welcome payloads use this same pipeline. Their ciphertext is never
+ * inspected; the additional eventType only lets clients dispatch the payload
+ * to their MLS implementation.
  */
 export async function deliverMessage(
   io: Server,
   message: Message,
   conversationId: string,
 ): Promise<void> {
+  const deliveryStart = process.hrtime.bigint();
   // Step 1: re-validate membership from the source of truth.
   const members = await db
     .select({ userId: conversationMembers.userId })
@@ -37,9 +44,15 @@ export async function deliverMessage(
 
   if (members.length === 0) return;
 
+  // MLS Welcome messages ride the normal device-scoped delivery path but are
+  // tagged so the client routes them to the group-join handler rather than the
+  // timeline. The Welcome itself stays an opaque string.
+  const welcomeTransport = isMlsWelcomeContentType(message.contentType)
+    ? mlsWelcomeTransport()
+    : null;
+
   const userIds = members.map((m) => m.userId);
 
-  // Step 2: active devices only — revokedAt IS NULL.
   const activeDevices = await db
     .select({ id: devices.id, userId: devices.userId })
     .from(devices)
@@ -53,7 +66,6 @@ export async function deliverMessage(
 
   const activeDeviceIds = activeDevices.map((d) => d.id);
 
-  // Step 3: load envelopes already committed to the database.
   const envelopes = await db
     .select({
       id: messageEnvelopes.id,
@@ -70,8 +82,8 @@ export async function deliverMessage(
     );
 
   const envelopeByDevice = new Map(envelopes.map((e) => [e.recipientDeviceId, e]));
+  fanoutSize.observe(envelopeByDevice.size);
 
-  // Step 4: push each device exactly its envelope.
   for (const device of activeDevices) {
     const envelope = envelopeByDevice.get(device.id);
     if (!envelope) continue;
@@ -87,11 +99,10 @@ export async function deliverMessage(
       ciphertext: envelope.ciphertext,
       // #364 — tells the receiving device which decryption path to use.
       protocol: envelope.protocol,
+      ...(welcomeTransport ?? {}),
     });
   }
 
-  // Step 5: room-level notification so clients can update unread counts / UI.
-  // Ciphertext is intentionally omitted here; each device received it above.
   const newMessageEvent = {
     id: message.id,
     conversationId,
@@ -101,9 +112,12 @@ export async function deliverMessage(
     createdAt: message.createdAt,
     deletedAt: message.deletedAt,
     ciphertext: null,
+    ...(welcomeTransport ?? {}),
   };
 
-  // Emit to both direct conversation room (backward compatibility) and conversation room (optimized)
   io.to(conversationId).emit('new_message', newMessageEvent);
   io.to(conversationRoom(conversationId)).emit('new_message', newMessageEvent);
+
+  const deliverySeconds = Number(process.hrtime.bigint() - deliveryStart) / 1e9;
+  deliveryLatency.observe(deliverySeconds);
 }

@@ -150,6 +150,13 @@ pnpm test
 
 ---
 
+## 📚 Documentation
+
+- [Devices & Prekeys API](apps/backend/docs/api-devices.md) — every `/devices` and `/user-devices` route: request/response shapes, ownership checks, prekey upload contract, and revocation side effects
+- [E2EE Onboarding Sequence](apps/backend/docs/e2ee-onboarding.md) — device registration and prekey upload flow for first-contact DM setup
+
+---
+
 # 🤝 Contributing
 
 We welcome contributions from developers, designers, and researchers.
