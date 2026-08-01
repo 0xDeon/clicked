@@ -107,14 +107,22 @@ export const MlsKeyPackageSchema = z
 
 // ─── Composite schemas ────────────────────────────────────────────────────────
 
-export const PreKeyEntrySchema = z.object({
-  keyId: z.number().int().nonnegative(),
-  publicKey: PreKeyPublicKeySchema,
-});
+// `.strict()` is deliberate: these schemas gate every endpoint that accepts
+// key material, and any extra field (e.g. a client mistakenly/maliciously
+// attaching `privateKey` or `sessionState`) must fail validation (400) rather
+// than being silently stripped — the server never has a code path that reads
+// or stores private/session state, and these schemas are the enforcement
+// point for that invariant.
+export const PreKeyEntrySchema = z
+  .object({
+    keyId: z.number().int().nonnegative(),
+    publicKey: PreKeyPublicKeySchema,
+  })
+  .strict();
 
 export const SignedPreKeyEntrySchema = PreKeyEntrySchema.extend({
   signature: SignatureSchema,
-});
+}).strict();
 
 // ─── Signature verification ───────────────────────────────────────────────────
 

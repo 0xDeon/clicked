@@ -233,4 +233,22 @@ describe('POST /devices/:id/prekeys', () => {
     expect(res.body.uploadedOneTimePreKeys).toBe(1); // capped at 1
     expect(res.body.capped).toBe(true);
   });
+
+  // Replenishment threshold boundary (issue: Signal invariant assertions) —
+  // the cap check must be an exact `<=` on remaining slots, not off-by-one
+  // in either direction: a batch that exactly fits the remaining space must
+  // upload in full and NOT be reported as capped.
+  it('replenishes exactly up to the cap boundary without marking it capped', async () => {
+    mockDeviceFindFirst.mockResolvedValue(ACTIVE_DEVICE);
+    setupOtpCount(199); // exactly 1 slot left
+    setupInsertChain();
+
+    const res = await request(makeApp())
+      .post('/devices/device-1/prekeys')
+      .send({ ...VALID_BODY, oneTimePreKeys: [VALID_BODY.oneTimePreKeys[0]!] }); // sends exactly 1 OTP
+
+    expect(res.status).toBe(200);
+    expect(res.body.uploadedOneTimePreKeys).toBe(1);
+    expect(res.body.capped).toBe(false);
+  });
 });

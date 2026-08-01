@@ -17,6 +17,7 @@ import { emitSocketEnvelope } from '@/lib/realtime';
 import { useAuth } from '@/components/auth/useAuth';
 import { Avatar } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';
+import TransferCard from '@/components/chat/TransferCard';
 import { clearSessionKeys } from '@/lib/crypto/sessionStore';
 import { sessionStore } from '@/lib/sessionStore';
 
@@ -192,6 +193,32 @@ function messageBody(message: Message) {
     return `🎬 ${message.filePayload.fileName}`;
   }
   return message.content ?? message.ciphertext ?? 'Encrypted message';
+}
+
+type TransferPayload = {
+  amount: number;
+  token?: string;
+  txHash: string;
+};
+
+function parseTransferPayload(message: Message): TransferPayload | null {
+  if (message.unavailable) return null;
+  const raw = message.content ?? message.ciphertext;
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<TransferPayload> & { type?: string };
+    if (parsed?.type !== 'transfer' || typeof parsed.txHash !== 'string') return null;
+    const amount = typeof parsed.amount === 'number' ? parsed.amount : Number(parsed.amount);
+    if (!Number.isFinite(amount)) return null;
+    return {
+      amount,
+      token: typeof parsed.token === 'string' ? parsed.token : undefined,
+      txHash: parsed.txHash,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function isRelevantKeyChangeEvent(payload: unknown, userIds: Set<string>, conversationId: string) {
@@ -654,6 +681,7 @@ export default function ConversationPage() {
               {allMessages.map((message) => {
                 const isSelf = message.senderId === currentUser?.id;
                 const senderName = message.sender?.username ?? 'Unknown';
+                const transfer = parseTransferPayload(message);
 
                 return (
                   <div
@@ -669,6 +697,12 @@ export default function ConversationPage() {
                       {!isSelf ? (
                         <p className="mb-1 px-1 text-xs text-foreground/45">{senderName}</p>
                       ) : null}
+                      {transfer ? (
+                        <TransferCard
+                          amount={transfer.amount}
+                          token={transfer.token}
+                          txHash={transfer.txHash}
+                        />
                       {message.unavailable ? (
                         <UnavailableMessagePlaceholder reason="undecryptable" />
                       ) : message.filePayload &&

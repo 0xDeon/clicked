@@ -17,11 +17,17 @@
  *   buildEnvelopes() → Array<{ recipientDeviceId, ciphertext }>
  */
 
+import { checkIdentityChange, IdentityKeyChangedError } from './identityTrust.js';
+
+export { IdentityKeyChangedError };
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface DeviceRecord {
   /** UUID of the user_devices row */
   id: string;
+  /** UUID of the device's owning user (GET /conversations/:id/devices always sends this) */
+  userId: string;
   /** Base64-encoded identity public key (raw 32-byte X25519 or Ed25519 SPKI) */
   identityPublicKey: string;
 }
@@ -180,6 +186,35 @@ export async function sealedBoxEncrypt(
   return bytesToB64(packed);
 }
 
+// ─── Identity-key pinning (session reset / re-handshake on key change) ───────
+
+/**
+ * Groups `devices` by owning user and checks each group's live identity-key
+ * set against the pinned trust snapshot (identityTrust.ts). Throws
+ * `IdentityKeyChangedError` — refusing to encrypt to ANY device in the
+ * batch — the moment any peer's identity key set no longer matches what we
+ * last trusted. Callers must catch this, surface the safety-number warning,
+ * and only retry after the user explicitly re-verifies.
+ */
+export function assertDevicesTrusted(devices: DeviceRecord[]): void {
+  const byUser = new Map<string, DeviceRecord[]>();
+  for (const device of devices) {
+    const list = byUser.get(device.userId);
+    if (list) list.push(device);
+    else byUser.set(device.userId, [device]);
+  }
+
+  for (const [userId, userDevices] of byUser) {
+    const result = checkIdentityChange(
+      userId,
+      userDevices.map((d) => ({ id: d.id, identityPublicKey: d.identityPublicKey })),
+    );
+    if (result.status === 'changed') {
+      throw new IdentityKeyChangedError(userId, result.changedDeviceIds);
+    }
+  }
+}
+
 // ─── Device-set resolution & envelope assembly ────────────────────────────────
 
 /**
@@ -229,6 +264,8 @@ export async function buildEnvelopes(
   plaintext: string,
   devices: DeviceRecord[],
 ): Promise<MessageEnvelope[]> {
+  assertDevicesTrusted(devices);
+
   const envelopes = await Promise.all(
     devices.map(async (device) => {
       const ciphertext = await sealedBoxEncrypt(plaintext, device.identityPublicKey);

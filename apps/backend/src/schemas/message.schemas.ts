@@ -9,6 +9,11 @@ import { z } from 'zod';
  * make it possible for a plaintext/secret upload path to reappear unnoticed.
  */
 
+// `.strict()` on both schemas: a message envelope only ever carries a
+// recipient device id and opaque ciphertext. An unrecognized field (e.g. a
+// client attaching `ratchetState` or `privateKey`) must fail validation
+// (400) instead of being silently stripped — the server never stores or
+// relays Signal session/ratchet/private-key state.
 export const EnvelopeSchema = z
   .object({
     recipientDeviceId: z.string().uuid('recipientDeviceId must be a valid UUID'),

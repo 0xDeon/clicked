@@ -31,6 +31,7 @@ import { getConversationEpochWindow } from '../services/mlsGroups.js';
 import { handleHeartbeat } from '../services/heartbeat.js';
 import { cleanupStaleSockets } from '../services/presence.js';
 import { EventDispatcher } from './dispatcher.js';
+import { findForbiddenSessionStateField } from '../lib/signalInvariants.js';
 import { checkFirstContactLimit } from '../services/rateLimit.js';
 
 const PAGE_SIZE = 30;
@@ -126,6 +127,18 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
 
   // ── send_message ───────────────────────────────────────────────────────────
   dispatcher.register('send_message', async (payload) => {
+    // Signal invariant: the server never accepts session/ratchet/private-key
+    // state, only opaque ciphertext and public routing metadata.
+    const forbiddenField = findForbiddenSessionStateField(payload);
+    if (forbiddenField) {
+      socket.emit('error', {
+        event: 'send_message',
+        code: 400,
+        message: `Field "${forbiddenField}" is not permitted: the server never stores session or private-key state`,
+      });
+      return;
+    }
+
     const {
       conversationId,
       messageId,
@@ -305,6 +318,18 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
 
   // ── edit_message ───────────────────────────────────────────────────────────
   dispatcher.register('edit_message', async (payload) => {
+    // Signal invariant: the server never accepts session/ratchet/private-key
+    // state, only opaque ciphertext and public routing metadata.
+    const forbiddenField = findForbiddenSessionStateField(payload);
+    if (forbiddenField) {
+      socket.emit('error', {
+        event: 'edit_message',
+        code: 400,
+        message: `Field "${forbiddenField}" is not permitted: the server never stores session or private-key state`,
+      });
+      return;
+    }
+
     const { originalMessageId, messageId, contentType, ciphertext, envelopes } = payload as {
       originalMessageId: string;
       messageId: string;

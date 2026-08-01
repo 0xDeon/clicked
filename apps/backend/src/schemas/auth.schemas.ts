@@ -32,6 +32,7 @@ export const VerifySchema = z
     identityPublicKey: IdentityPublicKeySchema,
     device: DeviceSchema,
   })
+  .strict()
   .superRefine((value, ctx) => {
     if (value.device.identityPublicKey !== value.identityPublicKey) {
       ctx.addIssue({
