@@ -4,10 +4,9 @@ import { z } from 'zod';
  * Zod schema for the REST POST /messages send path.
  * Mirrors the content-type rules enforced by `validateMessagePayload`.
  *
- * Note: content-type-specific field requirements (fileId, envelopes) are
- * validated at the validator layer rather than the Zod layer so that the same
- * logic is reused by the WebSocket handler without duplicating discriminated-
- * union schemas.
+ * Message content is ciphertext only. `.strict()` is intentional: accepting
+ * and silently stripping an unknown `content`, key, or ratchet field would
+ * make it possible for a plaintext/secret upload path to reappear unnoticed.
  */
 
 // `.strict()` on both schemas: a message envelope only ever carries a
@@ -22,14 +21,29 @@ export const EnvelopeSchema = z
   })
   .strict();
 
+export const SendMessageSchema = z.object({
+  conversationId: z.string().uuid('conversationId must be a valid UUID'),
+  messageId: z.string().uuid('messageId must be a valid UUID'),
+  contentType: z.string().trim().toLowerCase().optional().default('text'),
+  ciphertext: z.string().optional(),
+  envelopes: z.array(EnvelopeSchema).optional(),
+  /** UUID of an already-uploaded file; required when contentType is file/image/video/audio */
+  fileId: z.string().uuid('fileId must be a valid UUID').optional(),
+  /**
+   * MLS epoch whose secrets encrypted `ciphertext` (#372). Present only on MLS
+   * group messages, which carry one group ciphertext instead of per-device
+   * envelopes. Recorded so the history read paths know which devices can
+   * derive the key.
+   */
+  mlsEpoch: z.number().int().nonnegative().optional(),
+});
 export const SendMessageSchema = z
   .object({
     conversationId: z.string().uuid('conversationId must be a valid UUID'),
     messageId: z.string().uuid('messageId must be a valid UUID'),
     contentType: z.string().trim().toLowerCase().optional().default('text'),
-    ciphertext: z.string().optional(),
+    ciphertext: z.string().min(1, 'ciphertext is required').optional(),
     envelopes: z.array(EnvelopeSchema).optional(),
-    /** UUID of an already-uploaded file; required when contentType is file/image/video/audio */
     fileId: z.string().uuid('fileId must be a valid UUID').optional(),
   })
   .strict();

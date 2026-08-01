@@ -8,6 +8,12 @@ import { db } from './db/index.js';
 import { conversationMembers, users, devices } from './db/schema.js';
 import { publishEphemeral } from './services/resumeStream.js';
 import { socketAuthMiddleware, type AuthSocket } from './middleware/socketAuth.js';
+import { socketTransportSecurityMiddleware } from './middleware/socketSecurity.js';
+import {
+  allowedOrigins,
+  assertTransportSecurityConfig,
+  isOriginAllowed,
+} from './lib/transportSecurity.js';
 import { registerMessagingHandlers } from './socket/messaging.js';
 import { app } from './app.js';
 import { redis as appRedis } from './lib/redis.js';
@@ -15,23 +21,19 @@ import { setSocketServer } from './lib/socket.js';
 import {
   cleanupStaleSockets,
   reconcileBoot,
-  refreshPresenceSocket,
   registerPresenceSocket,
   setOffline,
   setOnline,
   unregisterPresenceSocket,
   deriveDevicePresence,
+  scheduleOfflineBroadcast,
+  cancelPendingOfflineBroadcast,
 } from './services/presence.js';
 import { startHeartbeatTimer, clearHeartbeatTimer } from './services/heartbeat.js';
-import {
-  isDeviceRevoked,
-  registerDeviceSocket,
-  startDeviceRevocationListener,
-  unregisterDeviceSocket,
-} from './services/deviceRevocation.js';
+import { isDeviceRevoked, startDeviceRevocationListener } from './services/deviceRevocation.js';
 import {
   checkPayloadSize,
-  checkRateLimit,
+  checkSocketEventRateLimit,
   clearViolations,
   recordViolation,
 } from './services/rateLimit.js';
@@ -43,8 +45,11 @@ import {
   runForever as runStellarListener,
 } from './services/stellarListener.js';
 import { startFileCleanupJob } from './services/fileCleanup.js';
+import { startDeviceGcJob } from './services/deviceGc.js';
+import { startEnvelopeGcJob } from './services/envelopeGc.js';
 import { loadEnv } from './config.js';
 import { getObjectStore } from './lib/objectStore.js';
+import { presenceChurnTotal, connectedSockets } from './lib/metrics.js';
 import {
   conversationRoom,
   joinUserRoom,
@@ -56,11 +61,20 @@ dotenv.config();
 // Validate required environment variables at boot. Exits with code 1 and
 // logs the offending vars if anything is missing or malformed.
 loadEnv();
+
+// Refuse to boot a non-dev gateway that would accept plaintext transport (#374).
+assertTransportSecurityConfig();
+
 export const objectStore = getObjectStore();
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: '*' },
+  cors: {
+    origin: (origin, callback) => {
+      callback(null, isOriginAllowed(origin ?? undefined));
+    },
+    credentials: allowedOrigins().length > 0,
+  },
 });
 
 let isShuttingDown = false;
@@ -110,6 +124,9 @@ async function recordPresenceForCoMembers(
   );
 }
 
+// Transport + origin policy runs first: an insecure or disallowed handshake is
+// dropped before any token parsing or database lookup (#374).
+io.use(socketTransportSecurityMiddleware);
 io.use(socketAuthMiddleware);
 
 io.on('connection', async (socket: AuthSocket) => {
@@ -119,9 +136,7 @@ io.on('connection', async (socket: AuthSocket) => {
 
   socket.data['userId'] = userId;
   socket.data['deviceId'] = deviceId;
-
-  // Register socket for device-revocation tracking (cross-instance via Redis pub/sub).
-  registerDeviceSocket(deviceId, socket.id);
+  connectedSockets.inc();
 
   // Start the server-side heartbeat watchdog (90 s timeout).
   startHeartbeatTimer(socket, userId, deviceId, appRedis, io);
@@ -137,13 +152,7 @@ io.on('connection', async (socket: AuthSocket) => {
   }
 
   // Per-socket middleware: intercept every incoming event before handlers.
-  const EXCLUDED_EVENTS = new Set(['heartbeat']);
   socket.use(async ([event, ...args], next) => {
-    // Skip internal heartbeat pings.
-    if (EXCLUDED_EVENTS.has(event)) {
-      return next();
-    }
-
     // Reject events from a device that was revoked mid-session.
     if (isDeviceRevoked(deviceId)) {
       socket.emit('error', { event: 'device_revoked', message: 'Device has been revoked' });
@@ -162,11 +171,18 @@ io.on('connection', async (socket: AuthSocket) => {
       return;
     }
 
-    // Per-socket rate limiting (configurable via SOCKET_RATE_LIMIT_PER_SEC env).
-    const { allowed } = await checkRateLimit(appRedis, socket.id);
+    // Per-event rate limiting, counted in Redis so the budget is shared across
+    // gateway nodes and survives a reconnect (see config/rateLimits.ts).
+    const { allowed, limit, resetSeconds } = await checkSocketEventRateLimit(event, deviceId);
     if (!allowed) {
       const violations = recordViolation(socket.id);
-      socket.emit('error', { event: 'rate_limited', message: 'Rate limit exceeded' });
+      socket.emit('error', {
+        event: 'rate_limited',
+        message: 'Rate limit exceeded',
+        limitedEvent: event,
+        limit,
+        retryAfterSeconds: resetSeconds,
+      });
       if (violations >= 3) {
         socket.disconnect(true);
       }
@@ -201,20 +217,26 @@ io.on('connection', async (socket: AuthSocket) => {
     await registerPresenceSocket(appRedis, userId, deviceId, socket.id);
     await cleanupStaleSockets(io, appRedis, userId, socket.id);
 
+    // #345 — a device reconnecting cancels any offline broadcast still
+    // pending from a very recent disconnect (same user, any device). When
+    // that happens the reconnect is invisible to observers too: no
+    // offline/online pair, since nothing was ever announced offline.
+    const cancelledPendingOffline = cancelPendingOfflineBroadcast(userId);
+
     const becameOnline = await setOnline(appRedis, userId, deviceId);
     const connectUser = await db.query.users.findFirst({
       where: eq(users.id, userId),
-      columns: { presenceVisible: true },
+      columns: { presenceVisible: true, lastSeenVisible: true },
     });
     const presenceVisible = connectUser?.presenceVisible ?? true;
-    if (becameOnline && presenceVisible) {
+    if (becameOnline && presenceVisible && !cancelledPendingOffline) {
       for (const m of memberships) {
         io.to(conversationRoom(m.conversationId)).emit('user_online', { userId });
         io.to(conversationRoom(m.conversationId)).emit('presence_update', {
           userId,
           online: true,
           status: 'online',
-          lastSeen: Date.now(),
+          ...(lastSeenVisible ? { lastSeen: Date.now() } : {}),
         });
         // Also emit to direct conversation room for backward compatibility
         io.to(m.conversationId).emit('user_online', { userId });
@@ -222,7 +244,7 @@ io.on('connection', async (socket: AuthSocket) => {
           userId,
           online: true,
           status: 'online',
-          lastSeen: Date.now(),
+          ...(lastSeenVisible ? { lastSeen: Date.now() } : {}),
         });
       }
       await recordPresenceForCoMembers(
@@ -232,13 +254,6 @@ io.on('connection', async (socket: AuthSocket) => {
       );
     }
   }
-
-  socket.on('heartbeat', async () => {
-    if (appRedis) {
-      await refreshPresenceSocket(appRedis, userId, deviceId, socket.id);
-      await cleanupStaleSockets(io, appRedis, userId, socket.id);
-    }
-  });
 
   registerMessagingHandlers(io, socket);
 
@@ -260,9 +275,9 @@ io.on('connection', async (socket: AuthSocket) => {
 
   socket.on('disconnect', async (reason: string) => {
     console.log('User disconnected:', userId, reason);
+    connectedSockets.dec();
 
     clearHeartbeatTimer(socket.id);
-    unregisterDeviceSocket(socket.id);
 
     // Unsubscribe from the device delivery channel on disconnect.
     if (appRedis) {
@@ -306,40 +321,51 @@ io.on('connection', async (socket: AuthSocket) => {
         : false;
 
       if (fullyOffline) {
+        presenceChurnTotal.inc({ transition: 'offline' });
+      }
+
+      if (fullyOffline) {
         const user = await db.query.users.findFirst({
           where: eq(users.id, userId),
-          columns: { presenceVisible: true },
+          columns: { presenceVisible: true, lastSeenVisible: true },
         });
         const presenceVisible = user?.presenceVisible ?? true;
+        const lastSeenVisible = user?.lastSeenVisible ?? false;
 
         if (presenceVisible) {
-          const memberships = await db.query.conversationMembers.findMany({
-            where: eq(conversationMembers.userId, userId),
-            columns: { conversationId: true },
+          // #345 — defer the broadcast by the configured grace window instead
+          // of announcing offline immediately. A reconnect within the window
+          // cancels this via cancelPendingOfflineBroadcast() in the connect
+          // handler above, so a brief blip never produces an offline/online pair.
+          scheduleOfflineBroadcast(userId, async () => {
+            const memberships = await db.query.conversationMembers.findMany({
+              where: eq(conversationMembers.userId, userId),
+              columns: { conversationId: true },
+            });
+
+            const { lastSeen } = await deriveDevicePresence(userId);
+
+            for (const m of memberships) {
+              io.to(conversationRoom(m.conversationId)).emit('user_offline', { userId });
+              io.to(conversationRoom(m.conversationId)).emit('presence_update', {
+                userId,
+                online: false,
+                ...(lastSeen ? { lastSeen } : {}),
+              });
+              // Also emit to direct conversation room for backward compatibility
+              io.to(m.conversationId).emit('user_offline', { userId });
+              io.to(m.conversationId).emit('presence_update', {
+                userId,
+                online: false,
+                ...(lastSeen ? { lastSeen } : {}),
+              });
+            }
+            await recordPresenceForCoMembers(
+              userId,
+              false,
+              memberships.map((m) => m.conversationId),
+            );
           });
-
-          const { lastSeen } = await deriveDevicePresence(userId);
-
-          for (const m of memberships) {
-            io.to(conversationRoom(m.conversationId)).emit('user_offline', { userId });
-            io.to(conversationRoom(m.conversationId)).emit('presence_update', {
-              userId,
-              online: false,
-              ...(lastSeen ? { lastSeen } : {}),
-            });
-            // Also emit to direct conversation room for backward compatibility
-            io.to(m.conversationId).emit('user_offline', { userId });
-            io.to(m.conversationId).emit('presence_update', {
-              userId,
-              online: false,
-              ...(lastSeen ? { lastSeen } : {}),
-            });
-          }
-          await recordPresenceForCoMembers(
-            userId,
-            false,
-            memberships.map((m) => m.conversationId),
-          );
         }
       }
     }
@@ -402,6 +428,13 @@ void attachRedisAdapter();
 
 // #231 – start background file cleanup + push backoff re-enable job
 startFileCleanupJob();
+
+// Background GC: prune consumed/expired prekeys + MLS key packages, flag
+// long-revoked devices, and delete fully-delivered/expired message envelopes.
+// Retention windows are configurable via env (see services/deviceGc.ts and
+// services/envelopeGc.ts) so operators can tune them per deployment.
+startDeviceGcJob();
+startEnvelopeGcJob();
 
 // Subscribe to device_revoked:* channels so any gateway instance can
 // disconnect a revoked device's sockets within seconds, even when the

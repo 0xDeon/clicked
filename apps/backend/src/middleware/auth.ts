@@ -3,6 +3,7 @@ import { eq, and } from 'drizzle-orm';
 import { verifyToken, type JwtPayload } from '../lib/jwt.js';
 import { db } from '../db/index.js';
 import { devices } from '../db/schema.js';
+import { recordAuditEvent, requestContext } from '../services/auditLog.js';
 
 export interface AuthRequest extends Request {
   auth?: JwtPayload;
@@ -41,6 +42,20 @@ export async function requireAuth(
   });
 
   if (!device || device.revokedAt) {
+    // Audited (#376): the token's signature was valid, so this is a real
+    // credential being replayed after the device lost its authorisation —
+    // unlike a malformed or expired token, which any scanner produces and
+    // which would let an unauthenticated caller flood the audit table.
+    void recordAuditEvent({
+      action: 'auth_failed',
+      subjectUserId: payload.userId,
+      actorDeviceId: device ? payload.deviceId : null,
+      targetType: 'device',
+      targetId: payload.deviceId,
+      ...requestContext(req),
+      metadata: { reason: device ? 'device_revoked' : 'device_not_found' },
+    });
+
     res.status(401).json({ error: 'Device not found or has been revoked' });
     return;
   }

@@ -205,6 +205,36 @@ Important ordering guarantee:
 
 - a client must not attempt `POST /devices/:id/prekeys` until it has successfully completed `POST /auth/verify` and extracted the authenticated device id from the returned JWT context
 
+## Replay protection model
+
+Clicked applies replay defenses at three layers so retries stay safe while stale
+or duplicated payloads are rejected:
+
+1. **Auth nonce (`POST /auth/challenge` → `POST /auth/verify`)**
+   - each challenge nonce is bound to the wallet address that requested it
+   - the nonce is single-use and expires after 5 minutes
+   - `POST /auth/verify` consumes the nonce before signature verification, so a
+     captured auth payload cannot be replayed after the first successful submit
+2. **Socket dispatch envelopes (`dispatch`)**
+   - every envelope must include a unique `eventId` and a client `timestamp`
+   - the backend stores each accepted `eventId` for 24 hours and drops later
+     duplicates without re-running the handler
+   - the backend rejects envelopes older than 5 minutes or more than 30 seconds
+     in the future to narrow the replay window for intercepted payloads
+3. **Message persistence (`messageId`)**
+   - `POST /messages`, `send_message`, `edit_message`, and `send_file_message`
+     require a client-generated `messageId`
+   - if the same `messageId` arrives again, the backend treats it as an
+     idempotent retry and returns the original ack/created timestamp instead of
+     inserting a duplicate row
+
+Operational guidance:
+
+- retries must reuse the original `eventId`/`messageId`
+- new user actions must generate fresh ids
+- client clocks should stay reasonably accurate; overly stale or future-dated
+  dispatch envelopes are rejected even if their signature/auth data is valid
+
 ## How the device id is obtained after verify
 
 `POST /auth/verify` returns only:
@@ -505,6 +535,50 @@ Required guarantees for this path:
 - signed prekey must still be present if the device remains reachable for session bootstrap
 - client must treat this as lower-entropy/fallback first-contact establishment and should trigger recipient prekey replenishment UX when possible
 
+### C) Low-prekey warning before exhaustion
+
+Waiting for exhaustion means every sender in the meantime is downgraded to
+3-DH, so the backend warns the owning device *before* it runs dry.
+
+Two surfaces expose this:
+
+1. `GET /devices` returns `oneTimePreKeysRemaining` per device — a count of
+   unconsumed one-time prekeys, `0` when the device has none. Poll-free clients
+   can read this at startup to decide whether to top up.
+2. A `prekeys_low` Socket.IO event is emitted after a bundle fetch drops a
+   device below the threshold (default `20`, overridable with the
+   `PREKEY_LOW_THRESHOLD` env var).
+
+Event payload:
+
+```json
+{
+  "deviceId": "uuid",
+  "oneTimePreKeysRemaining": 19,
+  "threshold": 20
+}
+```
+
+Delivery and debounce semantics:
+
+- emitted only to the `device:{deviceId}` room — the owning device, on whichever
+  gateway holds its socket. No other device on the account sees it, since only
+  the owner can generate replacement prekeys.
+- fired **at most once per threshold crossing**. A device that keeps serving
+  bundles while below the threshold is told once, not once per fetch.
+- the signal re-arms when `POST /devices/:id/prekeys` brings the device back to
+  or above the threshold, so a later crossing warns again. Revoking a device
+  also re-arms it (its prekeys are deleted).
+- a device that is offline when the threshold is crossed misses the event; it
+  should read `oneTimePreKeysRemaining` from `GET /devices` on reconnect.
+
+Client behavior:
+
+- on `prekeys_low`, generate and upload a fresh batch via
+  `POST /devices/:id/prekeys`, respecting the `200` cap
+- the upload response echoes `oneTimePreKeysRemaining` so the client can confirm
+  it is back above the threshold without a follow-up `GET /devices`
+
 ## End-to-end ordering contract
 
 For compatibility with the current implementation, clients should rely on this ordering:
@@ -534,8 +608,10 @@ For compatibility with the current implementation, clients should rely on this o
 - device registration/listing/revocation/prekey upload: `apps/backend/src/routes/devices.ts`
 - recipient key-bundle fetch: `apps/backend/src/routes/users.ts` (`GET /users/:userId/devices/:deviceId/key-bundle`)
 - E2EE-related schema: `apps/backend/src/db/schema.ts` (`devices`, `devicePrekeys`)
+- low-prekey signal + debounce latch: `apps/backend/src/services/prekeyLowSignal.ts`
 - prekey route tests: `apps/backend/src/__tests__/devices.prekeys.test.ts`
 - key-bundle route tests: `apps/backend/src/__tests__/users.bundle.test.ts`
+- low-prekey signal tests: `apps/backend/src/__tests__/prekeysLow.test.ts`
 
 ## Gaps to close for full first-DM support
 

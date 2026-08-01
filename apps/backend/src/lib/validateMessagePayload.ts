@@ -12,6 +12,15 @@
  *   video|audio     (the envelope ciphertext carries the encrypted file key)
  * system          – server-generated only; any client submission is rejected (403)
  * <unknown>       – rejected (400)
+ *
+ * MLS group messages (#372)
+ * ─────────────────────────
+ * When `mlsEpoch` is present the message is encrypted once to the group's
+ * epoch secrets rather than once per recipient device, so the per-device
+ * envelope requirement does not apply — a non-empty `ciphertext` is required
+ * instead. Sending envelopes alongside `mlsEpoch` is rejected: the two
+ * key-distribution models must not be mixed on one message, or recipients have
+ * no unambiguous rule for which ciphertext to decrypt.
  */
 
 export interface MessagePayload {
@@ -23,6 +32,8 @@ export interface MessagePayload {
   envelopes?: Array<{ recipientDeviceId: string; ciphertext: string }> | undefined;
   /** UUID referencing the uploaded file (required for file/image/video/audio) */
   fileId?: string | undefined;
+  /** MLS epoch that encrypted `ciphertext`; marks this as an MLS group message */
+  mlsEpoch?: number | undefined;
 }
 
 export type MessagePayloadValidationResult =
@@ -65,6 +76,33 @@ export function validateMessagePayload(payload: MessagePayload): MessagePayloadV
   }
 
   const hasEnvelopes = Array.isArray(payload.envelopes) && payload.envelopes.length > 0;
+
+  // ── MLS group message ────────────────────────────────────────────────────────
+  // One ciphertext for the whole group; per-device envelopes do not apply.
+  if (payload.mlsEpoch !== undefined) {
+    if (hasEnvelopes) {
+      return {
+        ok: false,
+        code: 400,
+        message: 'MLS group messages carry a single group ciphertext, not per-device envelopes',
+      };
+    }
+    if (!payload.ciphertext?.trim()) {
+      return {
+        ok: false,
+        code: 400,
+        message: 'ciphertext is required for MLS group messages',
+      };
+    }
+    if (FILE_CONTENT_TYPES.has(contentType as any) && !payload.fileId?.trim()) {
+      return {
+        ok: false,
+        code: 400,
+        message: 'fileId is required for file-type messages',
+      };
+    }
+    return { ok: true };
+  }
 
   // ── file / image / video / audio ─────────────────────────────────────────────
   if (FILE_CONTENT_TYPES.has(contentType as any)) {
