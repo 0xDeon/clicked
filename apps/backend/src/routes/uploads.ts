@@ -86,6 +86,8 @@ uploadsRouter.post('/', rateLimit('upload_slot'), async (req: AuthRequest, res) 
       res.status(403).json({ error: 'Device is not a member of this conversation MLS group' });
       return;
     }
+  }
+
   // Daily volume quota (#375). Charged in bytes rather than requests: the
   // per-minute slot limit says nothing about a caller requesting twenty
   // hundred-megabyte slots an hour, which is the shape that actually fills

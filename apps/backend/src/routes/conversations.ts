@@ -1,6 +1,19 @@
 import { Router } from 'express';
 import type { IRouter } from 'express';
-import { asc, and, count, desc, eq, inArray, isNotNull, lt, notInArray, or, sql, ne } from 'drizzle-orm';
+import {
+  asc,
+  and,
+  count,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  lt,
+  notInArray,
+  or,
+  sql,
+  ne,
+} from 'drizzle-orm';
 import { db } from '../db/index.js';
 import {
   conversationMembers,
@@ -68,9 +81,7 @@ type SerializedConversationPayload = {
   [key: string]: unknown;
 };
 
-function serializeConversation(
-  conversation: ConversationPayload,
-): SerializedConversationPayload {
+function serializeConversation(conversation: ConversationPayload): SerializedConversationPayload {
   return {
     id: conversation.id,
     type: conversation.type,
@@ -340,6 +351,9 @@ conversationsRouter.post('/:id/members', async (req: AuthRequest, res) => {
   const inviteCheck = await checkGroupInviteLimit(redis, requesterId);
   if (!inviteCheck.allowed) {
     res.status(429).json({ error: 'Too many group invites. Please try again later.' });
+    return;
+  }
+
   const targetUser = await db.query.users.findFirst({
     where: eq(users.id, newUserId),
     columns: { allowGroupInvites: true },
