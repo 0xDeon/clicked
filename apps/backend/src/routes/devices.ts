@@ -20,8 +20,8 @@ import {
   mlsKeyPackages,
   conversationMembers,
   messages,
+  wallets,
 } from '../db/schema.js';
-import { devices, devicePrekeys, conversationMembers, messages, wallets } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { DeviceLinkVerifySchema, type DeviceLinkVerifyBody } from '../schemas/auth.schemas.js';
@@ -43,6 +43,7 @@ import {
   countAvailableKeyPackages,
   hashKeyPackage,
 } from '../services/mlsKeyPackages.js';
+import {
   PREKEY_LOW_THRESHOLD,
   countAvailableOneTimePreKeys,
   releasePrekeysLowLatch,
@@ -621,26 +622,6 @@ devicesRouter.post(
       return;
     }
 
-    void recordAuditEvent({
-      action: 'device_linked',
-      ...actorFromRequest(req),
-      targetType: 'device',
-      targetId: row.id,
-      metadata: {
-        deviceName: body.deviceName ?? null,
-        platform: body.platform ?? null,
-        // Re-activating a revoked identity key is not the same event as
-        // linking a brand-new device, and the difference matters after a
-        // revocation that was meant to lock someone out.
-        reactivatedRevokedDevice: Boolean(existing),
-      },
-    });
-
-    res.status(201).json({ id: row.id, createdAt: row.createdAt });
-  } catch (err) {
-    console.error('Failed to register device:', err);
-    res.status(500).json({ error: 'Failed to register device' });
-  }
     if (
       !verifyWalletSignature(walletAddress, deviceLinkMessage(userId, body.nonce), body.signature)
     ) {
@@ -693,6 +674,21 @@ devicesRouter.post(
       }
 
       void emitDeviceChangeEvent(userId, 'device_added');
+
+      void recordAuditEvent({
+        action: 'device_linked',
+        ...actorFromRequest(req),
+        targetType: 'device',
+        targetId: row.id,
+        metadata: {
+          deviceName: body.deviceName ?? null,
+          platform: body.platform ?? null,
+          // Re-activating a revoked identity key is not the same event as
+          // linking a brand-new device, and the difference matters after a
+          // revocation that was meant to lock someone out.
+          reactivatedRevokedDevice: Boolean(existing),
+        },
+      });
 
       res.status(201).json({ id: row.id, createdAt: row.createdAt });
     } catch (err) {

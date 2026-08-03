@@ -11,7 +11,6 @@ import {
   jsonb,
   uniqueIndex,
   check,
-  jsonb,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
@@ -170,6 +169,23 @@ export const messages = pgTable(
   ],
 );
 
+// Which E2EE construction produced an envelope's ciphertext (#364).
+//
+// `sealed_box` is the Phase-1 path: ECDH ephemeral key + HKDF + AES-256-GCM,
+// one independent box per message. `signal` is the Double Ratchet.
+//
+// `devices.capabilities.protocols` says what a device *can* decrypt; this says
+// what a given envelope actually *was* encrypted with. Both are needed: the
+// capability set changes over time, so it cannot be used to interpret an
+// envelope written months ago. Recording it per envelope is what lets
+// pre-cutover history keep decrypting on the Phase-1 path indefinitely.
+//
+// Values mirror `KNOWN_PROTOCOLS` in lib/capabilities.ts so the two cannot
+// drift. `mls` is included for that reason even though MLS group messages
+// carry a single group ciphertext on `messages` rather than per-device
+// envelopes — an envelope row for it should be representable, not a migration.
+export const e2eeProtocolEnum = pgEnum('e2ee_protocol', ['sealed_box', 'signal', 'mls']);
+
 export const messageEnvelopes = pgTable(
   'message_envelopes',
   {
@@ -184,6 +200,9 @@ export const messageEnvelopes = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     ciphertext: text('ciphertext').notNull(),
+    // Defaults to sealed_box so every envelope written before this column
+    // existed is labelled correctly by the migration's backfill.
+    protocol: e2eeProtocolEnum('protocol').notNull().default('sealed_box'),
     deliveredAt: timestamp('delivered_at'),
     readAt: timestamp('read_at'),
     createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -232,9 +251,10 @@ export const devices = pgTable(
     // baseline so rows written before this column existed, or clients that
     // never send it, negotiate correctly rather than erroring — see
     // lib/capabilities.ts `normalizeCapabilities`.
-    capabilities: jsonb('capabilities').$type<DeviceCapabilities>().notNull().default(
-      DEFAULT_CAPABILITIES,
-    ),
+    capabilities: jsonb('capabilities')
+      .$type<DeviceCapabilities>()
+      .notNull()
+      .default(DEFAULT_CAPABILITIES),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },
@@ -435,15 +455,6 @@ export const mlsWelcomes = pgTable(
 
 export const mlsKeyPackages = pgTable(
   'mls_key_packages',
-// ─── Device key history (#379 — key-transparency) ────────────────────────────
-//
-// Append-only log of identity-key changes per device. Written whenever a
-// device's `identityPublicKey` changes (rotation or re-registration). Clients
-// use this log to detect silent key swaps and display safety-number warnings.
-// Never deleted — immutability is the whole point.
-
-export const deviceKeyHistory = pgTable(
-  'device_key_history',
   {
     id: uuid('id').primaryKey().defaultRandom(),
     deviceId: uuid('device_id')
@@ -470,6 +481,20 @@ export const deviceKeyHistory = pgTable(
   ],
 );
 
+// ─── Device key history (#379 — key-transparency) ────────────────────────────
+//
+// Append-only log of identity-key changes per device. Written whenever a
+// device's `identityPublicKey` changes (rotation or re-registration). Clients
+// use this log to detect silent key swaps and display safety-number warnings.
+// Never deleted — immutability is the whole point.
+
+export const deviceKeyHistory = pgTable(
+  'device_key_history',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    deviceId: uuid('device_id')
+      .notNull()
+      .references(() => devices.id, { onDelete: 'cascade' }),
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),

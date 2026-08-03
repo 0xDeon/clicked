@@ -44,6 +44,13 @@ export async function deliverMessage(
 
   if (members.length === 0) return;
 
+  // MLS Welcome messages ride the normal device-scoped delivery path but are
+  // tagged so the client routes them to the group-join handler rather than the
+  // timeline. The Welcome itself stays an opaque string.
+  const welcomeTransport = isMlsWelcomeContentType(message.contentType)
+    ? mlsWelcomeTransport()
+    : null;
+
   const userIds = members.map((m) => m.userId);
 
   const activeDevices = await db
@@ -64,6 +71,7 @@ export async function deliverMessage(
       id: messageEnvelopes.id,
       recipientDeviceId: messageEnvelopes.recipientDeviceId,
       ciphertext: messageEnvelopes.ciphertext,
+      protocol: messageEnvelopes.protocol,
     })
     .from(messageEnvelopes)
     .where(
@@ -89,6 +97,8 @@ export async function deliverMessage(
       createdAt: message.createdAt,
       envelopeId: envelope.id,
       ciphertext: envelope.ciphertext,
+      // #364 — tells the receiving device which decryption path to use.
+      protocol: envelope.protocol,
       ...(welcomeTransport ?? {}),
     });
   }

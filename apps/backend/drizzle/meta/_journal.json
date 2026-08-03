@@ -26,6 +26,13 @@
       "when": 1785412264325,
       "tag": "0002_strengthen_system_payload_check",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785700000000,
+      "tag": "0004_envelope_protocol",
+      "breakpoints": true
     }
   ]
 }

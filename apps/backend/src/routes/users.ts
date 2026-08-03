@@ -2,7 +2,14 @@ import { createHash } from 'node:crypto';
 import { Router, type Router as RouterType } from 'express';
 import { eq, and, or, ilike, exists, sql, isNull, count } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { users, wallets, devices, devicePrekeys, conversationMembers, deviceKeyHistory } from '../db/schema.js';
+import {
+  users,
+  wallets,
+  devices,
+  devicePrekeys,
+  conversationMembers,
+  deviceKeyHistory,
+} from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/rateLimit.js';
 import { redis } from '../lib/redis.js';
@@ -290,70 +297,36 @@ usersRouter.get(
       return { keyId: candidate.keyId, publicKey: candidate.publicKey };
     });
 
-  const claimed = await db.transaction(async (tx) => {
-    const [candidate] = await tx
-      .select({
-        id: devicePrekeys.id,
-        keyId: devicePrekeys.keyId,
-        publicKey: devicePrekeys.publicKey,
-      })
-      .from(devicePrekeys)
-      .where(
-        and(
-          eq(devicePrekeys.deviceId, deviceId),
-          eq(devicePrekeys.keyType, 'one_time'),
-          eq(devicePrekeys.consumed, false),
-        ),
-      )
-      .orderBy(devicePrekeys.createdAt)
-      .limit(1)
-      .for('update', { skipLocked: true });
+    const claimed = await db.transaction(async (tx) => {
+      const [candidate] = await tx
+        .select({
+          id: devicePrekeys.id,
+          keyId: devicePrekeys.keyId,
+          publicKey: devicePrekeys.publicKey,
+        })
+        .from(devicePrekeys)
+        .where(
+          and(
+            eq(devicePrekeys.deviceId, deviceId),
+            eq(devicePrekeys.keyType, 'one_time'),
+            eq(devicePrekeys.consumed, false),
+          ),
+        )
+        .orderBy(devicePrekeys.createdAt)
+        .limit(1)
+        .for('update', { skipLocked: true });
 
-    if (!candidate) return null;
+      if (!candidate) return null;
 
-    await tx
-      .update(devicePrekeys)
-      .set({ consumed: true })
-      .where(eq(devicePrekeys.id, candidate.id));
+      await tx
+        .update(devicePrekeys)
+        .set({ consumed: true })
+        .where(eq(devicePrekeys.id, candidate.id));
 
-    // Counted inside the claiming transaction so `remaining` reflects this
-    // consumption and cannot race a concurrent fetch into a wrong value.
-    const [remainingRow] = await tx
-      .select({ total: count() })
-      .from(devicePrekeys)
-      .where(
-        and(
-          eq(devicePrekeys.deviceId, deviceId),
-          eq(devicePrekeys.keyType, 'one_time'),
-          eq(devicePrekeys.consumed, false),
-        ),
-      );
-
-    return {
-      oneTimePreKey: { keyId: candidate.keyId, publicKey: candidate.publicKey },
-      remaining: remainingRow?.total ?? 0,
-    };
-  });
-
-  const claimedOneTimePreKey = claimed?.oneTimePreKey ?? null;
-
-  // Fire-and-forget: the device that owns this bundle is told to replenish
-  // once per threshold crossing. Never blocks or fails the bundle response.
-  if (claimed) {
-    void signalPrekeysLowIfNeeded(deviceId, claimed.remaining);
-  // A one-time prekey was consumed and cannot be handed out again (#376).
-  // Draining a device's supply forces every later session with it down from
-  // 4-DH to 3-DH, and it happens quietly, so the count left is the signal an
-  // incident responder actually needs. Subject is the device owner — the
-  // account this was done *to* — while the actor is whoever fetched it.
-  if (claimedOneTimePreKey) {
-    // The remaining count is the useful part but only a nice-to-have: if the
-    // count query fails, still record that a prekey was consumed rather than
-    // losing the event, and never fail the bundle fetch over bookkeeping.
-    let remaining: number | null = null;
-    try {
-      const [remainingRow] = await db
-        .select({ remaining: sql<number>`count(*)::int` })
+      // Counted inside the claiming transaction so `remaining` reflects this
+      // consumption and cannot race a concurrent fetch into a wrong value.
+      const [remainingRow] = await tx
+        .select({ total: count() })
         .from(devicePrekeys)
         .where(
           and(
@@ -362,36 +335,75 @@ usersRouter.get(
             eq(devicePrekeys.consumed, false),
           ),
         );
-      remaining = remainingRow?.remaining ?? 0;
-    } catch {
-      // Leave it null — the event itself is what must not be lost.
+
+      return {
+        oneTimePreKey: { keyId: candidate.keyId, publicKey: candidate.publicKey },
+        remaining: remainingRow?.total ?? 0,
+      };
+    });
+
+    const claimedOneTimePreKey = claimed?.oneTimePreKey ?? null;
+
+    // Fire-and-forget: the device that owns this bundle is told to replenish
+    // once per threshold crossing. Never blocks or fails the bundle response.
+    // A one-time prekey was consumed and cannot be handed out again (#376).
+    // Draining a device's supply forces every later session with it down from
+    // 4-DH to 3-DH, and it happens quietly, so the count left is the signal an
+    // incident responder actually needs. Subject is the device owner — the
+    // account this was done *to* — while the actor is whoever fetched it.
+    if (claimedOneTimePreKey) {
+      // The remaining count is the useful part but only a nice-to-have: if the
+      // count query fails, still record that a prekey was consumed rather than
+      // losing the event, and never fail the bundle fetch over bookkeeping.
+      let remaining: number | null = null;
+      try {
+        const [remainingRow] = await db
+          .select({ remaining: sql<number>`count(*)::int` })
+          .from(devicePrekeys)
+          .where(
+            and(
+              eq(devicePrekeys.deviceId, deviceId),
+              eq(devicePrekeys.keyType, 'one_time'),
+              eq(devicePrekeys.consumed, false),
+            ),
+          );
+        remaining = remainingRow?.remaining ?? 0;
+      } catch {
+        // Leave it null — the event itself is what must not be lost.
+      }
+
+      // Fire-and-forget: the device that owns this bundle is told to replenish
+      // once per threshold crossing. Never blocks or fails the bundle response.
+      if (remaining !== null) {
+        void signalPrekeysLowIfNeeded(deviceId, remaining);
+      }
+
+      void recordAuditEvent({
+        action: 'key_bundle_drained',
+        ...actorFromRequest(req),
+        subjectUserId: targetUserId,
+        targetType: 'device',
+        targetId: deviceId,
+        metadata: { oneTimePreKeysRemaining: remaining, exhausted: remaining === 0 },
+      });
     }
 
-    void recordAuditEvent({
-      action: 'key_bundle_drained',
-      ...actorFromRequest(req),
-      subjectUserId: targetUserId,
-      targetType: 'device',
-      targetId: deviceId,
-      metadata: { oneTimePreKeysRemaining: remaining, exhausted: remaining === 0 },
+    res.json({
+      deviceId: device.id,
+      identityPublicKey: device.identityPublicKey,
+      registrationId: device.registrationId,
+      // Lets the initiating sender pick an encryption path this recipient
+      // device supports before running X3DH (#180-follow-on).
+      capabilities: normalizeCapabilities(device.capabilities),
+      signedPreKey: {
+        keyId: signedPreKey.keyId,
+        publicKey: signedPreKey.publicKey,
+        signature: signedPreKey.signature,
+      },
+      oneTimePreKey: claimedOneTimePreKey,
     });
-  }
-
-  res.json({
-    deviceId: device.id,
-    identityPublicKey: device.identityPublicKey,
-    registrationId: device.registrationId,
-    // Lets the initiating sender pick an encryption path this recipient
-    // device supports before running X3DH (#180-follow-on).
-    capabilities: normalizeCapabilities(device.capabilities),
-    signedPreKey: {
-      keyId: signedPreKey.keyId,
-      publicKey: signedPreKey.publicKey,
-      signature: signedPreKey.signature,
-    },
-    oneTimePreKey: claimedOneTimePreKey,
-  });
-});
+  },
+);
 
 /**
  * GET /users/:userId/devices/:deviceId/mls-key-package
@@ -499,47 +511,47 @@ usersRouter.get('/:id/key-fingerprint', async (req: AuthRequest, res) => {
       columns: { id: true },
     });
 
-    if (!device || device.userId !== targetUserId || device.revokedAt) {
-      res.status(404).json({ error: 'Device not found or has been revoked' });
+    if (!user) {
+      res.status(404).json({ error: 'User not found' });
       return;
     }
 
-    const signedPreKey = await db.query.devicePrekeys.findFirst({
-      where: and(eq(devicePrekeys.deviceId, deviceId), eq(devicePrekeys.keyType, 'signed')),
+    // Fetch all active (non-revoked) device identity public keys.
+    const activeDevices = await db.query.devices.findMany({
+      where: and(eq(devices.userId, id), isNull(devices.revokedAt)),
+      columns: { identityPublicKey: true },
     });
 
-    if (!signedPreKey) {
-      res.status(409).json({ error: 'Device has not uploaded a signed prekey yet' });
+    if (activeDevices.length === 0) {
+      res.status(404).json({ error: 'No active devices found for this user' });
       return;
     }
 
-    const claimedOneTimePreKey = await db.transaction(async (tx) => {
-      const [candidate] = await tx
-        .select({
-          id: devicePrekeys.id,
-          keyId: devicePrekeys.keyId,
-          publicKey: devicePrekeys.publicKey,
-        })
-        .from(devicePrekeys)
-        .where(
-          and(
-            eq(devicePrekeys.deviceId, deviceId),
-            eq(devicePrekeys.keyType, 'one_time'),
-            eq(devicePrekeys.consumed, false),
-          ),
-        )
-        .orderBy(devicePrekeys.createdAt)
-        .limit(1)
-        .for('update', { skipLocked: true });
+    // Sort lexicographically, then concatenate with a newline separator, so
+    // the value is identical on every client regardless of device order.
+    const sortedKeys = activeDevices
+      .map((d) => d.identityPublicKey)
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
-      if (!candidate) return null;
+    const digest = createHash('sha256').update(sortedKeys.join('\n'), 'utf8').digest();
 
-      await tx
-        .update(devicePrekeys)
-        .set({ consumed: true })
-        .where(eq(devicePrekeys.id, candidate.id));
+    // Two 30-digit segments from non-overlapping 15-byte halves of the digest.
+    function bytesToSafetySegment(buf: Buffer, offset: number, length: number): string {
+      let value = BigInt(0);
+      for (let i = 0; i < length; i++) {
+        value = (value << BigInt(8)) | BigInt(buf[offset + i]!);
+      }
+      return (value % BigInt('1' + '0'.repeat(30))).toString().padStart(30, '0');
+    }
 
-      return { keyId: candidate.keyId, publicKey: candidate.publicKey };
+    const raw = bytesToSafetySegment(digest, 0, 15) + bytesToSafetySegment(digest, 15, 15);
+
+    res.json({
+      userId: id,
+      /** Raw 60-digit numeric fingerprint; clients compare this. */
+      fingerprint: raw,
+      /** Groups of 5, matching Signal's safety-number display format. */
+      formatted: raw.match(/.{5}/g)!.join(' '),
     });
   } catch {
     res.status(500).json({ error: 'Failed to compute key fingerprint' });
@@ -616,19 +628,31 @@ usersRouter.patch('/me', async (req: AuthRequest, res) => {
     const existing = await db.query.users.findFirst({
       where: eq(users.username, username),
     });
-  },
-);
+    if (existing && existing.id !== userId) {
+      res.status(409).json({ error: 'Username is already taken' });
+      return;
+    }
 
-usersRouter.get('/:id/key-fingerprint', async (req: AuthRequest, res) => {
-  const userId = req.params['id'] as string;
+    updateData.username = username;
+  }
+
+  updateData.updatedAt = new Date();
 
   try {
+    // Read the previous visibility so the presence broadcast below only fires
+    // when the setting actually changed.
     const oldUser = await db.query.users.findFirst({
       where: eq(users.id, userId),
       columns: { presenceVisible: true, lastSeenVisible: true },
     });
 
-    if (rows.length === 0) {
+    const [updatedUser] = await db
+      .update(users)
+      .set(updateData)
+      .where(eq(users.id, userId))
+      .returning();
+
+    if (!updatedUser) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
@@ -672,9 +696,9 @@ usersRouter.get('/:id/key-fingerprint', async (req: AuthRequest, res) => {
       }
     }
 
-    res.json({ userId, fingerprint });
+    res.json(updatedUser);
   } catch {
-    res.status(404).json({ error: 'User not found' });
+    res.status(409).json({ error: 'Username conflict or database error' });
   }
 });
 

@@ -59,6 +59,8 @@ vi.mock('../lib/storage.js', () => ({
 vi.mock('../services/mlsGroups.js', () => ({
   getGroupByConversation: vi.fn().mockResolvedValue(null),
   isActiveMember: vi.fn().mockResolvedValue(false),
+}));
+
 vi.mock('../lib/fileIntegrity.js', () => ({
   verifyFileIntegrity: mockVerifyFileIntegrity,
 }));

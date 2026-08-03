@@ -12,11 +12,18 @@ import { and, eq, inArray, isNull, ne } from 'drizzle-orm';
 
 import { db } from '../db/index.js';
 import { devices, messageEnvelopes } from '../db/schema.js';
+import { BASELINE_PROTOCOL, type KnownProtocol } from './capabilities.js';
 
 /** A client-supplied (or server-derived) envelope destined for one device. */
 export interface EnvelopeInput {
   recipientDeviceId: string;
   ciphertext: string;
+  /**
+   * Which construction produced `ciphertext` (#364). Omitted means the
+   * Phase-1 sealed box — the protocol every device in this codebase already
+   * implements, and what a client that predates the migration sends.
+   */
+  protocol?: KnownProtocol;
 }
 
 /**
@@ -95,6 +102,9 @@ export async function insertMessageEnvelopes(
       recipientDeviceId: env.recipientDeviceId,
       recipientUserId: deviceToUser.get(env.recipientDeviceId)!,
       ciphertext: env.ciphertext,
+      // Recorded per envelope so pre-cutover history stays interpretable
+      // after a device's capabilities change (#364).
+      protocol: env.protocol ?? BASELINE_PROTOCOL,
     }));
 
   if (validEnvelopes.length === 0) return [];

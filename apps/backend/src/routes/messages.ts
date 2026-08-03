@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import type { IRouter } from 'express';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { conversationMembers, messages, messageEnvelopes, devices } from '../db/schema.js';
+import { conversationMembers, messages, messageEnvelopes } from '../db/schema.js';
 import { softDeleteFile } from '../services/fileCleanup.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
@@ -10,6 +10,9 @@ import { invalidateConversationCaches } from '../lib/conversationCache.js';
 import { getSocketServer } from '../lib/socket.js';
 import { validateMessagePayload } from '../lib/validateMessagePayload.js';
 import { SendMessageSchema } from '../schemas/message.schemas.js';
+import { checkEnvelopeProtocols, type E2eeProtocol } from '../services/e2eeProtocol.js';
+import { insertMessageEnvelopes } from '../lib/messageFanout.js';
+import { BASELINE_PROTOCOL } from '../lib/capabilities.js';
 
 export const messagesRouter: IRouter = Router();
 
@@ -98,25 +101,21 @@ async function applyMembershipCommit(
 messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, res) => {
   const userId = req.auth!.userId;
   const deviceId = req.auth!.deviceId as string | undefined;
+  const body = req.body as Record<string, unknown>;
   const { conversationId, messageId, contentType, ciphertext, envelopes, fileId, mlsEpoch } =
-    req.body as {
+    body as {
       conversationId: string;
       messageId: string;
       contentType?: string;
       ciphertext?: string;
-      envelopes?: Array<{ recipientDeviceId: string; ciphertext: string }>;
+      envelopes?: Array<{
+        recipientDeviceId: string;
+        ciphertext: string;
+        protocol?: E2eeProtocol;
+      }>;
       fileId?: string;
       mlsEpoch?: number;
     };
-  const body = req.body as Record<string, unknown>;
-  const { conversationId, messageId, contentType, ciphertext, envelopes, fileId } = body as {
-    conversationId: string;
-    messageId: string;
-    contentType?: string;
-    ciphertext?: string;
-    envelopes?: Array<{ recipientDeviceId: string; ciphertext: string }>;
-    fileId?: string;
-  };
   const membershipChange = membershipChangeFromBody(body);
 
   if (membershipChange) {
@@ -153,6 +152,28 @@ messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, r
     return;
   }
 
+  // ── E2EE protocol enforcement (#364) ───────────────────────────────────────
+  // Rejects an envelope naming a protocol its recipient cannot decrypt, and a
+  // fallback weaker than what both devices support.
+  if (envelopes && envelopes.length > 0) {
+    const protocolCheck = await checkEnvelopeProtocols(
+      deviceId,
+      envelopes.map((e) => ({
+        recipientDeviceId: e.recipientDeviceId,
+        protocol: e.protocol ?? BASELINE_PROTOCOL,
+      })),
+    );
+
+    if (!protocolCheck.ok) {
+      res.status(protocolCheck.code).json({
+        error: protocolCheck.error,
+        violations: protocolCheck.violations,
+      });
+      return;
+    }
+  }
+
+  // ── idempotency ────────────────────────────────────────────────────────────
   const existing = await db.query.messages.findFirst({
     where: eq(messages.id, messageId),
     columns: { createdAt: true },
@@ -180,27 +201,9 @@ messagesRouter.post('/', validate(SendMessageSchema), async (req: AuthRequest, r
         })
         .returning();
 
-      if (envelopes && envelopes.length > 0) {
-        const deviceIds = envelopes.map((e) => e.recipientDeviceId);
-        const devicesList = await tx.query.devices.findMany({
-          where: inArray(devices.id, deviceIds),
-          columns: { id: true, userId: true },
-        });
-        const deviceToUser = new Map(devicesList.map((d: { id: string; userId: string }) => [d.id, d.userId]));
-
-        const validEnvelopes = envelopes
-          .filter((env) => deviceToUser.has(env.recipientDeviceId))
-          .map((env) => ({
-            messageId,
-            recipientDeviceId: env.recipientDeviceId,
-            recipientUserId: deviceToUser.get(env.recipientDeviceId)!,
-            ciphertext: env.ciphertext,
-          }));
-
-        if (validEnvelopes.length > 0) {
-          await tx.insert(messageEnvelopes).values(validEnvelopes);
-        }
-      }
+      // Shared with the socket send paths (#188/#337) so the per-envelope
+      // protocol default cannot drift between the two implementations.
+      await insertMessageEnvelopes(tx, messageId, envelopes);
 
       if (membershipChange && isCommit(membershipChange)) {
         await applyMembershipCommit(tx, conversationId, membershipChange);

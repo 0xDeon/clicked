@@ -1,5 +1,5 @@
 import type { Server } from 'socket.io';
-import { and, eq, lt, desc, sql, inArray, isNull, ne, or, lte } from 'drizzle-orm';
+import { and, eq, lt, desc, sql, inArray, isNull, or, lte } from 'drizzle-orm';
 
 import { db } from '../db/index.js';
 import {
@@ -26,6 +26,8 @@ import { deliverMessage } from '../services/deliveryPipeline.js';
 import { publishEphemeral, readMissedEvents } from '../services/resumeStream.js';
 import { handleDeviceDeliveryReceipt } from '../services/deliveryAggregation.js';
 import { conversationRoom } from '../services/roomManager.js';
+import { checkEnvelopeProtocols, type E2eeProtocol } from '../services/e2eeProtocol.js';
+import { BASELINE_PROTOCOL } from '../lib/capabilities.js';
 import { applyMlsVisibility } from '../lib/mlsVisibility.js';
 import { getConversationEpochWindow } from '../services/mlsGroups.js';
 import { handleHeartbeat } from '../services/heartbeat.js';
@@ -35,24 +37,6 @@ import { findForbiddenSessionStateField } from '../lib/signalInvariants.js';
 import { checkFirstContactLimit } from '../services/rateLimit.js';
 
 const PAGE_SIZE = 30;
-
-/**
- * Returns the UUIDs of all active (non-revoked) devices that belong to
- * `userId` but are NOT the sending device (`senderDeviceId`). These are the
- * "sibling" devices that must each receive their own envelope so they can
- * decrypt the message locally. Issue #188.
- */
-async function fetchSiblingDeviceIds(userId: string, senderDeviceId: string): Promise<string[]> {
-  const siblings = await db.query.devices.findMany({
-    where: and(
-      eq(devices.userId, userId),
-      ne(devices.id, senderDeviceId),
-      isNull(devices.revokedAt),
-    ),
-    columns: { id: true },
-  });
-  return siblings.map((d) => d.id);
-}
 
 async function findUsersBlockingConversationAccess(
   type: 'dm' | 'group',
@@ -154,7 +138,11 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       content?: string;
       contentType?: string;
       ciphertext?: string;
-      envelopes?: Array<{ recipientDeviceId: string; ciphertext: string }>;
+      envelopes?: Array<{
+        recipientDeviceId: string;
+        ciphertext: string;
+        protocol?: E2eeProtocol;
+      }>;
       fileId?: string;
       mlsEpoch?: number;
     };
@@ -233,22 +221,10 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
     }
 
     // Enforce full sibling-device coverage (#188). MLS group messages are
-    // exempt: a single group ciphertext already reaches every member device in
-    // the tree, so there are no per-device envelopes that could be missing.
-    const siblingIds = mlsEpoch === undefined ? await fetchSiblingDeviceIds(userId, deviceId) : [];
-    if (siblingIds.length > 0) {
-      const providedIds = new Set(envelopes?.map((e) => e.recipientDeviceId) ?? []);
-      const missing = siblingIds.filter((id) => !providedIds.has(id));
-      if (missing.length > 0) {
-        socket.emit('error', {
-          event: 'device_set_mismatch',
-          message: `Missing envelopes for ${missing.length} sibling device(s)`,
-          missingDeviceIds: missing,
-        });
-        return;
-      }
-    // Enforce full sibling-device coverage (#188).
-    const missingSiblings = await findMissingSiblingDeviceIds(userId, deviceId, envelopes);
+    // exempt (#372): a single group ciphertext already reaches every member
+    // device in the tree, so there are no per-device envelopes to be missing.
+    const missingSiblings =
+      mlsEpoch === undefined ? await findMissingSiblingDeviceIds(userId, deviceId, envelopes) : [];
     if (missingSiblings.length > 0) {
       socket.emit('error', {
         event: 'device_set_mismatch',
@@ -256,6 +232,27 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         missingDeviceIds: missingSiblings,
       });
       return;
+    }
+
+    // Enforce the negotiated E2EE protocol (#364) — same rule as POST /messages.
+    if (envelopes && envelopes.length > 0) {
+      const protocolCheck = await checkEnvelopeProtocols(
+        deviceId,
+        envelopes.map((e) => ({
+          recipientDeviceId: e.recipientDeviceId,
+          protocol: e.protocol ?? BASELINE_PROTOCOL,
+        })),
+      );
+
+      if (!protocolCheck.ok) {
+        socket.emit('error', {
+          event: 'protocol_mismatch',
+          code: protocolCheck.code,
+          message: protocolCheck.error,
+          violations: protocolCheck.violations,
+        });
+        return;
+      }
     }
 
     let fileId: string | null = inputFileId || null;
@@ -466,135 +463,136 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       content: string;
       ciphertext?: string;
       contentType: 'file' | 'image' | 'video' | 'audio';
-      messageId?: string;
-    };
+    }) => {
+      const { conversationId, messageId, fileId, content, contentType } = payload;
 
-    if (!messageId) {
-      socket.emit('error', {
-        event: 'send_file_message',
-        message: 'messageId is required',
+      if (!messageId) {
+        socket.emit('error', {
+          event: 'send_file_message',
+          message: 'messageId is required',
+        });
+        return;
+      }
+
+      if (!content?.trim()) {
+        socket.emit('error', {
+          event: 'send_file_message',
+          message: 'Content (envelope ciphertext) must not be empty',
+        });
+        return;
+      }
+
+      const validContentTypes = ['file', 'image', 'video', 'audio'] as const;
+      if (!validContentTypes.includes(contentType)) {
+        socket.emit('error', {
+          event: 'send_file_message',
+          message: 'contentType must be one of: file, image, video, audio',
+        });
+        return;
+      }
+
+      const membership = await db.query.conversationMembers.findFirst({
+        where: and(
+          eq(conversationMembers.conversationId, conversationId),
+          eq(conversationMembers.userId, userId),
+        ),
       });
-      return;
-    }
 
-    if (!content?.trim()) {
-      socket.emit('error', {
-        event: 'send_file_message',
-        message: 'Content (envelope ciphertext) must not be empty',
+      if (!membership) {
+        socket.emit('error', {
+          event: 'send_file_message',
+          message: 'Not a member of this conversation',
+        });
+        return;
+      }
+
+      const existing = await db.query.messages.findFirst({
+        where: eq(messages.id, messageId),
+        columns: { createdAt: true },
       });
-      return;
-    }
 
-    const validContentTypes = ['file', 'image', 'video', 'audio'] as const;
-    if (!validContentTypes.includes(contentType)) {
-      socket.emit('error', {
-        event: 'send_file_message',
-        message: 'contentType must be one of: file, image, video, audio',
+      if (existing) {
+        socket.emit('message_ack', { messageId, createdAt: existing.createdAt });
+        return;
+      }
+
+      const file = await db.query.files.findFirst({
+        where: eq(files.id, fileId),
       });
-      return;
-    }
 
-    const membership = await db.query.conversationMembers.findFirst({
-      where: and(
-        eq(conversationMembers.conversationId, conversationId),
-        eq(conversationMembers.userId, userId),
-      ),
-    });
+      if (!file) {
+        socket.emit('error', { event: 'send_file_message', message: 'File not found' });
+        return;
+      }
 
-    if (!membership) {
-      socket.emit('error', {
-        event: 'send_file_message',
-        message: 'Not a member of this conversation',
-      });
-      return;
-    }
+      if (file.status !== 'ready') {
+        socket.emit('error', {
+          event: 'send_file_message',
+          message: 'File is not ready for use',
+        });
+        return;
+      }
 
-    const existing = await db.query.messages.findFirst({
-      where: eq(messages.id, messageId),
-      columns: { createdAt: true },
-    });
+      if (file.conversationId !== conversationId) {
+        socket.emit('error', {
+          event: 'send_file_message',
+          message: 'File does not belong to this conversation',
+        });
+        return;
+      }
 
-    if (existing) {
-      socket.emit('message_ack', { messageId, createdAt: existing.createdAt });
-      return;
-    }
+      if (file.uploaderId !== userId) {
+        socket.emit('error', {
+          event: 'send_file_message',
+          message: 'Access denied: you are not the uploader of this file',
+        });
+        return;
+      }
 
-    const file = await db.query.files.findFirst({
-      where: eq(files.id, fileId),
-    });
+      let message;
+      try {
+        message = await db.transaction(async (tx) => {
+          const [insertedMessage] = await tx
+            .insert(messages)
+            .values({
+              id: messageId,
+              conversationId,
+              senderId: userId,
+              ciphertext: content.trim(),
+              contentType,
+              fileId,
+            })
+            .returning();
 
-    if (!file) {
-      socket.emit('error', { event: 'send_file_message', message: 'File not found' });
-      return;
-    }
+          return insertedMessage;
+        });
+      } catch (error) {
+        console.error('Transaction failed for file message:', error);
+        socket.emit('error', {
+          event: 'send_file_message',
+          message: 'Failed to persist file message',
+        });
+        return;
+      }
 
-    if (file.status !== 'ready') {
-      socket.emit('error', {
-        event: 'send_file_message',
-        message: 'File is not ready for use',
-      });
-      return;
-    }
+      if (message) {
+        socket.emit('message_ack', { messageId, createdAt: message.createdAt });
+        io.to(conversationId).emit('new_message', message);
 
-    if (file.conversationId !== conversationId) {
-      socket.emit('error', {
-        event: 'send_file_message',
-        message: 'File does not belong to this conversation',
-      });
-      return;
-    }
+        const members = await db.query.conversationMembers.findMany({
+          where: eq(conversationMembers.conversationId, conversationId),
+          columns: { userId: true },
+        });
+        await invalidateConversationCaches(members.map((member) => member.userId));
 
-    if (file.uploaderId !== userId) {
-      socket.emit('error', {
-        event: 'send_file_message',
-        message: 'Access denied: you are not the uploader of this file',
-      });
-      return;
-    }
-
-    let message;
-    try {
-      message = await db.transaction(async (tx) => {
-        const [insertedMessage] = await tx
-          .insert(messages)
-          .values({
-            id: messageId,
-            conversationId,
-            senderId: userId,
-            ciphertext: content.trim(),
-            contentType,
-            fileId,
-          })
-          .returning();
-
-        return insertedMessage;
-      });
-    } catch (error) {
-      console.error('Transaction failed for file message:', error);
-      socket.emit('error', {
-        event: 'send_file_message',
-        message: 'Failed to persist file message',
-      });
-      return;
-    }
-
-    if (message) {
-      socket.emit('message_ack', { messageId, createdAt: message.createdAt });
-      io.to(conversationId).emit('new_message', message);
-
-      const members = await db.query.conversationMembers.findMany({
-        where: eq(conversationMembers.conversationId, conversationId),
-        columns: { userId: true },
-      });
-      await invalidateConversationCaches(members.map((member) => member.userId));
-
-      sendPushForMessage({
-        conversationId,
-        messageId: message.id,
-        senderId: userId,
-      });
-    }
-  });
+        sendPushForMessage({
+          conversationId,
+          messageId: message.id,
+          senderId: userId,
+        });
+      }
+    },
+  );
 
   // ── message_history ────────────────────────────────────────────────────────
   dispatcher.register('message_history', async (payload) => {
@@ -924,7 +922,9 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       memberIds: string[];
     };
 
-    const requestedMembers = Array.from(new Set(memberIds.filter((memberId) => memberId !== userId)));
+    const requestedMembers = Array.from(
+      new Set(memberIds.filter((memberId) => memberId !== userId)),
+    );
     const blockedMemberIds = await findUsersBlockingConversationAccess(type, requestedMembers);
 
     if (blockedMemberIds.length > 0) {
