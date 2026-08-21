@@ -63,7 +63,11 @@ function percentile(sorted: number[], p: number): number {
 
 function connectClient(url: string, token: string): Promise<Socket> {
   return new Promise((resolve, reject) => {
-    const socket = ioClient(url, { auth: { token }, transports: ['websocket'], reconnection: false });
+    const socket = ioClient(url, {
+      auth: { token },
+      transports: ['websocket'],
+      reconnection: false,
+    });
     const timer = setTimeout(() => reject(new Error(`connect timeout: ${url}`)), 10_000);
     socket.on('connect', () => {
       clearTimeout(timer);
@@ -93,7 +97,9 @@ async function main(): Promise<void> {
 
   const errors: string[] = [];
 
-  console.error(`[loadtest] connecting ${participants.length} devices across ${nodeUrls.length} node(s)...`);
+  console.error(
+    `[loadtest] connecting ${participants.length} devices across ${nodeUrls.length} node(s)...`,
+  );
   const sockets = await Promise.all(
     participants.map((p, i) => connectClient(nodeUrls[i % nodeUrls.length]!, p.token)),
   );
@@ -151,7 +157,10 @@ async function main(): Promise<void> {
     await new Promise((r) => setTimeout(r, 500));
     for (let i = 0; i < churners.length; i++) {
       try {
-        const reconnected = await connectClient(nodeUrls[i % nodeUrls.length]!, participants[i]!.token);
+        const reconnected = await connectClient(
+          nodeUrls[i % nodeUrls.length]!,
+          participants[i]!.token,
+        );
         sockets[i] = reconnected;
       } catch (err) {
         errors.push(`churn reconnect failed: ${(err as Error).message}`);
@@ -170,9 +179,13 @@ async function main(): Promise<void> {
   );
   const stormFailures = stormResults.filter((r) => r.status === 'rejected').length;
   if (stormFailures > 0) {
-    errors.push(`reconnect storm: ${stormFailures}/${participants.length} devices failed to reconnect`);
+    errors.push(
+      `reconnect storm: ${stormFailures}/${participants.length} devices failed to reconnect`,
+    );
   }
-  console.error(`[loadtest] reconnect storm: ${participants.length - stormFailures}/${participants.length} reconnected`);
+  console.error(
+    `[loadtest] reconnect storm: ${participants.length - stormFailures}/${participants.length} reconnected`,
+  );
 
   for (const result of stormResults) {
     if (result.status === 'fulfilled') result.value.disconnect();
@@ -235,7 +248,10 @@ async function main(): Promise<void> {
         failed = true;
       }
     } catch (err) {
-      console.error(`[loadtest] no usable baseline at ${baselinePath}, skipping regression check:`, err);
+      console.error(
+        `[loadtest] no usable baseline at ${baselinePath}, skipping regression check:`,
+        err,
+      );
     }
   }
 

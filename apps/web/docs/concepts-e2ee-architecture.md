@@ -6,14 +6,14 @@ The client-side E2EE crypto stack is split across two phases. **Phase 1** implem
 
 ## Module Map
 
-| Module | Responsibility | Phase | Status |
-|---|---|---|---|
-| `lib/cryptoStore.ts` | IndexedDB-backed identity key pair storage (device ID + ECDH P-256 keypair) | 1 | PARTIAL |
-| `lib/prekeyStore.ts` | Prekey generation, signing, and upload (X25519 + ECDSA P-256) | 1 | PARTIAL |
-| `lib/sessionStore.ts` | Session establishment (bundle fetch, X3DH key derivation, sealed-box encryption) | 1 | DEAD |
-| `lib/x3dh.ts` | X3DH initiator/responder key agreement using `@noble/curves` | 2 | DEAD |
-| `lib/crypto.ts` | Sealed-box encrypt, device set resolution, `sendEncryptedMessage` pipeline | 1 | PARTIAL |
-| `lib/signalClient.ts` | `@signalapp/libsignal-client` stub adapter (throws on use) | 2 | DEAD |
+| Module                | Responsibility                                                                   | Phase | Status  |
+| --------------------- | -------------------------------------------------------------------------------- | ----- | ------- |
+| `lib/cryptoStore.ts`  | IndexedDB-backed identity key pair storage (device ID + ECDH P-256 keypair)      | 1     | PARTIAL |
+| `lib/prekeyStore.ts`  | Prekey generation, signing, and upload (X25519 + ECDSA P-256)                    | 1     | PARTIAL |
+| `lib/sessionStore.ts` | Session establishment (bundle fetch, X3DH key derivation, sealed-box encryption) | 1     | DEAD    |
+| `lib/x3dh.ts`         | X3DH initiator/responder key agreement using `@noble/curves`                     | 2     | DEAD    |
+| `lib/crypto.ts`       | Sealed-box encrypt, device set resolution, `sendEncryptedMessage` pipeline       | 1     | PARTIAL |
+| `lib/signalClient.ts` | `@signalapp/libsignal-client` stub adapter (throws on use)                       | 2     | DEAD    |
 
 ## Crypto Stack Diagram
 
@@ -79,6 +79,7 @@ The client-side E2EE crypto stack is split across two phases. **Phase 1** implem
 **Dependencies**: None (uses browser APIs: `indexedDB`, `window.crypto.subtle`).
 
 **Live/dead status**: PARTIAL. The grep found two imports within `apps/web/src`:
+
 - `lib/prekeyStore.ts:1` → `import { cryptoStore } from './cryptoStore'`
 - `lib/messageCache.ts:1` → `import { cryptoStore } from './cryptoStore'`
 
@@ -95,6 +96,7 @@ Neither `prekeyStore.ts` nor `messageCache.ts` is imported by any component, con
 **Dependencies**: `cryptoStore` (imports `getIdentityPrivateKey`), `apiFetch` (for uploading prekeys to the server).
 
 **Live/dead status**: PARTIAL. The grep found one import within `apps/web/src`:
+
 - `lib/sessionStore.ts:2` → `import { prekeyStore } from './prekeyStore'`
 
 `sessionStore.ts` itself is not imported by any component, context, or hook (see below). The chain ends at a dead module.
@@ -122,6 +124,7 @@ Neither `prekeyStore.ts` nor `messageCache.ts` is imported by any component, con
 **Dependencies**: `@noble/curves/ed25519`, `@noble/hashes/hkdf`, `@noble/hashes/sha2`, `@noble/hashes/utils`.
 
 **Live/dead status**: DEAD. The grep found one import within `apps/web/src`:
+
 - `lib/x3dh.test.ts:13` → `import ... from './x3dh'`
 
 This is a test file only. No production component, context, or hook imports this module.
@@ -137,6 +140,7 @@ This is a test file only. No production component, context, or hook imports this
 **Dependencies**: None (uses browser APIs and `./api` indirectly through `sendEncryptedMessage`'s fetch calls).
 
 **Live/dead status**: PARTIAL. The grep found three imports within `apps/web/src`:
+
 - `lib/fileEncryption.ts:25` → `import { buildEnvelopes, type DeviceRecord, type MessageEnvelope } from './crypto.js'` (runtime value import)
 - `lib/session.ts:19` → `import { buildEnvelopes as phase1BuildEnvelopes, sealedBoxEncrypt } from './crypto.js'` (runtime value import)
 - `lib/signalClient.ts:28` → `import type { DeviceRecord, MessageEnvelope } from './crypto.js'` (type-only import)

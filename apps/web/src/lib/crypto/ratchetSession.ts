@@ -115,11 +115,9 @@ async function hmac(keyBytes: Uint8Array, label: string): Promise<Uint8Array> {
 }
 
 async function generateDhKeyPair(): Promise<CryptoKeyPair> {
-  return (await webCrypto().subtle.generateKey(
-    { name: 'ECDH', namedCurve: 'P-256' },
-    true,
-    ['deriveBits'],
-  )) as CryptoKeyPair;
+  return (await webCrypto().subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, [
+    'deriveBits',
+  ])) as CryptoKeyPair;
 }
 
 async function exportPublicKey(key: CryptoKey): Promise<Uint8Array> {
@@ -152,11 +150,7 @@ async function importPublicKey(value: Uint8Array): Promise<CryptoKey> {
 
 async function dh(privateKey: CryptoKey, publicKey: CryptoKey): Promise<Uint8Array> {
   return new Uint8Array(
-    await webCrypto().subtle.deriveBits(
-      { name: 'ECDH', public: publicKey },
-      privateKey,
-      256,
-    ),
+    await webCrypto().subtle.deriveBits({ name: 'ECDH', public: publicKey }, privateKey, 256),
   );
 }
 
@@ -164,12 +158,7 @@ async function rootStep(
   rootKey: Uint8Array,
   sharedSecret: Uint8Array,
 ): Promise<{ rootKey: Uint8Array; chainKey: Uint8Array }> {
-  const material = await hkdf(
-    sharedSecret,
-    rootKey,
-    'DripTide Double Ratchet root step',
-    64,
-  );
+  const material = await hkdf(sharedSecret, rootKey, 'DripTide Double Ratchet root step', 64);
   return {
     rootKey: material.subarray(0, 32),
     chainKey: material.subarray(32, 64),
@@ -196,13 +185,9 @@ async function encryptWithKey(
 ): Promise<Uint8Array> {
   const iv = new Uint8Array(12);
   webCrypto().getRandomValues(iv);
-  const key = await webCrypto().subtle.importKey(
-    'raw',
-    source(messageKey),
-    'AES-GCM',
-    false,
-    ['encrypt'],
-  );
+  const key = await webCrypto().subtle.importKey('raw', source(messageKey), 'AES-GCM', false, [
+    'encrypt',
+  ]);
   const encrypted = new Uint8Array(
     await webCrypto().subtle.encrypt(
       { name: 'AES-GCM', iv: source(iv), additionalData: source(aad) },
@@ -222,13 +207,9 @@ async function decryptWithKey(
   aad: Uint8Array,
 ): Promise<string> {
   if (payload.length < 13) throw new Error('Invalid ratchet ciphertext');
-  const key = await webCrypto().subtle.importKey(
-    'raw',
-    source(messageKey),
-    'AES-GCM',
-    false,
-    ['decrypt'],
-  );
+  const key = await webCrypto().subtle.importKey('raw', source(messageKey), 'AES-GCM', false, [
+    'decrypt',
+  ]);
   const plaintext = await webCrypto().subtle.decrypt(
     {
       name: 'AES-GCM',
@@ -243,9 +224,7 @@ async function decryptWithKey(
 
 function openDatabase(): Promise<IDBDatabase> {
   if (typeof indexedDB === 'undefined') {
-    return Promise.reject(
-      new Error('IndexedDB is unavailable; ratchet state cannot be persisted'),
-    );
+    return Promise.reject(new Error('IndexedDB is unavailable; ratchet state cannot be persisted'));
   }
 
   return new Promise((resolve, reject) => {
@@ -354,10 +333,7 @@ async function performSendingRatchet(state: RatchetState): Promise<void> {
 
   const remoteKey = await importPublicKey(fromBase64(state.remotePublicKey));
   const pair = await generateDhKeyPair();
-  const stepped = await rootStep(
-    fromBase64(state.rootKey),
-    await dh(pair.privateKey, remoteKey),
-  );
+  const stepped = await rootStep(fromBase64(state.rootKey), await dh(pair.privateKey, remoteKey));
 
   state.rootKey = toBase64(stepped.rootKey);
   state.sendChainKey = toBase64(stepped.chainKey);
@@ -430,16 +406,12 @@ export async function decryptDm(sessionId: string, ciphertext: string): Promise<
   }
 
   const isFirstPeerMessage = !state.remotePublicKey;
-  const peerChanged =
-    !isFirstPeerMessage && envelope.h.dh !== state.remotePublicKey;
+  const peerChanged = !isFirstPeerMessage && envelope.h.dh !== state.remotePublicKey;
 
   if (peerChanged) {
     const privateKey = await importPrivateKey(fromBase64(state.sendingPrivateKey));
     const peerKey = await importPublicKey(fromBase64(envelope.h.dh));
-    const stepped = await rootStep(
-      fromBase64(state.rootKey),
-      await dh(privateKey, peerKey),
-    );
+    const stepped = await rootStep(fromBase64(state.rootKey), await dh(privateKey, peerKey));
     state.rootKey = toBase64(stepped.rootKey);
     state.receiveChainKey = toBase64(stepped.chainKey);
     state.receiveMessageNumber = 0;

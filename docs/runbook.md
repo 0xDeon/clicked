@@ -36,6 +36,7 @@ Symptom: `[socket.io] Redis unavailable` warning at boot, or
 "Graceful degradation: cache misses fall through to DB").
 
 Effect:
+
 - Socket.IO falls back to the **in-process adapter** — each gateway
   instance becomes an isolated single-node system. Clients connected to
   different instances stop receiving each other's messages until Redis
@@ -47,11 +48,12 @@ Effect:
   to Postgres — slower, not broken.
 
 Response:
+
 1. Confirm Redis reachability (`redis-cli -u $REDIS_URL ping`).
 2. If Redis is down cluster-wide: this is a capacity/availability incident,
    not a data-loss one — messages still persist to Postgres via the
    `fanoutMessage` transaction (`services/fanout.ts`), which has no Redis
-   dependency. Delivery to *already-connected* sockets on other instances
+   dependency. Delivery to _already-connected_ sockets on other instances
    is what's lost until Redis returns; clients resync via `GET /sync` on
    reconnect.
 3. Restore Redis, then confirm `[socket.io] Redis adapter attached` in logs
@@ -70,6 +72,7 @@ fails. This is a hard outage for all write paths — sockets stay connected
 but functionally idle.
 
 Response:
+
 1. `/health` on each instance is the fastest signal — wire it to your LB
    health check if not already, so unhealthy instances stop receiving new
    connections.
@@ -92,6 +95,7 @@ no partial/corrupt uploads are possible from an outage, since the client
 never gets a URL to upload to.
 
 Response:
+
 1. Confirm reachability of `OBJECT_STORE_ENDPOINT` directly.
 2. If using MinIO (`infra/docker-compose.yml`), check the `minio` container
    health and `minio-init` bucket-creation step.
@@ -107,6 +111,7 @@ high-fanout usage or an attacker deliberately exhausting a target's prekeys
 to force fallback (signed-prekey-only) sessions.
 
 Detection:
+
 - `clicked_prekey_consumed_total` rate (#393) spiking for a narrow set of
   devices, cross-referenced against `GET /devices` `oneTimePreKeysRemaining`
   (`routes/devices.ts`) trending toward zero.
@@ -115,6 +120,7 @@ Detection:
   sampling on that route, not a dedicated metric today).
 
 Response:
+
 1. Identify the affected device(s) from the metric labels / access logs
    (device id, not user content — no ciphertext is involved in this
    incident class).

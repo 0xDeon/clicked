@@ -273,7 +273,11 @@ export default function ConversationPage() {
       const inbound = inboundById.get(msg.id);
       if (inbound && inbound.status === 'decrypted' && inbound.plaintext) {
         let filePayload: Message['filePayload'];
-        if (msg.contentType === 'file' || msg.contentType === 'image' || msg.contentType === 'video') {
+        if (
+          msg.contentType === 'file' ||
+          msg.contentType === 'image' ||
+          msg.contentType === 'video'
+        ) {
           try {
             filePayload = parseFileMessagePayload(inbound.plaintext);
           } catch {
@@ -298,7 +302,11 @@ export default function ConversationPage() {
       if (!exists) {
         if (inbound.status === 'decrypted' && inbound.plaintext) {
           let filePayload: Message['filePayload'];
-          if (inbound.contentType === 'file' || inbound.contentType === 'image' || inbound.contentType === 'video') {
+          if (
+            inbound.contentType === 'file' ||
+            inbound.contentType === 'image' ||
+            inbound.contentType === 'video'
+          ) {
             try {
               filePayload = parseFileMessagePayload(inbound.plaintext);
             } catch {
@@ -327,9 +335,7 @@ export default function ConversationPage() {
       }
     }
 
-    return merged.sort(
-      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-    );
+    return merged.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   }, [messages, inboundMessages]);
 
   const contacts = useMemo(() => {
@@ -553,7 +559,11 @@ export default function ConversationPage() {
     try {
       const messageId = crypto.randomUUID();
       const devices = await fetchConversationDevices(id, token, API_BASE_URL);
-      const thumbnail = await generateEncryptedThumbnail({ file, authToken: token, apiBaseUrl: API_BASE_URL });
+      const thumbnail = await generateEncryptedThumbnail({
+        file,
+        authToken: token,
+        apiBaseUrl: API_BASE_URL,
+      });
       const result = await sendEncryptedFile({
         file,
         conversationId: id,
@@ -567,7 +577,11 @@ export default function ConversationPage() {
         conversationId: id,
         messageId,
         fileId: result.fileId,
-        contentType: file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : 'file',
+        contentType: file.type.startsWith('image/')
+          ? 'image'
+          : file.type.startsWith('video/')
+            ? 'video'
+            : 'file',
         envelopes: result.envelopes,
       });
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -755,12 +769,7 @@ export default function ConversationPage() {
         </div>
 
         <div className="flex shrink-0 items-center gap-2 border-t border-border bg-card/60 px-5 py-3">
-          <input
-            ref={fileInputRef}
-            type="file"
-            className="hidden"
-            onChange={handleSendFile}
-          />
+          <input ref={fileInputRef} type="file" className="hidden" onChange={handleSendFile} />
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}

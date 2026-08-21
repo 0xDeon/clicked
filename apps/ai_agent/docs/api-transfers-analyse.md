@@ -13,12 +13,12 @@ Analyses a Stellar transfer for fraud risk. The endpoint has two code paths:
 
 ### Request body (`TransferAnalyseRequest`)
 
-| Field       | Type    | Description                                           |
-|-------------|---------|-------------------------------------------------------|
-| `amount`    | `float` | Transfer amount in XLM.                               |
-| `sender`    | `str`   | Sender Stellar account address (ed25519 public key).  |
-| `recipient` | `str`   | Recipient Stellar account address.                    |
-| `memo`      | `str`   | Transfer memo text.                                   |
+| Field       | Type    | Description                                          |
+| ----------- | ------- | ---------------------------------------------------- |
+| `amount`    | `float` | Transfer amount in XLM.                              |
+| `sender`    | `str`   | Sender Stellar account address (ed25519 public key). |
+| `recipient` | `str`   | Recipient Stellar account address.                   |
+| `memo`      | `str`   | Transfer memo text.                                  |
 
 Example:
 
@@ -41,11 +41,11 @@ Example:
 
 When the threshold is exceeded the LLM is **never called**. The response is returned immediately with hardcoded values:
 
-| Field        | Value                            |
-|--------------|----------------------------------|
-| `flagged`    | `true`                           |
+| Field        | Value                                            |
+| ------------ | ------------------------------------------------ |
+| `flagged`    | `true`                                           |
 | `reason`     | `"Amount {n} XLM exceeds 10000.0 XLM threshold"` |
-| `confidence` | `0.99`                           |
+| `confidence` | `0.99`                                           |
 
 Transfers **equal to** 10 000.0 XLM take the LLM path; only values strictly above trigger the short-circuit.
 
@@ -63,20 +63,20 @@ The LLM call has a 10-second timeout. Requests are billed normally per OpenAI us
 
 ## Response (`TransferAnalyseResponse`)
 
-| Field        | Type          | Description                                                                 |
-|--------------|---------------|-----------------------------------------------------------------------------|
-| `flagged`    | `bool`        | Whether the transfer is considered suspicious.                              |
-| `reason`     | `str` or null | Human-readable explanation. `null` when the transfer is not flagged.        |
+| Field        | Type          | Description                                                                           |
+| ------------ | ------------- | ------------------------------------------------------------------------------------- |
+| `flagged`    | `bool`        | Whether the transfer is considered suspicious.                                        |
+| `reason`     | `str` or null | Human-readable explanation. `null` when the transfer is not flagged.                  |
 | `confidence` | `float`       | Confidence in the assessment, ranging from `0.0` (low confidence) to `1.0` (certain). |
 
 ### Fallback defaults
 
 If the LLM response omits a key, the following defaults are applied:
 
-| Omitted key   | Default  |
-|---------------|----------|
-| `flagged`     | `false`  |
-| `confidence`  | `0.0`    |
+| Omitted key  | Default |
+| ------------ | ------- |
+| `flagged`    | `false` |
+| `confidence` | `0.0`   |
 
 `reason` is passed through as-is (`null` if absent or explicitly `null`).
 
@@ -84,11 +84,11 @@ If the LLM response omits a key, the following defaults are applied:
 
 ## Errors
 
-| Status | Condition                                | Body detail                        |
-|--------|------------------------------------------|------------------------------------|
-| 422    | Missing required field or type mismatch  | Validation error per FastAPI       |
+| Status | Condition                                        | Body detail                          |
+| ------ | ------------------------------------------------ | ------------------------------------ |
+| 422    | Missing required field or type mismatch          | Validation error per FastAPI         |
 | 500    | `OPENAI_API_KEY` environment variable is not set | `"OPENAI_API_KEY is not configured"` |
-| 500    | `openai` package is not installed        | `"openai package is not installed"` |
+| 500    | `openai` package is not installed                | `"openai package is not installed"`  |
 
 ---
 

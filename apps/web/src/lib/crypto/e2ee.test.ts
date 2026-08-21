@@ -1,10 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { sealedBoxEncrypt, buildEnvelopes } from '../crypto';
-import {
-  setSessionKey,
-  importSessionKey,
-  getSessionKey,
-} from './sessionStore';
+import { setSessionKey, importSessionKey, getSessionKey } from './sessionStore';
 import { decryptAndVerifyEnvelope } from './decrypt';
 import { encryptFile, downloadAndDecryptFile } from '../fileEncryption';
 
@@ -140,11 +136,10 @@ describe('Inbound decrypt round trip (#354)', () => {
     const senderDeviceId = 'sender-device-1';
     const plaintext = 'Round-trip test message';
 
-    const sessionKey = await crypto.subtle.generateKey(
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['encrypt', 'decrypt'],
-    );
+    const sessionKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+      'encrypt',
+      'decrypt',
+    ]);
     setSessionKey(senderDeviceId, sessionKey);
 
     const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -161,7 +156,11 @@ describe('Inbound decrypt round trip (#354)', () => {
     };
     const ciphertext = btoa(JSON.stringify(envelopePayload));
 
-    const decrypted = await decryptAndVerifyEnvelope(ciphertext, senderDeviceId, generateEd25519SpkiPublicKey());
+    const decrypted = await decryptAndVerifyEnvelope(
+      ciphertext,
+      senderDeviceId,
+      generateEd25519SpkiPublicKey(),
+    );
 
     expect(decrypted).toBe(plaintext);
   });

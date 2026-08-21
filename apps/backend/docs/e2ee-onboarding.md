@@ -538,7 +538,7 @@ Required guarantees for this path:
 ### C) Low-prekey warning before exhaustion
 
 Waiting for exhaustion means every sender in the meantime is downgraded to
-3-DH, so the backend warns the owning device *before* it runs dry.
+3-DH, so the backend warns the owning device _before_ it runs dry.
 
 Two surfaces expose this:
 
@@ -618,7 +618,7 @@ For compatibility with the current implementation, clients should rely on this o
 Recipient bundle fetch and atomic one-time prekey consumption are implemented
 (see above). Backend work still needed for full first-DM support:
 
-- encrypted envelope submit/store/deliver for the *first* contact between two
+- encrypted envelope submit/store/deliver for the _first_ contact between two
   users specifically (the general send path exists — see `docs/` for the
   message/envelope model — but hasn't been audited end-to-end against this
   onboarding sequence)

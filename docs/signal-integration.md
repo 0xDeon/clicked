@@ -90,7 +90,7 @@ the per-envelope `protocol` column that keeps Phase-1 history decryptable, the
 downgrade guard on the send path, and the rollout order — is specified in
 [apps/backend/docs/signal-migration.md](../apps/backend/docs/signal-migration.md).
 
-The short version: each device *pair* switches to Signal once both sides
+The short version: each device _pair_ switches to Signal once both sides
 advertise it, old envelopes are never re-encrypted, and the client keeps its
 Phase-1 decryption path forever.
 

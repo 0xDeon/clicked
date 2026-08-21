@@ -18,12 +18,13 @@ The `POST /chat` endpoint provides an interactive chat interface powered by Open
 
 Sourced from `ChatRequest` Pydantic model in `main.py`:
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `message` | `string` | Yes | The user's input query or message prompt. |
-| `conversation_id` | `string` | Yes | Unique identifier for tracking the chat thread or session context. |
+| Field             | Type     | Required | Description                                                        |
+| ----------------- | -------- | -------- | ------------------------------------------------------------------ |
+| `message`         | `string` | Yes      | The user's input query or message prompt.                          |
+| `conversation_id` | `string` | Yes      | Unique identifier for tracking the chat thread or session context. |
 
 #### JSON Schema Example:
+
 ```json
 {
   "message": "What is Clicked and how do payments work?",
@@ -37,11 +38,12 @@ Sourced from `ChatRequest` Pydantic model in `main.py`:
 
 Sourced from `ChatResponse` Pydantic model in `main.py`:
 
-| Field | Type | Description |
-|---|---|---|
+| Field   | Type     | Description                                    |
+| ------- | -------- | ---------------------------------------------- |
 | `reply` | `string` | The AI assistant's generated response message. |
 
 #### JSON Schema Example:
+
 ```json
 {
   "reply": "Clicked is a decentralised messaging and payment platform built on the Stellar blockchain. You can send XLM token payments directly inside chat threads."
@@ -66,9 +68,11 @@ Sourced from `ChatResponse` Pydantic model in `main.py`:
 All failure modes and HTTP status codes match the application implementation in `main.py` and unit tests in `tests/test_chat.py`.
 
 ### 1. `422 Unprocessable Entity` — Request Validation Error
+
 Triggered automatically by FastAPI when request payload fails Pydantic schema validation (e.g., missing required `message` or `conversation_id` field).
 
 **Response Body Shape**:
+
 ```json
 {
   "detail": [
@@ -82,9 +86,11 @@ Triggered automatically by FastAPI when request payload fails Pydantic schema va
 ```
 
 ### 2. `500 Internal Server Error` — Missing API Key
+
 Triggered when the `OPENAI_API_KEY` environment variable is not configured on the server.
 
 **Response Body Shape**:
+
 ```json
 {
   "detail": "OPENAI_API_KEY is not configured"
@@ -92,9 +98,11 @@ Triggered when the `OPENAI_API_KEY` environment variable is not configured on th
 ```
 
 ### 3. `500 Internal Server Error` — Missing Dependency
+
 Triggered if the required `openai` Python package is not installed in the application runtime environment.
 
 **Response Body Shape**:
+
 ```json
 {
   "detail": "openai package is not installed"
@@ -102,6 +110,7 @@ Triggered if the required `openai` Python package is not installed in the applic
 ```
 
 ### 4. Upstream OpenAI API Errors / Timeout
+
 If upstream OpenAI services encounter connection failures or timeout beyond the 30-second window, an unhandled exception will result in a standard HTTP 500 error response.
 
 ---
@@ -109,6 +118,7 @@ If upstream OpenAI services encounter connection failures or timeout beyond the 
 ## Worked Example
 
 ### Worked Request
+
 ```http
 POST /chat HTTP/1.1
 Host: localhost:8000
@@ -121,6 +131,7 @@ Content-Type: application/json
 ```
 
 ### Worked Response
+
 ```http
 HTTP/1.1 200 OK
 Content-Type: application/json

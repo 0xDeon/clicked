@@ -140,11 +140,11 @@ Status: `500` — database delete failed.
 Web Push requires VAPID keys to authenticate the application server with the
 push service. The backend reads these from environment variables:
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `VAPID_PUBLIC_KEY` | no (push disabled if absent) | — | VAPID application server public key |
-| `VAPID_PRIVATE_KEY` | no (push disabled if absent) | — | VAPID application server private key |
-| `VAPID_SUBJECT` | no | `mailto:admin@clicked.app` | Contact URI for the push service |
+| Variable            | Required                     | Default                    | Description                          |
+| ------------------- | ---------------------------- | -------------------------- | ------------------------------------ |
+| `VAPID_PUBLIC_KEY`  | no (push disabled if absent) | —                          | VAPID application server public key  |
+| `VAPID_PRIVATE_KEY` | no (push disabled if absent) | —                          | VAPID application server private key |
+| `VAPID_SUBJECT`     | no                           | `mailto:admin@clicked.app` | Contact URI for the push service     |
 
 These are declared as optional in the environment schema
 (`apps/backend/src/config.ts:18-20`). When both `VAPID_PUBLIC_KEY` and

@@ -101,13 +101,10 @@ export class SealedBoxProtocol implements SessionProtocol {
       256,
     );
 
-    return getWebCrypto().subtle.importKey(
-      'raw',
-      sharedBits,
-      { name: 'AES-GCM' },
-      false,
-      ['encrypt', 'decrypt'],
-    );
+    return getWebCrypto().subtle.importKey('raw', sharedBits, { name: 'AES-GCM' }, false, [
+      'encrypt',
+      'decrypt',
+    ]);
   }
 
   async encryptMessage(

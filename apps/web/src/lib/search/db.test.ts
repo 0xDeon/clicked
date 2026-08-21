@@ -36,7 +36,9 @@ describe('Local Encrypted Message Cache (#357)', () => {
     // Read via canonical db module
     const retrieved = await getAllMessages();
     expect(retrieved.length).toBe(2);
-    expect(retrieved.find((m) => m.id === 'msg-1')?.plaintext).toBe('Top secret sensitive message content');
+    expect(retrieved.find((m) => m.id === 'msg-1')?.plaintext).toBe(
+      'Top secret sensitive message content',
+    );
     expect(retrieved.find((m) => m.id === 'msg-2')?.plaintext).toBe('Another confidential message');
 
     const byConv = await getMessagesByConversation('conv-100');

@@ -2,11 +2,11 @@
 
 A practical, end-to-end guide for **building**, **deploying**, and **invoking** the three Soroban contracts in this repository using the tooling this repo actually uses:
 
-| Contract | Path | Purpose |
-|---|---|---|
-| `token_transfer` | `contracts/contracts/token_transfer` | SEP-41 token transfer router (transfer/balance/upgrade) |
+| Contract         | Path                                 | Purpose                                                                 |
+| ---------------- | ------------------------------------ | ----------------------------------------------------------------------- |
+| `token_transfer` | `contracts/contracts/token_transfer` | SEP-41 token transfer router (transfer/balance/upgrade)                 |
 | `group_treasury` | `contracts/contracts/group_treasury` | Multi-sig treasury: deposits, member-managed withdraw proposals, voting |
-| `proposals` | `contracts/contracts/proposals` | Community-funding proposals: create → vote → finalize → execute |
+| `proposals`      | `contracts/contracts/proposals`      | Community-funding proposals: create → vote → finalize → execute         |
 
 It also documents how a deployed contract ID reaches the frontend (`apps/web/src/lib/soroban.ts`) and the backend (`apps/backend`).
 
@@ -52,11 +52,11 @@ cargo build -p proposals       --target wasm32-unknown-unknown --release
 
 **Verification.** These commands were run against the current `main` and complete successfully. The release wasm binaries land in `target/wasm32-unknown-unknown/release/`:
 
-| Binary | Size |
-|---|---|
+| Binary                | Size   |
+| --------------------- | ------ |
 | `token_transfer.wasm` | ~10 KB |
 | `group_treasury.wasm` | ~32 KB |
-| `proposals.wasm` | ~26 KB |
+| `proposals.wasm`      | ~26 KB |
 
 CI runs the same commands in `.github/workflows/contracts-ci.yml` (matrix over the three packages, ubuntu-latest).
 
@@ -164,11 +164,11 @@ export TOKEN_CONTRACT_ID="C..."
 
 Each contract has a bash script in `contracts/scripts/` that builds the wasm, uploads it, deploys the instance, and calls `initialize`. They are self-contained but require a few env vars:
 
-| Script | Required env vars |
-|---|---|
-| `deploy_token_transfer.sh` | `DEPLOYER_SECRET` (secret key `S...`), `TOKEN_CONTRACT_ID` (from 4.3) |
-| `deploy_group_treasury.sh` | `DEPLOYER_SECRET`, `TOKEN_CONTRACT_ID` (from 4.3) |
-| `deploy_proposals.sh` | `DEPLOYER_SECRET`, `TREASURY_CONTRACT_ID` (deployed `group_treasury`), `MIN_VOTES` (approval threshold) |
+| Script                     | Required env vars                                                                                       |
+| -------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `deploy_token_transfer.sh` | `DEPLOYER_SECRET` (secret key `S...`), `TOKEN_CONTRACT_ID` (from 4.3)                                   |
+| `deploy_group_treasury.sh` | `DEPLOYER_SECRET`, `TOKEN_CONTRACT_ID` (from 4.3)                                                       |
+| `deploy_proposals.sh`      | `DEPLOYER_SECRET`, `TREASURY_CONTRACT_ID` (deployed `group_treasury`), `MIN_VOTES` (approval threshold) |
 
 Example:
 
@@ -226,11 +226,11 @@ stellar contract invoke \
 
 **`initialize` signatures per contract:**
 
-| Contract | `initialize` args | Notes |
-|---|---|---|
-| `token_transfer` | `--admin <Address>` `--token_contract <Address>` | No auth required |
-| `group_treasury` | `--admin <Address>` `--token <Address>` `--threshold <u32>` | `threshold` ≥ 1 |
-| `proposals` | `--admin <Address>` | `admin.require_auth()` — the `--source` must be the admin |
+| Contract         | `initialize` args                                           | Notes                                                     |
+| ---------------- | ----------------------------------------------------------- | --------------------------------------------------------- |
+| `token_transfer` | `--admin <Address>` `--token_contract <Address>`            | No auth required                                          |
+| `group_treasury` | `--admin <Address>` `--token <Address>` `--threshold <u32>` | `threshold` ≥ 1                                           |
+| `proposals`      | `--admin <Address>`                                         | `admin.require_auth()` — the `--source` must be the admin |
 
 Recommended deploy order:
 
@@ -363,10 +363,10 @@ PROPOSALS_CONTRACT_ID=
 
 The frontend's Soroban client, [`apps/web/src/lib/soroban.ts`](../../apps/web/src/lib/soroban.ts), resolves configuration at call time:
 
-| Env var | Default if unset | Used for |
-|---|---|---|
-| `NEXT_PUBLIC_SOROBAN_RPC_URL` | `https://soroban-testnet.stellar.org` | Soroban RPC server |
-| `NEXT_PUBLIC_NETWORK_PASSPHRASE` | `Networks.TESTNET` (stellar-sdk) | Network passphrase for building/signing |
+| Env var                               | Default if unset                                              | Used for                                          |
+| ------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------- |
+| `NEXT_PUBLIC_SOROBAN_RPC_URL`         | `https://soroban-testnet.stellar.org`                         | Soroban RPC server                                |
+| `NEXT_PUBLIC_NETWORK_PASSPHRASE`      | `Networks.TESTNET` (stellar-sdk)                              | Network passphrase for building/signing           |
 | `NEXT_PUBLIC_TOKEN_TRANSFER_CONTRACT` | literal placeholder `REPLACE_WITH_TOKEN_TRANSFER_CONTRACT_ID` | Contract ID passed to `new Contract(CONTRACT_ID)` |
 
 So the deployed `token_transfer` contract ID reaches the frontend like this:

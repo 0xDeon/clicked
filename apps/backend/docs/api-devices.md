@@ -40,6 +40,7 @@ no ownership parameter to check.
 **Request:** no body.
 
 **Response `200`:**
+
 ```json
 [
   {
@@ -55,6 +56,7 @@ no ownership parameter to check.
   }
 ]
 ```
+
 - `oneTimePreKeysRemaining` — count of unconsumed `one_time` rows in
   `device_prekeys` for that device (`0` if none uploaded, or if the device
   has never had prekeys).
@@ -77,6 +79,7 @@ previously-revoked one.
 (`req.auth.userId`) — there is no cross-user parameter.
 
 **Request body** (validated by `RegisterDeviceSchema`, i.e. `DeviceSchema`):
+
 ```json
 {
   "deviceName": "Jesse's iPhone",
@@ -85,6 +88,7 @@ previously-revoked one.
   "registrationId": 12345
 }
 ```
+
 - `deviceName`: string, 1–100 chars, **required**.
 - `platform`: one of `"web" | "ios" | "android"`, **required**.
 - `identityPublicKey`: base64 Ed25519 public key, **required** (32 raw bytes,
@@ -92,6 +96,7 @@ previously-revoked one.
 - `registrationId`: non-negative integer, **optional**.
 
 **Behavior:**
+
 - Looked up by `(userId, identityPublicKey)`.
 - If a **non-revoked** row already exists for that identity key: `409`
   `{ "error": "Device already registered for this user" }`.
@@ -106,6 +111,7 @@ previously-revoked one.
   with `'device_added'` instead of `'device_revoked'`).
 
 **Response `201`:**
+
 ```json
 { "id": "b6b6c3b0-...", "createdAt": "2026-07-29T10:00:00.000Z" }
 ```
@@ -113,6 +119,7 @@ previously-revoked one.
 **Response `409`:** device already registered (see above).
 
 **Response `400`:** Zod validation failure —
+
 ```json
 {
   "error": "Validation failed",
@@ -143,6 +150,7 @@ state rather than re-running side effects.
 caller's non-revoked devices.
 
 **Response `200`** (device revoked now, or already was):
+
 ```json
 { "id": "b6b6c3b0-...", "revokedAt": "2026-07-29T10:00:00.000Z" }
 ```
@@ -170,9 +178,11 @@ non-revoked device except the one making the request
 **Request:** no body.
 
 **Response `200`:**
+
 ```json
 { "revokedCount": 3 }
 ```
+
 `revokedCount` is the number of devices actually revoked (excludes the
 caller's current device, and excludes devices that were already revoked).
 
@@ -192,6 +202,7 @@ Uploads a signed prekey and a batch of one-time prekeys for a device the
 caller owns.
 
 **Auth / ownership:**
+
 - Device must exist → otherwise `404` `{ "error": "Device not found" }`.
 - Device must belong to the caller → otherwise `403`
   `{ "error": "Only the device owner may upload prekeys" }`.
@@ -200,6 +211,7 @@ caller owns.
 
 **Request body** (validated by a schema requiring both a signed prekey and
 at least one one-time prekey):
+
 ```json
 {
   "signedPreKey": {
@@ -213,6 +225,7 @@ at least one one-time prekey):
   ]
 }
 ```
+
 - `oneTimePreKeys` must contain **at least 1** entry — an empty array is a
   `400` schema-validation failure, not a no-op.
 - `signedPreKey.signature` is verified as an Ed25519 signature over
@@ -224,6 +237,7 @@ See [Prekey upload contract](#prekey-upload-contract) below for the full
 signed-vs-one-time distinction and the 200-key cap/trim behavior.
 
 **Response `200`:**
+
 ```json
 {
   "uploadedSignedPreKey": true,
@@ -251,6 +265,7 @@ encrypting to a sender you've received a message from.
 
 **Auth / ownership:** this is a **cross-user** lookup, gated differently
 from every other route on this page:
+
 - The target device (`:id`) must exist **and be non-revoked** — a revoked
   or nonexistent device returns `404`
   `{ "error": "Device not found or revoked" }`.
@@ -258,9 +273,10 @@ from every other route on this page:
   device's owner — otherwise `403`
   `{ "error": "No shared conversation with device owner" }`. There is no
   ownership requirement that the caller own the device itself; this route
-  is explicitly for looking up *other* users' keys.
+  is explicitly for looking up _other_ users' keys.
 
 **Response `200`:**
+
 ```json
 {
   "id": "b6b6c3b0-...",
@@ -319,13 +335,13 @@ with a `device_added` change type instead — it does **not** run steps 1–4
 
 ### Signed vs. one-time prekeys
 
-| | Signed prekey | One-time prekeys |
-|---|---|---|
-| Count per device | Exactly one, upserted (replaced) on every upload | Many; new ones are added to the existing pool |
-| Fields | `keyId`, `publicKey`, `signature` | `keyId`, `publicKey` |
-| Conflict handling | `ON CONFLICT` on `(deviceId, keyType='signed')` → **updates** the existing row (`keyId`, `publicKey`, `signature`, `createdAt` all overwritten) | `ON CONFLICT` on `(deviceId, keyType, keyId)` → **ignored** (`onConflictDoNothing`); re-uploading the same `keyId` is a silent no-op, not an error |
-| Signature check | `signature` is verified as an Ed25519 signature over `publicKey`, using the device's `identityPublicKey`. Invalid → `400`, nothing written | Not signature-checked individually |
-| Consumption | Never marked `consumed` — it's reused across sessions | Each row has a `consumed` boolean; consumption itself happens outside this route (e.g. when another user fetches a key bundle) — this route only ever inserts unconsumed rows |
+|                   | Signed prekey                                                                                                                                   | One-time prekeys                                                                                                                                                              |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Count per device  | Exactly one, upserted (replaced) on every upload                                                                                                | Many; new ones are added to the existing pool                                                                                                                                 |
+| Fields            | `keyId`, `publicKey`, `signature`                                                                                                               | `keyId`, `publicKey`                                                                                                                                                          |
+| Conflict handling | `ON CONFLICT` on `(deviceId, keyType='signed')` → **updates** the existing row (`keyId`, `publicKey`, `signature`, `createdAt` all overwritten) | `ON CONFLICT` on `(deviceId, keyType, keyId)` → **ignored** (`onConflictDoNothing`); re-uploading the same `keyId` is a silent no-op, not an error                            |
+| Signature check   | `signature` is verified as an Ed25519 signature over `publicKey`, using the device's `identityPublicKey`. Invalid → `400`, nothing written      | Not signature-checked individually                                                                                                                                            |
+| Consumption       | Never marked `consumed` — it's reused across sessions                                                                                           | Each row has a `consumed` boolean; consumption itself happens outside this route (e.g. when another user fetches a key bundle) — this route only ever inserts unconsumed rows |
 
 Every upload **replaces the signed prekey** (there is only ever one active
 signed prekey per device) while **adding to** the one-time pool (existing
@@ -362,6 +378,6 @@ one-time array.
 
 ---
 
-*Verified against `apps/backend/src/routes/devices.ts` and
+_Verified against `apps/backend/src/routes/devices.ts` and
 `apps/backend/src/routes/userDevices.ts` as of this writing. If either file
-changes, this doc should be updated in the same PR.*
+changes, this doc should be updated in the same PR._

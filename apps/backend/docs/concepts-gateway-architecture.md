@@ -66,11 +66,11 @@ On `SIGTERM`/`SIGINT`:
 
 ### 2.1 Room Types
 
-| Room Pattern | Purpose | Membership Source |
-|---|---|---|
+| Room Pattern                          | Purpose                                                           | Membership Source                 |
+| ------------------------------------- | ----------------------------------------------------------------- | --------------------------------- |
 | `room:conversation:${conversationId}` | Fan-out for conversation events (messages, typing, read receipts) | PostgreSQL `conversation_members` |
-| `room:user:${userId}` | Cross-device synchronization (presence, delivery receipts) | Authenticated user ID |
-| `device:${deviceId}` | Per-device delivery (message envelopes) | Authenticated device ID |
+| `room:user:${userId}`                 | Cross-device synchronization (presence, delivery receipts)        | Authenticated user ID             |
+| `device:${deviceId}`                  | Per-device delivery (message envelopes)                           | Authenticated device ID           |
 
 **Conversation rooms** are the primary broadcast channel. When a message is sent, the event is emitted to the conversation room, which reaches all online members across all nodes (via the Redis adapter).
 
@@ -85,12 +85,9 @@ Room membership is **not trusted from room state alone**. Every `join_room` requ
 ```typescript
 // src/services/roomManager.ts
 async function joinConversationRoom(socket, conversationId) {
-  const isValid = await validateConversationMembership(
-    socket.auth.userId,
-    conversationId
-  );
+  const isValid = await validateConversationMembership(socket.auth.userId, conversationId);
   if (!isValid) {
-    socket.emit("error", { message: "Not a member of this conversation" });
+    socket.emit('error', { message: 'Not a member of this conversation' });
     return;
   }
   socket.join(conversationRoom(conversationId));
@@ -190,12 +187,12 @@ Stream length is capped at 500 entries. Old entries are trimmed automatically. T
 
 Redis-based presence with these key patterns:
 
-| Key Pattern | Type | Purpose |
-|---|---|---|
-| `presence:user:${userId}` | Hash | `deviceId → lastSeen` timestamp |
-| `presence:user:${userId}:device:${deviceId}` | String | Per-device key with 90s TTL |
-| `presence:sockets:${userId}` | Set | Active socket IDs |
-| `presence:socket:${socketId}` | Hash | `{ userId, deviceId }` mapping |
+| Key Pattern                                  | Type   | Purpose                         |
+| -------------------------------------------- | ------ | ------------------------------- |
+| `presence:user:${userId}`                    | Hash   | `deviceId → lastSeen` timestamp |
+| `presence:user:${userId}:device:${deviceId}` | String | Per-device key with 90s TTL     |
+| `presence:sockets:${userId}`                 | Set    | Active socket IDs               |
+| `presence:socket:${socketId}`                | Hash   | `{ userId, deviceId }` mapping  |
 
 ### 6.1 Boot Reconciliation
 
@@ -205,11 +202,11 @@ On startup, `reconcileBoot()` scans all presence keys and removes stale entries 
 
 ## 7. Rate Limiting (`apps/backend/src/services/rateLimit.ts`)
 
-| Parameter | Default | Env Variable | Behavior |
-|---|---|---|---|
-| Events per second | 10 | `SOCKET_RATE_LIMIT_PER_SEC` | Redis `INCR` + `EXPIRE 1` per socket |
-| Max payload size | 16384 bytes (16 KB) | `MAX_PAYLOAD_SIZE` | Checked before handler execution |
-| Violation threshold | 3 | (hardcoded) | In-memory counter; disconnect on 3rd violation |
+| Parameter           | Default             | Env Variable                | Behavior                                       |
+| ------------------- | ------------------- | --------------------------- | ---------------------------------------------- |
+| Events per second   | 10                  | `SOCKET_RATE_LIMIT_PER_SEC` | Redis `INCR` + `EXPIRE 1` per socket           |
+| Max payload size    | 16384 bytes (16 KB) | `MAX_PAYLOAD_SIZE`          | Checked before handler execution               |
+| Violation threshold | 3                   | (hardcoded)                 | In-memory counter; disconnect on 3rd violation |
 
 ### 7.1 Per-Socket Limiting
 
@@ -225,10 +222,10 @@ The raw message payload is size-checked before any processing. If it exceeds `MA
 
 Monitors the WebSocket send buffer (`socket.io`'s `bufferedAmount`) to detect slow consumers.
 
-| Threshold | Default | Env Variable | Action |
-|---|---|---|---|
-| Shed | 32768 bytes | `SOCKET_SHED_THRESHOLD` | Stop sending new events to this socket |
-| Disconnect | 65536 bytes | `SOCKET_BUFFER_THRESHOLD` | Force-disconnect the socket |
+| Threshold  | Default     | Env Variable              | Action                                 |
+| ---------- | ----------- | ------------------------- | -------------------------------------- |
+| Shed       | 32768 bytes | `SOCKET_SHED_THRESHOLD`   | Stop sending new events to this socket |
+| Disconnect | 65536 bytes | `SOCKET_BUFFER_THRESHOLD` | Force-disconnect the socket            |
 
 ### 8.1 Monitoring
 
@@ -311,14 +308,14 @@ Shedding (stop sending) is reversible — when the buffer drains, normal deliver
 
 ## 12. Configuration Reference
 
-| Env Variable | Default | Service | Description |
-|---|---|---|---|
-| `SOCKET_RATE_LIMIT_PER_SEC` | `10` | rateLimit | Max events per second per socket |
-| `MAX_PAYLOAD_SIZE` | `16384` | rateLimit | Max event payload size in bytes |
-| `RESUME_STREAM_TTL_SECONDS` | `300` | resumeStream | TTL for ephemeral event stream |
-| `RESUME_STREAM_MAXLEN` | `500` | resumeStream | Max entries in ephemeral event stream |
-| `SOCKET_SHED_THRESHOLD` | `32768` | backpressure | Buffer size at which to stop sending |
-| `SOCKET_BUFFER_THRESHOLD` | `65536` | backpressure | Buffer size at which to disconnect |
+| Env Variable                | Default | Service      | Description                           |
+| --------------------------- | ------- | ------------ | ------------------------------------- |
+| `SOCKET_RATE_LIMIT_PER_SEC` | `10`    | rateLimit    | Max events per second per socket      |
+| `MAX_PAYLOAD_SIZE`          | `16384` | rateLimit    | Max event payload size in bytes       |
+| `RESUME_STREAM_TTL_SECONDS` | `300`   | resumeStream | TTL for ephemeral event stream        |
+| `RESUME_STREAM_MAXLEN`      | `500`   | resumeStream | Max entries in ephemeral event stream |
+| `SOCKET_SHED_THRESHOLD`     | `32768` | backpressure | Buffer size at which to stop sending  |
+| `SOCKET_BUFFER_THRESHOLD`   | `65536` | backpressure | Buffer size at which to disconnect    |
 
 ---
 

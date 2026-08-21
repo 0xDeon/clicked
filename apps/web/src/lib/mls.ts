@@ -45,10 +45,14 @@ function asBytes(value: unknown, name: string): MlsBytes {
   throw new Error(`OpenMLS returned an invalid ${name}`);
 }
 
-function requiredMethod(instance: OpenMlsInstance, names: string[]): (...args: unknown[]) => unknown {
+function requiredMethod(
+  instance: OpenMlsInstance,
+  names: string[],
+): (...args: unknown[]) => unknown {
   for (const name of names) {
     const method = instance[name];
-    if (typeof method === 'function') return method.bind(instance) as (...args: unknown[]) => unknown;
+    if (typeof method === 'function')
+      return method.bind(instance) as (...args: unknown[]) => unknown;
   }
   throw new Error(`OpenMLS WASM binding does not expose ${names.join(' or ')}`);
 }
@@ -79,7 +83,8 @@ export class MlsClient {
 
   static async create(groupId: string, options: MlsClientOptions): Promise<MlsClient> {
     if (!groupId) throw new Error('groupId is required');
-    if (!(options.credential instanceof Uint8Array)) throw new Error('credential must be Uint8Array');
+    if (!(options.credential instanceof Uint8Array))
+      throw new Error('credential must be Uint8Array');
 
     const loaded = await loadBinding();
     return new MlsClient(createBinding(loaded, options), groupId);
@@ -101,12 +106,18 @@ export class MlsClient {
     return normalizeMessages(await add(externalCredential), this.groupId);
   }
 
-  async encrypt(plaintext: MlsBytes, authenticatedData: MlsBytes = new Uint8Array()): Promise<MlsBytes> {
+  async encrypt(
+    plaintext: MlsBytes,
+    authenticatedData: MlsBytes = new Uint8Array(),
+  ): Promise<MlsBytes> {
     const encrypt = requiredMethod(this.binding, ['encryptMessage', 'encrypt_message', 'encrypt']);
     return asBytes(await encrypt(plaintext, authenticatedData), 'ciphertext');
   }
 
-  async decrypt(ciphertext: MlsBytes, authenticatedData: MlsBytes = new Uint8Array()): Promise<MlsBytes> {
+  async decrypt(
+    ciphertext: MlsBytes,
+    authenticatedData: MlsBytes = new Uint8Array(),
+  ): Promise<MlsBytes> {
     const decrypt = requiredMethod(this.binding, ['decryptMessage', 'decrypt_message', 'decrypt']);
     return asBytes(await decrypt(ciphertext, authenticatedData), 'plaintext');
   }
@@ -118,7 +129,12 @@ export class MlsClient {
   }
 
   async applyCommit(commit: MlsBytes): Promise<void> {
-    const apply = requiredMethod(this.binding, ['applyCommit', 'apply_commit', 'processCommit', 'process_commit']);
+    const apply = requiredMethod(this.binding, [
+      'applyCommit',
+      'apply_commit',
+      'processCommit',
+      'process_commit',
+    ]);
     await apply(commit);
   }
 

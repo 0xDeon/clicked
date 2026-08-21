@@ -191,14 +191,14 @@ class CryptoStore {
       'identityKeyPair',
       'current',
     );
-    
+
     if (stored?.keyPair?.privateKey) {
       return stored.keyPair.privateKey;
     }
 
     // Fallback: check if we have legacy data (migration path)
     const legacyKey = await this.dbGet<StoredIdentityKeyPair>('keys', 'identity_keypair');
-    
+
     if (!legacyKey) {
       return null;
     }

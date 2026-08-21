@@ -1,6 +1,6 @@
 # File & Thumbnail Encryption Pipeline
 
-This document explains the end-to-end (E2E) encrypted file sharing architecture in Clicked, detailing the roles of `lib/fileEncryption.ts`, `lib/thumbnail.ts`, and `EncryptedThumbnail.tsx`. 
+This document explains the end-to-end (E2E) encrypted file sharing architecture in Clicked, detailing the roles of `lib/fileEncryption.ts`, `lib/thumbnail.ts`, and `EncryptedThumbnail.tsx`.
 
 Our architecture guarantees that the server only ever handles ciphertext. It never has access to the plaintext files or the keys required to decrypt them.
 
@@ -12,7 +12,7 @@ The lifecycle of an encrypted file attachment follows a strict sequence to ensur
 2. **Client-Side Encryption:** Using `lib/fileEncryption.ts`, the client generates a unique AES-256-GCM symmetric key and Initialization Vector (IV). The file is encrypted in memory, outputting the ciphertext.
 3. **Presigned URL Request:** The client requests a presigned upload URL from the server for the storage provider (e.g., S3/R2). **No encryption keys are sent during this request.**
 4. **Ciphertext Upload:** The client uploads the encrypted file directly to the storage provider using the presigned URL.
-5. **Message Transmission:** The client constructs the chat message. The AES key and IV used for the file are placed *inside* the E2E-encrypted message payload. The server routes this message to the recipient without being able to read the payload.
+5. **Message Transmission:** The client constructs the chat message. The AES key and IV used for the file are placed _inside_ the E2E-encrypted message payload. The server routes this message to the recipient without being able to read the payload.
 6. **Recipient Download:** When the recipient receives the message, their client requests a presigned GET URL for the ciphertext from the storage provider and downloads it.
 7. **Client-Side Decryption:** The recipient's client extracts the AES key and IV from the decrypted message payload. It passes the ciphertext, key, and IV to `lib/fileEncryption.ts` to decrypt the file in memory and offer it as a downloadable Blob.
 
@@ -20,14 +20,14 @@ The lifecycle of an encrypted file attachment follows a strict sequence to ensur
 
 Security relies on strict key isolation. Here is the exact state of the AES decryption key at every stage:
 
-| Stage | Key Location & State | Server Visibility |
-|---|---|---|
-| **Generation** | In-memory on the sender's device. | None |
-| **File Encryption** | In-memory on the sender's device. | None |
-| **Storage Upload** | Does not exist in the upload payload. | None |
+| Stage               | Key Location & State                                                       | Server Visibility                     |
+| ------------------- | -------------------------------------------------------------------------- | ------------------------------------- |
+| **Generation**      | In-memory on the sender's device.                                          | None                                  |
+| **File Encryption** | In-memory on the sender's device.                                          | None                                  |
+| **Storage Upload**  | Does not exist in the upload payload.                                      | None                                  |
 | **Message Routing** | Encrypted within the E2EE message payload using the channel/recipient key. | **Zero** (Server sees opaque payload) |
-| **File Download** | Retained securely in the recipient's local state. | None |
-| **Decryption** | In-memory on the recipient's device. | None |
+| **File Download**   | Retained securely in the recipient's local state.                          | None                                  |
+| **Decryption**      | In-memory on the recipient's device.                                       | None                                  |
 
 ## Thumbnail Generation & Encryption
 

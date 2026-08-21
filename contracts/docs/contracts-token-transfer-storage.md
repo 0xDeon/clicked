@@ -6,10 +6,10 @@ The `token_transfer` contract is a Soroban smart contract that routes token tran
 
 ## Storage Keys
 
-| Key Name | Storage Type | Value Type | Description |
-|---|---|---|---|
-| `DataKey::TokenContract` | Instance | `Address` | The SEP-41 token contract this transfer contract operates on |
-| `DataKey::Admin` | Instance | `Address` | Admin address allowed to update the token contract |
+| Key Name                 | Storage Type | Value Type | Description                                                  |
+| ------------------------ | ------------ | ---------- | ------------------------------------------------------------ |
+| `DataKey::TokenContract` | Instance     | `Address`  | The SEP-41 token contract this transfer contract operates on |
+| `DataKey::Admin`         | Instance     | `Address`  | Admin address allowed to update the token contract           |
 
 Both keys are defined in `storage.rs` as variants of the `DataKey` enum, which is annotated with `#[contracttype]`. All storage reads and writes in `lib.rs` use `env.storage().instance()`, confirming these are instance-scoped keys.
 

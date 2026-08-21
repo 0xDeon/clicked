@@ -31,12 +31,12 @@ The treasury experience lives in [src/app/app/treasury/page.tsx](../src/app/app/
 
 ### User actions and where they go
 
-| UI action | First step | Second step | Notes |
-| --- | --- | --- | --- |
-| Open treasury page | Backend REST: `GET /treasury/proposals` | None | The page fetches proposal rows from the backend and renders them in the UI. |
-| Create a withdrawal proposal | Backend REST: `POST /treasury/propose` | None | The modal sends the proposal payload to the backend, which stores the proposal metadata and returns the draft row. |
-| Approve a proposal | Wallet signing via Freighter | Backend REST: `POST /treasury/proposals/:id/approve` | The UI first asks Freighter to sign a message based on the proposal id, then posts the signature to the backend. |
-| Reject a proposal | Wallet signing via Freighter | Backend REST: `POST /treasury/proposals/:id/reject` | Same pattern as approve: sign locally, then send the signature to the backend. |
+| UI action                    | First step                              | Second step                                          | Notes                                                                                                              |
+| ---------------------------- | --------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Open treasury page           | Backend REST: `GET /treasury/proposals` | None                                                 | The page fetches proposal rows from the backend and renders them in the UI.                                        |
+| Create a withdrawal proposal | Backend REST: `POST /treasury/propose`  | None                                                 | The modal sends the proposal payload to the backend, which stores the proposal metadata and returns the draft row. |
+| Approve a proposal           | Wallet signing via Freighter            | Backend REST: `POST /treasury/proposals/:id/approve` | The UI first asks Freighter to sign a message based on the proposal id, then posts the signature to the backend.   |
+| Reject a proposal            | Wallet signing via Freighter            | Backend REST: `POST /treasury/proposals/:id/reject`  | Same pattern as approve: sign locally, then send the signature to the backend.                                     |
 
 The current UI does not call Soroban contracts directly from these treasury actions. Instead, the web app uses the backend REST layer as the authoritative entry point for proposal creation and voting metadata. The backend is responsible for persisting proposal rows, vote records, and the user-visible state that feeds the UI.
 

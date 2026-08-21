@@ -37,8 +37,7 @@ export interface MessagePayload {
 }
 
 export type MessagePayloadValidationResult =
-  | { ok: true }
-  | { ok: false; code: 400 | 403; message: string };
+  { ok: true } | { ok: false; code: 400 | 403; message: string };
 
 /** All content types clients are allowed to send */
 const ALLOWED_CONTENT_TYPES = new Set(['text', 'file', 'image', 'video', 'audio'] as const);

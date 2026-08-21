@@ -15,12 +15,12 @@ The service manages a single vector collection within Weaviate to store and inde
 
 Sourced directly from the collection indexing logic in `main.py` (`index_message` & `search_messages` functions):
 
-| Property Name | Type | Description | Indexing & Filter Role |
-|---|---|---|---|
-| `messageId` | `string` (UUID) | Unique identifier for the message object. Serves as the primary Weaviate object UUID. | Object ID / Lookup |
-| `conversationId` | `string` | ID of the conversation thread or chat room to which the message belongs. | **Filter Field** (`/search` scoping) |
-| `senderId` | `string` | Stellar account or user ID of the sender. | Stored Property |
-| `content` | `string` | Raw textual body content of the chat message. | Embedded Text Property |
+| Property Name    | Type            | Description                                                                           | Indexing & Filter Role               |
+| ---------------- | --------------- | ------------------------------------------------------------------------------------- | ------------------------------------ |
+| `messageId`      | `string` (UUID) | Unique identifier for the message object. Serves as the primary Weaviate object UUID. | Object ID / Lookup                   |
+| `conversationId` | `string`        | ID of the conversation thread or chat room to which the message belongs.              | **Filter Field** (`/search` scoping) |
+| `senderId`       | `string`        | Stellar account or user ID of the sender.                                             | Stored Property                      |
+| `content`        | `string`        | Raw textual body content of the chat message.                                         | Embedded Text Property               |
 
 ---
 
@@ -41,6 +41,7 @@ The vector embeddings for messages are generated externally using OpenAI's embed
 When searching indexed messages via `GET /search?q={query}&conversationId={conversationId}`, vector search results are strictly filtered to prevent cross-conversation data leaks.
 
 ### Search Criteria
+
 - **Similarity Search**: `collection.query.near_vector(near_vector=vector, limit=5, filters=...)`
 - **Primary Filter Field**: `conversationId`
 - **Filter Constraint**: `Filter.by_property("conversationId").equal(conversationId)`

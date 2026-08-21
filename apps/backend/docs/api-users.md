@@ -41,12 +41,12 @@ The middleware:
 
 ### Auth error responses
 
-| Condition | Status | Body |
-|---|---|---|
-| Missing or non-Bearer header | `401` | `{ "error": "Missing or invalid Authorization header" }` |
-| Invalid or expired JWT | `401` | `{ "error": "Invalid or expired token" }` |
-| JWT missing `deviceId` claim | `401` | `{ "error": "Token missing deviceId" }` |
-| Device not found or revoked | `401` | `{ "error": "Device not found or has been revoked" }` |
+| Condition                    | Status | Body                                                     |
+| ---------------------------- | ------ | -------------------------------------------------------- |
+| Missing or non-Bearer header | `401`  | `{ "error": "Missing or invalid Authorization header" }` |
+| Invalid or expired JWT       | `401`  | `{ "error": "Invalid or expired token" }`                |
+| JWT missing `deviceId` claim | `401`  | `{ "error": "Token missing deviceId" }`                  |
+| Device not found or revoked  | `401`  | `{ "error": "Device not found or has been revoked" }`    |
 
 ---
 
@@ -61,11 +61,12 @@ GET /users/search?q=<query>
 Authorization: Bearer <jwt>
 ```
 
-| Parameter | In | Type | Required | Description |
-|---|---|---|---|---|
-| `q` | query | string | Yes | Username prefix (case-insensitive) **or** exact Stellar wallet address |
+| Parameter | In    | Type   | Required | Description                                                            |
+| --------- | ----- | ------ | -------- | ---------------------------------------------------------------------- |
+| `q`       | query | string | Yes      | Username prefix (case-insensitive) **or** exact Stellar wallet address |
 
 **Matching behaviour:**
+
 - Username matching is a case-insensitive prefix search (`ILIKE '<q>%'`).
 - Special LIKE wildcard characters in `q` (`\`, `%`, `_`) are automatically escaped so user input is always treated literally.
 - Wallet address matching is an exact equality check against the `wallets.address` column — no prefix expansion.
@@ -85,21 +86,21 @@ Authorization: Bearer <jwt>
 ]
 ```
 
-| Field | Type | Notes |
-|---|---|---|
-| `id` | `string` (UUID) | User ID |
-| `username` | `string \| null` | Display name |
-| `avatarUrl` | `string \| null` | Avatar image URL |
+| Field                  | Type             | Notes                                                                   |
+| ---------------------- | ---------------- | ----------------------------------------------------------------------- |
+| `id`                   | `string` (UUID)  | User ID                                                                 |
+| `username`             | `string \| null` | Display name                                                            |
+| `avatarUrl`            | `string \| null` | Avatar image URL                                                        |
 | `primaryWalletAddress` | `string \| null` | The wallet where `isPrimary = true`; `null` if no primary wallet is set |
 
 The response is a flat array. Wallet details beyond the primary address are not exposed — the per-user `wallets` array is not included.
 
 ### Error responses
 
-| Status | Body | Condition |
-|---|---|---|
-| `400` | `{ "error": "Query parameter \"q\" is required" }` | `q` is absent or after trimming is an empty string |
-| `500` | `{ "error": "Search failed" }` | Unexpected database error |
+| Status | Body                                               | Condition                                          |
+| ------ | -------------------------------------------------- | -------------------------------------------------- |
+| `400`  | `{ "error": "Query parameter \"q\" is required" }` | `q` is absent or after trimming is an empty string |
+| `500`  | `{ "error": "Search failed" }`                     | Unexpected database error                          |
 
 ---
 
@@ -132,20 +133,20 @@ No path parameters or query parameters.
 }
 ```
 
-| Field | Type | Notes |
-|---|---|---|
-| `id` | `string` (UUID) | Stable user identifier |
-| `username` | `string \| null` | `null` until the user sets one |
-| `avatarUrl` | `string \| null` | |
-| `presenceVisible` | `boolean` | When `false`, the user's online status is hidden from other users |
-| `wallets` | `Array<{ address: string, isPrimary: boolean }>` | All linked wallets |
-| `createdAt` | `string` (ISO 8601) | Account creation timestamp |
+| Field             | Type                                             | Notes                                                             |
+| ----------------- | ------------------------------------------------ | ----------------------------------------------------------------- |
+| `id`              | `string` (UUID)                                  | Stable user identifier                                            |
+| `username`        | `string \| null`                                 | `null` until the user sets one                                    |
+| `avatarUrl`       | `string \| null`                                 |                                                                   |
+| `presenceVisible` | `boolean`                                        | When `false`, the user's online status is hidden from other users |
+| `wallets`         | `Array<{ address: string, isPrimary: boolean }>` | All linked wallets                                                |
+| `createdAt`       | `string` (ISO 8601)                              | Account creation timestamp                                        |
 
 ### Error responses
 
-| Status | Body | Condition |
-|---|---|---|
-| `404` | `{ "error": "User not found" }` | The user record for `req.auth.userId` no longer exists |
+| Status | Body                            | Condition                                              |
+| ------ | ------------------------------- | ------------------------------------------------------ |
+| `404`  | `{ "error": "User not found" }` | The user record for `req.auth.userId` no longer exists |
 
 ---
 
@@ -169,11 +170,11 @@ Content-Type: application/json
 }
 ```
 
-| Field | Type | Required | Constraints |
-|---|---|---|---|
-| `username` | `string` | No | 3–30 characters; only `[a-zA-Z0-9_]` allowed |
-| `avatarUrl` | `string \| null` | No | No server-side format validation |
-| `presenceVisible` | `boolean` | No | Must be a strict boolean, not a string |
+| Field             | Type             | Required | Constraints                                  |
+| ----------------- | ---------------- | -------- | -------------------------------------------- |
+| `username`        | `string`         | No       | 3–30 characters; only `[a-zA-Z0-9_]` allowed |
+| `avatarUrl`       | `string \| null` | No       | No server-side format validation             |
+| `presenceVisible` | `boolean`        | No       | Must be a strict boolean, not a string       |
 
 ### Success response — `200 OK`
 
@@ -206,13 +207,13 @@ Events are only emitted if the user has an active WebSocket connection (checked 
 
 ### Error responses
 
-| Status | Body | Condition |
-|---|---|---|
-| `400` | `{ "error": "Username must be 3-30 alphanumeric characters and underscores only" }` | `username` fails regex `/^[a-zA-Z0-9_]{3,30}$/` |
-| `400` | `{ "error": "presenceVisible must be a boolean" }` | `presenceVisible` is provided but is not a strict `boolean` |
-| `404` | `{ "error": "User not found" }` | The authenticated user no longer exists after the update attempt |
-| `409` | `{ "error": "Username is already taken" }` | `username` is in use by a different user |
-| `409` | `{ "error": "Username conflict or database error" }` | Unexpected database error (e.g., race-condition conflict not caught by the pre-check) |
+| Status | Body                                                                                | Condition                                                                             |
+| ------ | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `400`  | `{ "error": "Username must be 3-30 alphanumeric characters and underscores only" }` | `username` fails regex `/^[a-zA-Z0-9_]{3,30}$/`                                       |
+| `400`  | `{ "error": "presenceVisible must be a boolean" }`                                  | `presenceVisible` is provided but is not a strict `boolean`                           |
+| `404`  | `{ "error": "User not found" }`                                                     | The authenticated user no longer exists after the update attempt                      |
+| `409`  | `{ "error": "Username is already taken" }`                                          | `username` is in use by a different user                                              |
+| `409`  | `{ "error": "Username conflict or database error" }`                                | Unexpected database error (e.g., race-condition conflict not caught by the pre-check) |
 
 ---
 
@@ -227,9 +228,9 @@ GET /users/:id
 Authorization: Bearer <jwt>
 ```
 
-| Parameter | In | Type | Description |
-|---|---|---|---|
-| `id` | path | string (UUID) | Target user's ID |
+| Parameter | In   | Type          | Description      |
+| --------- | ---- | ------------- | ---------------- |
+| `id`      | path | string (UUID) | Target user's ID |
 
 ### Success response — `200 OK`
 
@@ -245,20 +246,20 @@ Authorization: Bearer <jwt>
 }
 ```
 
-| Field | Type | Notes |
-|---|---|---|
-| `id` | `string` (UUID) | |
-| `username` | `string \| null` | |
-| `avatarUrl` | `string \| null` | |
-| `wallets` | `Array<{ address: string, isPrimary: boolean }>` | All linked wallets |
+| Field       | Type                                             | Notes              |
+| ----------- | ------------------------------------------------ | ------------------ |
+| `id`        | `string` (UUID)                                  |                    |
+| `username`  | `string \| null`                                 |                    |
+| `avatarUrl` | `string \| null`                                 |                    |
+| `wallets`   | `Array<{ address: string, isPrimary: boolean }>` | All linked wallets |
 
 Internal fields (`createdAt`, `updatedAt`, wallet `id`/`userId`/`createdAt`) are explicitly stripped by the handler and never appear in the response.
 
 ### Error responses
 
-| Status | Body | Condition |
-|---|---|---|
-| `404` | `{ "error": "User not found" }` | No user with that ID exists, or the database query threw (e.g. malformed UUID) |
+| Status | Body                            | Condition                                                                      |
+| ------ | ------------------------------- | ------------------------------------------------------------------------------ |
+| `404`  | `{ "error": "User not found" }` | No user with that ID exists, or the database query threw (e.g. malformed UUID) |
 
 ---
 
@@ -273,9 +274,9 @@ GET /users/:id/presence
 Authorization: Bearer <jwt>
 ```
 
-| Parameter | In | Type | Description |
-|---|---|---|---|
-| `id` | path | string (UUID) | Target user's ID |
+| Parameter | In   | Type          | Description      |
+| --------- | ---- | ------------- | ---------------- |
+| `id`      | path | string (UUID) | Target user's ID |
 
 ### Presence resolution logic
 
@@ -288,35 +289,39 @@ The server applies the following ordered strategy:
 ### Success responses — `200 OK`
 
 **Presence hidden (user opted out):**
+
 ```json
 { "online": "unknown" }
 ```
 
 **User is online (Redis or device check):**
+
 ```json
 { "online": true }
 ```
 
 **User is offline — `lastSeen` known:**
+
 ```json
 { "online": false, "lastSeen": "2026-05-31T09:00:00.000Z" }
 ```
 
 **User is offline — no `lastSeen` available:**
+
 ```json
 { "online": false }
 ```
 
-| Field | Type | Notes |
-|---|---|---|
-| `online` | `true \| false \| "unknown"` | `"unknown"` when the user has disabled presence visibility |
+| Field      | Type                           | Notes                                                                                 |
+| ---------- | ------------------------------ | ------------------------------------------------------------------------------------- |
+| `online`   | `true \| false \| "unknown"`   | `"unknown"` when the user has disabled presence visibility                            |
 | `lastSeen` | `string` (ISO 8601) — optional | Only present when `online: false` and at least one device has a recorded `lastSeenAt` |
 
 ### Error responses
 
-| Status | Body | Condition |
-|---|---|---|
-| `404` | `{ "error": "User not found" }` | No user with that ID exists |
+| Status | Body                            | Condition                   |
+| ------ | ------------------------------- | --------------------------- |
+| `404`  | `{ "error": "User not found" }` | No user with that ID exists |
 
 ---
 
@@ -331,9 +336,9 @@ GET /users/:id/key-fingerprint
 Authorization: Bearer <jwt>
 ```
 
-| Parameter | In | Type | Description |
-|---|---|---|---|
-| `id` | path | string (UUID) | Target user's ID |
+| Parameter | In   | Type          | Description      |
+| --------- | ---- | ------------- | ---------------- |
+| `id`      | path | string (UUID) | Target user's ID |
 
 ### Success response — `200 OK`
 
@@ -345,11 +350,11 @@ Authorization: Bearer <jwt>
 }
 ```
 
-| Field | Type | Notes |
-|---|---|---|
-| `userId` | `string` (UUID) | Echoes the path parameter |
-| `fingerprint` | `string` | Raw 60-digit decimal string (no spaces) |
-| `formatted` | `string` | 12 groups of 5 digits, space-separated (Signal safety number display format) |
+| Field         | Type            | Notes                                                                        |
+| ------------- | --------------- | ---------------------------------------------------------------------------- |
+| `userId`      | `string` (UUID) | Echoes the path parameter                                                    |
+| `fingerprint` | `string`        | Raw 60-digit decimal string (no spaces)                                      |
+| `formatted`   | `string`        | 12 groups of 5 digits, space-separated (Signal safety number display format) |
 
 `fingerprint` and `formatted` encode the same number. Clients should strip spaces before comparing: `formatted.replace(/ /g, '') === fingerprint`.
 
@@ -399,19 +404,22 @@ segmentB = (valueB % 10n**30n).toString().padStart(30, '0')
 
 The two 15-byte windows are non-overlapping within the 32-byte digest (indices 0–14 and 15–29), providing two statistically independent segments.
 
-**Step 7 — Concatenate segments**  
+**Step 7 — Concatenate segments**
+
 ```
 fingerprint = segmentA + segmentB   // 60 digits
 ```
 
 **Step 8 — Format for display**  
 Split the 60-digit string into groups of 5 and join with spaces:
+
 ```
 formatted = fingerprint.match(/.{5}/g).join(' ')
 // → "XXXXX XXXXX ... XXXXX"  (12 groups of 5, 11 spaces)
 ```
 
 **Derivation notes:**
+
 - The algorithm matches Signal's safety-number scheme — two independent 30-digit numbers from non-overlapping digest halves.
 - The identity keys used as input are the **base64 string representations** stored in the database. Clients must use the same encoding they submitted during device registration.
 - Revoked devices are excluded from the computation. A new fingerprint must be fetched (and re-verified out-of-band) whenever the user's active device set changes.
@@ -419,11 +427,11 @@ formatted = fingerprint.match(/.{5}/g).join(' ')
 
 ### Error responses
 
-| Status | Body | Condition |
-|---|---|---|
-| `404` | `{ "error": "User not found" }` | No user with that ID exists |
-| `404` | `{ "error": "No active devices found for this user" }` | User exists but has zero non-revoked devices |
-| `500` | `{ "error": "Failed to compute key fingerprint" }` | Unexpected error during computation |
+| Status | Body                                                   | Condition                                    |
+| ------ | ------------------------------------------------------ | -------------------------------------------- |
+| `404`  | `{ "error": "User not found" }`                        | No user with that ID exists                  |
+| `404`  | `{ "error": "No active devices found for this user" }` | User exists but has zero non-revoked devices |
+| `500`  | `{ "error": "Failed to compute key fingerprint" }`     | Unexpected error during computation          |
 
 ---
 
@@ -441,9 +449,9 @@ GET /users/:userId/devices/:deviceId/key-bundle
 Authorization: Bearer <jwt>
 ```
 
-| Parameter | In | Type | Description |
-|---|---|---|---|
-| `userId` | path | string (UUID) | ID of the user who owns the target device |
+| Parameter  | In   | Type          | Description                                     |
+| ---------- | ---- | ------------- | ----------------------------------------------- |
+| `userId`   | path | string (UUID) | ID of the user who owns the target device       |
 | `deviceId` | path | string (UUID) | ID of the specific device to fetch a bundle for |
 
 No query parameters or request body.
@@ -485,17 +493,17 @@ No query parameters or request body.
 }
 ```
 
-| Field | Type | Notes |
-|---|---|---|
-| `deviceId` | `string` (UUID) | Device identifier; echoes `:deviceId` |
-| `identityPublicKey` | `string` (base64) | Long-term Ed25519 identity public key for the device |
-| `registrationId` | `integer \| null` | X3DH/Signal registration ID set by the device during auth; `null` if not provided at registration |
-| `signedPreKey.keyId` | `integer` | Application-assigned ID for this signed prekey |
-| `signedPreKey.publicKey` | `string` (base64) | Signed prekey's public component |
-| `signedPreKey.signature` | `string` (base64) | Ed25519 signature over `signedPreKey.publicKey`, signed by the device's `identityPublicKey`. **Callers must verify this before using the signed prekey.** |
-| `oneTimePreKey` | `object \| null` | Present and non-null when an OTP was successfully claimed; `null` when the device has no remaining OTPs |
-| `oneTimePreKey.keyId` | `integer` | Application-assigned ID for the consumed OTP |
-| `oneTimePreKey.publicKey` | `string` (base64) | Consumed OTP's public component |
+| Field                     | Type              | Notes                                                                                                                                                     |
+| ------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deviceId`                | `string` (UUID)   | Device identifier; echoes `:deviceId`                                                                                                                     |
+| `identityPublicKey`       | `string` (base64) | Long-term Ed25519 identity public key for the device                                                                                                      |
+| `registrationId`          | `integer \| null` | X3DH/Signal registration ID set by the device during auth; `null` if not provided at registration                                                         |
+| `signedPreKey.keyId`      | `integer`         | Application-assigned ID for this signed prekey                                                                                                            |
+| `signedPreKey.publicKey`  | `string` (base64) | Signed prekey's public component                                                                                                                          |
+| `signedPreKey.signature`  | `string` (base64) | Ed25519 signature over `signedPreKey.publicKey`, signed by the device's `identityPublicKey`. **Callers must verify this before using the signed prekey.** |
+| `oneTimePreKey`           | `object \| null`  | Present and non-null when an OTP was successfully claimed; `null` when the device has no remaining OTPs                                                   |
+| `oneTimePreKey.keyId`     | `integer`         | Application-assigned ID for the consumed OTP                                                                                                              |
+| `oneTimePreKey.publicKey` | `string` (base64) | Consumed OTP's public component                                                                                                                           |
 
 ### OTP consumption semantics — atomic and race-free
 
@@ -522,12 +530,12 @@ COMMIT
 
 **Key properties:**
 
-| Property | Detail |
-|---|---|
-| **Atomic claim** | The `SELECT … FOR UPDATE SKIP LOCKED` + `UPDATE consumed = true` execute in a single transaction. A committed claim is final — the row is never deleted. |
-| **Race-free** | `SKIP LOCKED` means concurrent transactions bypass a row that another transaction has locked, so two simultaneous bundle fetches will each claim a distinct OTP or observe exhaustion independently — neither blocks the other and neither can claim the same row. |
-| **Audit trail** | `consumed` is flipped to `true`; the row is never deleted. The `device_prekeys_one_time_available_idx` partial index (`keyType = 'one_time' AND consumed = false`) keeps unconsumed key lookups efficient. |
-| **FIFO ordering** | OTPs are consumed in upload order (`ORDER BY createdAt ASC`). The oldest unconsumed key is always selected first. |
+| Property                       | Detail                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Atomic claim**               | The `SELECT … FOR UPDATE SKIP LOCKED` + `UPDATE consumed = true` execute in a single transaction. A committed claim is final — the row is never deleted.                                                                                                                                                                                                                                                                                         |
+| **Race-free**                  | `SKIP LOCKED` means concurrent transactions bypass a row that another transaction has locked, so two simultaneous bundle fetches will each claim a distinct OTP or observe exhaustion independently — neither blocks the other and neither can claim the same row.                                                                                                                                                                               |
+| **Audit trail**                | `consumed` is flipped to `true`; the row is never deleted. The `device_prekeys_one_time_available_idx` partial index (`keyType = 'one_time' AND consumed = false`) keeps unconsumed key lookups efficient.                                                                                                                                                                                                                                       |
+| **FIFO ordering**              | OTPs are consumed in upload order (`ORDER BY createdAt ASC`). The oldest unconsumed key is always selected first.                                                                                                                                                                                                                                                                                                                                |
 | **Graceful null-OTP fallback** | If the transaction finds no unconsumed OTP (exhausted supply), it returns `null` for `oneTimePreKey`. The server responds `200 OK` — not an error — with a signed-prekey-only bundle. The initiator must then perform **3-DH** (identity key + signed prekey only) rather than **4-DH** (identity key + signed prekey + one-time prekey). No `UPDATE` is executed in the exhausted case (verified by the test suite: `tx.update` is not called). |
 
 **Client handling for `oneTimePreKey: null`:**
@@ -540,10 +548,10 @@ COMMIT
 
 ### Error responses
 
-| Status | Body | Condition |
-|---|---|---|
-| `404` | `{ "error": "Device not found or has been revoked" }` | `:deviceId` does not exist, its `userId` does not match `:userId`, or `revokedAt IS NOT NULL` |
-| `409` | `{ "error": "Device has not uploaded a signed prekey yet" }` | The device exists and is active but has not yet uploaded a signed prekey; a session cannot be established |
+| Status | Body                                                         | Condition                                                                                                 |
+| ------ | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| `404`  | `{ "error": "Device not found or has been revoked" }`        | `:deviceId` does not exist, its `userId` does not match `:userId`, or `revokedAt IS NOT NULL`             |
+| `409`  | `{ "error": "Device has not uploaded a signed prekey yet" }` | The device exists and is active but has not yet uploaded a signed prekey; a session cannot be established |
 
 > **Note on 404 ambiguity:** The route intentionally returns the same `404` body for "device not found", "wrong owner", and "device revoked". This prevents callers from distinguishing between these cases, which would otherwise enable device enumeration across users.
 
@@ -551,14 +559,14 @@ COMMIT
 
 ## Common status codes
 
-| Status | Meaning |
-|---|---|
-| `200` | Success |
-| `400` | Client error — invalid input (missing required param, type mismatch, validation failure) |
-| `401` | Unauthenticated — see [Authentication](#authentication) |
-| `404` | Resource not found |
-| `409` | Conflict — typically a uniqueness violation or a precondition not yet met |
-| `500` | Unexpected server error |
+| Status | Meaning                                                                                  |
+| ------ | ---------------------------------------------------------------------------------------- |
+| `200`  | Success                                                                                  |
+| `400`  | Client error — invalid input (missing required param, type mismatch, validation failure) |
+| `401`  | Unauthenticated — see [Authentication](#authentication)                                  |
+| `404`  | Resource not found                                                                       |
+| `409`  | Conflict — typically a uniqueness violation or a precondition not yet met                |
+| `500`  | Unexpected server error                                                                  |
 
 ---
 
@@ -568,53 +576,53 @@ The following database tables underpin the routes documented here. Full schema: 
 
 ### `users`
 
-| Column | Type | Notes |
-|---|---|---|
-| `id` | UUID PK | Auto-generated |
-| `username` | text (unique, nullable) | Set via `PATCH /users/me` |
-| `avatarUrl` | text (nullable) | |
-| `presenceVisible` | boolean | Default `true`. Controls whether `GET /users/:id/presence` reveals the real status |
-| `sendReadReceipts` | boolean | Default `true`. Privacy setting — whether the user allows sending read receipts to others. Included in `PATCH /users/me` responses (via unfiltered `.returning()`) but not in `GET /users/me` |
-| `createdAt` | timestamp | |
-| `updatedAt` | timestamp | |
+| Column             | Type                    | Notes                                                                                                                                                                                         |
+| ------------------ | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`               | UUID PK                 | Auto-generated                                                                                                                                                                                |
+| `username`         | text (unique, nullable) | Set via `PATCH /users/me`                                                                                                                                                                     |
+| `avatarUrl`        | text (nullable)         |                                                                                                                                                                                               |
+| `presenceVisible`  | boolean                 | Default `true`. Controls whether `GET /users/:id/presence` reveals the real status                                                                                                            |
+| `sendReadReceipts` | boolean                 | Default `true`. Privacy setting — whether the user allows sending read receipts to others. Included in `PATCH /users/me` responses (via unfiltered `.returning()`) but not in `GET /users/me` |
+| `createdAt`        | timestamp               |                                                                                                                                                                                               |
+| `updatedAt`        | timestamp               |                                                                                                                                                                                               |
 
 ### `wallets`
 
-| Column | Type | Notes |
-|---|---|---|
-| `id` | UUID PK | |
-| `userId` | UUID FK → `users.id` | Cascades on delete |
-| `address` | text (unique) | Stellar public key |
-| `isPrimary` | boolean | At most one primary wallet per user |
+| Column      | Type                 | Notes                               |
+| ----------- | -------------------- | ----------------------------------- |
+| `id`        | UUID PK              |                                     |
+| `userId`    | UUID FK → `users.id` | Cascades on delete                  |
+| `address`   | text (unique)        | Stellar public key                  |
+| `isPrimary` | boolean              | At most one primary wallet per user |
 
 ### `devices`
 
-| Column | Type | Notes |
-|---|---|---|
-| `id` | UUID PK | |
-| `userId` | UUID FK → `users.id` | |
-| `identityPublicKey` | text | Base64-encoded Ed25519 public key. Unique per `(userId, identityPublicKey)` pair |
-| `registrationId` | integer (nullable) | X3DH registration ID |
-| `deviceName` | text (nullable) | |
-| `platform` | enum (`web`, `ios`, `android`) | |
-| `lastSeenAt` | timestamp (nullable) | Updated on auth and heartbeat |
-| `pushEnabled` | boolean | |
-| `revokedAt` | timestamp (nullable) | Non-null → device is revoked |
+| Column              | Type                           | Notes                                                                            |
+| ------------------- | ------------------------------ | -------------------------------------------------------------------------------- |
+| `id`                | UUID PK                        |                                                                                  |
+| `userId`            | UUID FK → `users.id`           |                                                                                  |
+| `identityPublicKey` | text                           | Base64-encoded Ed25519 public key. Unique per `(userId, identityPublicKey)` pair |
+| `registrationId`    | integer (nullable)             | X3DH registration ID                                                             |
+| `deviceName`        | text (nullable)                |                                                                                  |
+| `platform`          | enum (`web`, `ios`, `android`) |                                                                                  |
+| `lastSeenAt`        | timestamp (nullable)           | Updated on auth and heartbeat                                                    |
+| `pushEnabled`       | boolean                        |                                                                                  |
+| `revokedAt`         | timestamp (nullable)           | Non-null → device is revoked                                                     |
 
 ### `device_prekeys`
 
 Signed and one-time prekeys share this table, discriminated by `keyType`.
 
-| Column | Type | Notes |
-|---|---|---|
-| `id` | UUID PK | |
-| `deviceId` | UUID FK → `devices.id` | Cascades on delete |
-| `keyType` | enum (`signed`, `one_time`) | |
-| `keyId` | integer | Application-assigned. Unique per `(deviceId, keyType, keyId)` |
-| `publicKey` | text | Base64-encoded public key |
-| `signature` | text (nullable) | Required when `keyType = 'signed'`; enforced by DB check constraint |
-| `consumed` | boolean | Default `false`. Flipped to `true` atomically when an OTP is claimed by the key-bundle endpoint |
-| `createdAt` | timestamp | |
+| Column      | Type                        | Notes                                                                                           |
+| ----------- | --------------------------- | ----------------------------------------------------------------------------------------------- |
+| `id`        | UUID PK                     |                                                                                                 |
+| `deviceId`  | UUID FK → `devices.id`      | Cascades on delete                                                                              |
+| `keyType`   | enum (`signed`, `one_time`) |                                                                                                 |
+| `keyId`     | integer                     | Application-assigned. Unique per `(deviceId, keyType, keyId)`                                   |
+| `publicKey` | text                        | Base64-encoded public key                                                                       |
+| `signature` | text (nullable)             | Required when `keyType = 'signed'`; enforced by DB check constraint                             |
+| `consumed`  | boolean                     | Default `false`. Flipped to `true` atomically when an OTP is claimed by the key-bundle endpoint |
+| `createdAt` | timestamp                   |                                                                                                 |
 
 **Unique indexes relevant to this router:**
 
@@ -626,13 +634,13 @@ Signed and one-time prekeys share this table, discriminated by `keyType`.
 
 ## Implementation references
 
-| File | Purpose |
-|---|---|
-| [`apps/backend/src/routes/users.ts`](../src/routes/users.ts) | All routes documented here |
-| [`apps/backend/src/middleware/auth.ts`](../src/middleware/auth.ts) | `requireAuth` — JWT validation + device revocation check |
-| [`apps/backend/src/db/schema.ts`](../src/db/schema.ts) | `users`, `wallets`, `devices`, `devicePrekeys` table definitions |
-| [`apps/backend/src/services/presence.ts`](../src/services/presence.ts) | `isOnline`, `deriveDevicePresence` — presence resolution helpers |
-| [`apps/backend/src/__tests__/users.test.ts`](../src/__tests__/users.test.ts) | Tests for `/me`, `/:id`, `/search`, `/presence`, `PATCH /me` |
-| [`apps/backend/src/__tests__/users.bundle.test.ts`](../src/__tests__/users.bundle.test.ts) | Tests for the key-bundle endpoint and OTP consumption |
-| [`apps/backend/src/__tests__/users.fingerprint.test.ts`](../src/__tests__/users.fingerprint.test.ts) | Tests for the key-fingerprint derivation and output format |
-| [`apps/backend/docs/e2ee-onboarding.md`](./e2ee-onboarding.md) | End-to-end onboarding sequence; covers `POST /auth/verify`, prekey upload, and bundle fetch ordering |
+| File                                                                                                 | Purpose                                                                                              |
+| ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| [`apps/backend/src/routes/users.ts`](../src/routes/users.ts)                                         | All routes documented here                                                                           |
+| [`apps/backend/src/middleware/auth.ts`](../src/middleware/auth.ts)                                   | `requireAuth` — JWT validation + device revocation check                                             |
+| [`apps/backend/src/db/schema.ts`](../src/db/schema.ts)                                               | `users`, `wallets`, `devices`, `devicePrekeys` table definitions                                     |
+| [`apps/backend/src/services/presence.ts`](../src/services/presence.ts)                               | `isOnline`, `deriveDevicePresence` — presence resolution helpers                                     |
+| [`apps/backend/src/__tests__/users.test.ts`](../src/__tests__/users.test.ts)                         | Tests for `/me`, `/:id`, `/search`, `/presence`, `PATCH /me`                                         |
+| [`apps/backend/src/__tests__/users.bundle.test.ts`](../src/__tests__/users.bundle.test.ts)           | Tests for the key-bundle endpoint and OTP consumption                                                |
+| [`apps/backend/src/__tests__/users.fingerprint.test.ts`](../src/__tests__/users.fingerprint.test.ts) | Tests for the key-fingerprint derivation and output format                                           |
+| [`apps/backend/docs/e2ee-onboarding.md`](./e2ee-onboarding.md)                                       | End-to-end onboarding sequence; covers `POST /auth/verify`, prekey upload, and bundle fetch ordering |

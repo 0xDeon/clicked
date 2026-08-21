@@ -120,7 +120,7 @@ describe('buildEnvelopes — multi-device fan-out', () => {
     }
   });
 
-  it('establishes an independent session per device, including the sender\'s own siblings', async () => {
+  it("establishes an independent session per device, including the sender's own siblings", async () => {
     // Recipient's phone, recipient's laptop, and the sender's own second
     // device (a "sibling" of whichever device is calling this) — all three
     // are just entries in the device list crypto.ts's fetchConversationDevices

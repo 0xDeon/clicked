@@ -10,10 +10,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { fetchVapidPublicKey } from './usePushSubscription';
 
 function mockFetchOnce(response: { ok: boolean; json: () => Promise<unknown> }) {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn().mockResolvedValue(response as unknown as Response),
-  );
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response as unknown as Response));
 }
 
 describe('fetchVapidPublicKey', () => {

@@ -17,9 +17,9 @@ The base URL is read from the `NEXT_PUBLIC_API_URL` environment variable at buil
 
 ### Environment variable
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `NEXT_PUBLIC_API_URL` | No | `http://localhost:4000` | Full origin of the backend REST API, e.g. `https://api.clicked.app`. Must **not** include a trailing slash (any trailing slash is stripped automatically). |
+| Variable              | Required | Default                 | Description                                                                                                                                                |
+| --------------------- | -------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_API_URL` | No       | `http://localhost:4000` | Full origin of the backend REST API, e.g. `https://api.clicked.app`. Must **not** include a trailing slash (any trailing slash is stripped automatically). |
 
 Set this variable in your `.env.local` file (or in your deployment environment) before building or running the app:
 
@@ -79,11 +79,11 @@ There is **no global interceptor** — every call site is responsible for passin
 
 ### Token lifecycle
 
-| Event | Behaviour |
-|---|---|
-| Sign-in | `AuthContext.signIn()` calls `POST /auth/challenge` then `POST /auth/verify`, receives a JWT, and writes it to all three `localStorage` keys. |
-| Page reload | `AuthContext` reads the first non-null token from `localStorage` on mount and restores the session. |
-| Sign-out | `AuthContext.signOut()` calls `removeToken()`, which deletes all three keys and clears in-memory state. |
+| Event       | Behaviour                                                                                                                                     |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sign-in     | `AuthContext.signIn()` calls `POST /auth/challenge` then `POST /auth/verify`, receives a JWT, and writes it to all three `localStorage` keys. |
+| Page reload | `AuthContext` reads the first non-null token from `localStorage` on mount and restores the session.                                           |
+| Sign-out    | `AuthContext.signOut()` calls `removeToken()`, which deletes all three keys and clears in-memory state.                                       |
 
 ### 401 / expired-token handling
 
@@ -108,30 +108,30 @@ There is no automatic token-refresh mechanism. Expired tokens remain in `localSt
 
 All paths are relative to `API_BASE_URL`. The **Auth** column indicates whether the request attaches an `Authorization: Bearer <token>` header.
 
-| Endpoint | Method | Auth | Description | Calling File(s) |
-|---|---|---|---|---|
-| `/auth/challenge` | `POST` | No | Request a sign-in challenge for a given `walletAddress`. Returns `{ message, nonce }`. | [`src/contexts/AuthContext.tsx`](../src/contexts/AuthContext.tsx) |
-| `/auth/verify` | `POST` | No | Verify a signed challenge. Returns `{ token, deviceId? }`. | [`src/contexts/AuthContext.tsx`](../src/contexts/AuthContext.tsx) |
-| `/users/me` | `GET` | Yes | Fetch the current user's profile (`id`, `username`, `avatarUrl`, `wallets`). | [`src/app/app/profile/page.tsx`](../src/app/app/profile/page.tsx), [`src/app/app/conversations/[id]/page.tsx`](../src/app/app/conversations/%5Bid%5D/page.tsx) |
-| `/users/me` | `PATCH` | Yes | Update the current user's `username` and `avatarUrl`. | [`src/app/app/profile/page.tsx`](../src/app/app/profile/page.tsx) |
-| `/users/:userId/key-fingerprint` | `GET` | Yes | Fetch the identity key fingerprint for a given user (used for safety-number verification). | [`src/app/app/conversations/[id]/page.tsx`](../src/app/app/conversations/%5Bid%5D/page.tsx) |
-| `/users/:userId/presence` | `GET` | Yes | Fetch whether a user is currently online. Returns `{ online: boolean }`. | [`src/components/conversations/ConversationListSidebar.tsx`](../src/components/conversations/ConversationListSidebar.tsx) |
-| `/conversations` | `GET` | Yes | Fetch all conversations for the current user (includes members, latest message, unread count). | [`src/components/conversations/ConversationListSidebar.tsx`](../src/components/conversations/ConversationListSidebar.tsx) |
-| `/conversations/:id` | `GET` | Yes | Fetch a single conversation by ID (includes type, name, members). | [`src/app/app/conversations/[id]/page.tsx`](../src/app/app/conversations/%5Bid%5D/page.tsx) |
-| `/conversations/:id/messages` | `GET` | Yes | Fetch the message history for a conversation. Returns `{ messages: Message[] }`. | [`src/app/app/conversations/[id]/page.tsx`](../src/app/app/conversations/%5Bid%5D/page.tsx) |
-| `/devices` | `GET` | Yes | List all devices linked to the current user's account. | [`src/app/app/devices/page.tsx`](../src/app/app/devices/page.tsx) |
-| `/devices/:deviceId` | `DELETE` | Yes | Revoke a device by ID. Immediately ends its session. | [`src/app/app/devices/page.tsx`](../src/app/app/devices/page.tsx) |
-| `/devices/logout-everywhere` | `POST` | Yes | Revoke every device except the current one. | [`src/app/app/devices/page.tsx`](../src/app/app/devices/page.tsx) |
-| `/push/subscriptions` | `POST` | Yes | Register a Web Push subscription (endpoint + keys). Idempotent — safe to call multiple times. | [`src/hooks/usePushSubscription.ts`](../src/hooks/usePushSubscription.ts) |
-| `/sync` | `GET` | Yes | Pull encrypted envelopes newer than a sequence cursor. Query params: `deviceId`, `sinceSequence`. Returns `{ envelopes, nextCursor, hasMore }`. | [`src/hooks/useInboundPipeline.ts`](../src/hooks/useInboundPipeline.ts), [`src/lib/realtime.ts`](../src/lib/realtime.ts) |
-| `/crypto/prekeys` | `POST` | Yes | Upload a new signed prekey and a batch of one-time prekeys after device registration. | [`src/lib/prekeyStore.ts`](../src/lib/prekeyStore.ts) |
-| `/crypto/prekeys/replenish` | `POST` | Yes | Upload additional one-time prekeys when the server's supply runs low. | [`src/lib/prekeyStore.ts`](../src/lib/prekeyStore.ts) |
-| `/crypto/bundles/:recipientId/:deviceId` | `GET` | Yes | Fetch the key bundle (identity key, signed prekey, one-time prekey) needed to establish an E2E session with a recipient device. | [`src/lib/sessionStore.ts`](../src/lib/sessionStore.ts) |
-| `/user-devices/:senderDeviceId/public-key` | `GET` | Yes | Fetch the identity public key for a specific sender device. Results are cached in memory for the page lifetime. | [`src/lib/crypto/deviceKeys.ts`](../src/lib/crypto/deviceKeys.ts) |
-| `/treasury/proposals` | `GET` | Yes | List all treasury withdrawal proposals. | [`src/app/app/treasury/page.tsx`](../src/app/app/treasury/page.tsx) |
-| `/treasury/proposals/:id/approve` | `POST` | Yes | Cast an approval vote on a proposal. Body: `{ signature }`. | [`src/components/treasury/ProposalCard.tsx`](../src/components/treasury/ProposalCard.tsx) |
-| `/treasury/proposals/:id/reject` | `POST` | Yes | Cast a rejection vote on a proposal. Body: `{ signature }`. | [`src/components/treasury/ProposalCard.tsx`](../src/components/treasury/ProposalCard.tsx) |
-| `/treasury/propose` | `POST` | Yes | Submit a new withdrawal proposal. Body: `{ amount, token, recipient, ttl }`. | [`src/components/treasury/ProposeWithdrawalModal.tsx`](../src/components/treasury/ProposeWithdrawalModal.tsx) |
+| Endpoint                                   | Method   | Auth | Description                                                                                                                                     | Calling File(s)                                                                                                                                                |
+| ------------------------------------------ | -------- | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/auth/challenge`                          | `POST`   | No   | Request a sign-in challenge for a given `walletAddress`. Returns `{ message, nonce }`.                                                          | [`src/contexts/AuthContext.tsx`](../src/contexts/AuthContext.tsx)                                                                                              |
+| `/auth/verify`                             | `POST`   | No   | Verify a signed challenge. Returns `{ token, deviceId? }`.                                                                                      | [`src/contexts/AuthContext.tsx`](../src/contexts/AuthContext.tsx)                                                                                              |
+| `/users/me`                                | `GET`    | Yes  | Fetch the current user's profile (`id`, `username`, `avatarUrl`, `wallets`).                                                                    | [`src/app/app/profile/page.tsx`](../src/app/app/profile/page.tsx), [`src/app/app/conversations/[id]/page.tsx`](../src/app/app/conversations/%5Bid%5D/page.tsx) |
+| `/users/me`                                | `PATCH`  | Yes  | Update the current user's `username` and `avatarUrl`.                                                                                           | [`src/app/app/profile/page.tsx`](../src/app/app/profile/page.tsx)                                                                                              |
+| `/users/:userId/key-fingerprint`           | `GET`    | Yes  | Fetch the identity key fingerprint for a given user (used for safety-number verification).                                                      | [`src/app/app/conversations/[id]/page.tsx`](../src/app/app/conversations/%5Bid%5D/page.tsx)                                                                    |
+| `/users/:userId/presence`                  | `GET`    | Yes  | Fetch whether a user is currently online. Returns `{ online: boolean }`.                                                                        | [`src/components/conversations/ConversationListSidebar.tsx`](../src/components/conversations/ConversationListSidebar.tsx)                                      |
+| `/conversations`                           | `GET`    | Yes  | Fetch all conversations for the current user (includes members, latest message, unread count).                                                  | [`src/components/conversations/ConversationListSidebar.tsx`](../src/components/conversations/ConversationListSidebar.tsx)                                      |
+| `/conversations/:id`                       | `GET`    | Yes  | Fetch a single conversation by ID (includes type, name, members).                                                                               | [`src/app/app/conversations/[id]/page.tsx`](../src/app/app/conversations/%5Bid%5D/page.tsx)                                                                    |
+| `/conversations/:id/messages`              | `GET`    | Yes  | Fetch the message history for a conversation. Returns `{ messages: Message[] }`.                                                                | [`src/app/app/conversations/[id]/page.tsx`](../src/app/app/conversations/%5Bid%5D/page.tsx)                                                                    |
+| `/devices`                                 | `GET`    | Yes  | List all devices linked to the current user's account.                                                                                          | [`src/app/app/devices/page.tsx`](../src/app/app/devices/page.tsx)                                                                                              |
+| `/devices/:deviceId`                       | `DELETE` | Yes  | Revoke a device by ID. Immediately ends its session.                                                                                            | [`src/app/app/devices/page.tsx`](../src/app/app/devices/page.tsx)                                                                                              |
+| `/devices/logout-everywhere`               | `POST`   | Yes  | Revoke every device except the current one.                                                                                                     | [`src/app/app/devices/page.tsx`](../src/app/app/devices/page.tsx)                                                                                              |
+| `/push/subscriptions`                      | `POST`   | Yes  | Register a Web Push subscription (endpoint + keys). Idempotent — safe to call multiple times.                                                   | [`src/hooks/usePushSubscription.ts`](../src/hooks/usePushSubscription.ts)                                                                                      |
+| `/sync`                                    | `GET`    | Yes  | Pull encrypted envelopes newer than a sequence cursor. Query params: `deviceId`, `sinceSequence`. Returns `{ envelopes, nextCursor, hasMore }`. | [`src/hooks/useInboundPipeline.ts`](../src/hooks/useInboundPipeline.ts), [`src/lib/realtime.ts`](../src/lib/realtime.ts)                                       |
+| `/crypto/prekeys`                          | `POST`   | Yes  | Upload a new signed prekey and a batch of one-time prekeys after device registration.                                                           | [`src/lib/prekeyStore.ts`](../src/lib/prekeyStore.ts)                                                                                                          |
+| `/crypto/prekeys/replenish`                | `POST`   | Yes  | Upload additional one-time prekeys when the server's supply runs low.                                                                           | [`src/lib/prekeyStore.ts`](../src/lib/prekeyStore.ts)                                                                                                          |
+| `/crypto/bundles/:recipientId/:deviceId`   | `GET`    | Yes  | Fetch the key bundle (identity key, signed prekey, one-time prekey) needed to establish an E2E session with a recipient device.                 | [`src/lib/sessionStore.ts`](../src/lib/sessionStore.ts)                                                                                                        |
+| `/user-devices/:senderDeviceId/public-key` | `GET`    | Yes  | Fetch the identity public key for a specific sender device. Results are cached in memory for the page lifetime.                                 | [`src/lib/crypto/deviceKeys.ts`](../src/lib/crypto/deviceKeys.ts)                                                                                              |
+| `/treasury/proposals`                      | `GET`    | Yes  | List all treasury withdrawal proposals.                                                                                                         | [`src/app/app/treasury/page.tsx`](../src/app/app/treasury/page.tsx)                                                                                            |
+| `/treasury/proposals/:id/approve`          | `POST`   | Yes  | Cast an approval vote on a proposal. Body: `{ signature }`.                                                                                     | [`src/components/treasury/ProposalCard.tsx`](../src/components/treasury/ProposalCard.tsx)                                                                      |
+| `/treasury/proposals/:id/reject`           | `POST`   | Yes  | Cast a rejection vote on a proposal. Body: `{ signature }`.                                                                                     | [`src/components/treasury/ProposalCard.tsx`](../src/components/treasury/ProposalCard.tsx)                                                                      |
+| `/treasury/propose`                        | `POST`   | Yes  | Submit a new withdrawal proposal. Body: `{ amount, token, recipient, ttl }`.                                                                    | [`src/components/treasury/ProposeWithdrawalModal.tsx`](../src/components/treasury/ProposeWithdrawalModal.tsx)                                                  |
 
 ---
 

@@ -151,8 +151,18 @@ export function skipMessageKeys(state: DoubleRatchetState, until: number): void 
   }
 }
 
-async function encryptAesGcm(key: Uint8Array, plaintext: Uint8Array, ad: Uint8Array): Promise<{ ciphertext: Uint8Array; iv: Uint8Array }> {
-  const cryptoKey = await crypto.subtle.importKey('raw', toBufferSource(key), { name: 'AES-GCM' }, false, ['encrypt']);
+async function encryptAesGcm(
+  key: Uint8Array,
+  plaintext: Uint8Array,
+  ad: Uint8Array,
+): Promise<{ ciphertext: Uint8Array; iv: Uint8Array }> {
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    toBufferSource(key),
+    { name: 'AES-GCM' },
+    false,
+    ['encrypt'],
+  );
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encrypted = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv, additionalData: toBufferSource(ad) },
@@ -162,8 +172,19 @@ async function encryptAesGcm(key: Uint8Array, plaintext: Uint8Array, ad: Uint8Ar
   return { ciphertext: new Uint8Array(encrypted), iv };
 }
 
-async function decryptAesGcm(key: Uint8Array, ciphertext: Uint8Array, iv: Uint8Array, ad: Uint8Array): Promise<Uint8Array> {
-  const cryptoKey = await crypto.subtle.importKey('raw', toBufferSource(key), { name: 'AES-GCM' }, false, ['decrypt']);
+async function decryptAesGcm(
+  key: Uint8Array,
+  ciphertext: Uint8Array,
+  iv: Uint8Array,
+  ad: Uint8Array,
+): Promise<Uint8Array> {
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    toBufferSource(key),
+    { name: 'AES-GCM' },
+    false,
+    ['decrypt'],
+  );
   const decrypted = await crypto.subtle.decrypt(
     { name: 'AES-GCM', iv: toBufferSource(iv), additionalData: toBufferSource(ad) },
     cryptoKey,
@@ -181,7 +202,8 @@ export async function ratchetEncrypt(
     throw new Error('Send chain key not initialized');
   }
 
-  const plaintextBytes = typeof plaintext === 'string' ? new TextEncoder().encode(plaintext) : plaintext;
+  const plaintextBytes =
+    typeof plaintext === 'string' ? new TextEncoder().encode(plaintext) : plaintext;
   const { ck, mk } = kdfCk(state.CKs);
   state.CKs = ck;
 

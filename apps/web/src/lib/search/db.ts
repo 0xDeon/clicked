@@ -72,7 +72,9 @@ async function deriveCacheKey(): Promise<CryptoKey> {
   }
 
   const keyMaterial = new TextEncoder().encode(
-    JSON.stringify(privateKeyJwk ?? { kty: 'EC', crv: 'P-256', secret: 'fallback_private_key_seed' }),
+    JSON.stringify(
+      privateKeyJwk ?? { kty: 'EC', crv: 'P-256', secret: 'fallback_private_key_seed' },
+    ),
   );
 
   const derivedKeyMaterial = await crypto.subtle.importKey(

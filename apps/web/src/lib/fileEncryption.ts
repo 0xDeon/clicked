@@ -205,13 +205,7 @@ export interface SendFileResult {
  * The file key is ONLY transmitted inside the E2EE envelopes — never in plain.
  */
 export async function sendEncryptedFile(params: SendFileParams): Promise<SendFileResult> {
-  const {
-    file,
-    devices,
-    thumbnail,
-    authToken,
-    apiBaseUrl,
-  } = params;
+  const { file, devices, thumbnail, authToken, apiBaseUrl } = params;
 
   // Step 1: Encrypt
   const { cipherBlob, fileKeyB64, ivB64 } = await encryptFile(file);

@@ -19,11 +19,11 @@ Implementation references:
 The full and only shape of the token payload is `JwtPayload`
 (`apps/backend/src/lib/jwt.ts`):
 
-| Claim | Type | Meaning |
-| --- | --- | --- |
-| `userId` | `string` (uuid) | The backend `users.id` row this token authenticates. |
-| `walletAddress` | `string` | The Stellar wallet address (`G...`) that completed the challenge/verify sign-in. Carried for convenience; not re-checked against the DB on every request. |
-| `deviceId` | `string` (uuid) | The backend `devices.id` row for the device that signed in. This is the field live re-validation keys off of — see below. |
+| Claim           | Type            | Meaning                                                                                                                                                   |
+| --------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `userId`        | `string` (uuid) | The backend `users.id` row this token authenticates.                                                                                                      |
+| `walletAddress` | `string`        | The Stellar wallet address (`G...`) that completed the challenge/verify sign-in. Carried for convenience; not re-checked against the DB on every request. |
+| `deviceId`      | `string` (uuid) | The backend `devices.id` row for the device that signed in. This is the field live re-validation keys off of — see below.                                 |
 
 There are no other claims beyond what `jsonwebtoken` itself adds (`iat`,
 `exp`). There is no `roles`/`scope` claim — authorization beyond
@@ -132,12 +132,12 @@ immediate-effect guarantee that HTTP's per-request re-validation gives.
 
 ## Rejection reasons summary
 
-| Condition | HTTP (`requireAuth`) | WebSocket (`socketAuthMiddleware`) |
-| --- | --- | --- |
-| Missing token | 401 "Missing or invalid Authorization header" | connection error: "Authentication token required" |
-| Bad signature / malformed | 401 "Invalid or expired token" | connection error: "Invalid or expired token" |
-| Expired (`exp` passed) | 401 "Invalid or expired token" | connection error: "Invalid or expired token" |
-| Legacy token missing `deviceId` | 401 "Invalid or expired token" (thrown by `verifyToken`, caught generically) | connection error: "Invalid or expired token" |
-| Device row not found | 401 "Device not found or has been revoked" | connection error: "Device not found or has been revoked" |
-| Device revoked (`revokedAt` set) | 401 "Device not found or has been revoked" | connection error: "Device not found or has been revoked" |
-| Device revoked **after** an existing socket connected | n/a (HTTP has no persistent connection) | live socket force-disconnected via `device_revoked` broadcast, not via this middleware |
+| Condition                                             | HTTP (`requireAuth`)                                                         | WebSocket (`socketAuthMiddleware`)                                                     |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Missing token                                         | 401 "Missing or invalid Authorization header"                                | connection error: "Authentication token required"                                      |
+| Bad signature / malformed                             | 401 "Invalid or expired token"                                               | connection error: "Invalid or expired token"                                           |
+| Expired (`exp` passed)                                | 401 "Invalid or expired token"                                               | connection error: "Invalid or expired token"                                           |
+| Legacy token missing `deviceId`                       | 401 "Invalid or expired token" (thrown by `verifyToken`, caught generically) | connection error: "Invalid or expired token"                                           |
+| Device row not found                                  | 401 "Device not found or has been revoked"                                   | connection error: "Device not found or has been revoked"                               |
+| Device revoked (`revokedAt` set)                      | 401 "Device not found or has been revoked"                                   | connection error: "Device not found or has been revoked"                               |
+| Device revoked **after** an existing socket connected | n/a (HTTP has no persistent connection)                                      | live socket force-disconnected via `device_revoked` broadcast, not via this middleware |

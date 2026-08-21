@@ -31,7 +31,7 @@ Implements a stronger fan-out guarantee: validating that the sender-supplied env
 
 ### `services/deviceDelivery.ts` — half-wired
 
-Defines a Redis pub/sub channel per device (`deliver:device:${deviceId}`) intended as an alternate, cross-gateway-instance delivery path. The *subscribe* side (`GatewayDeviceSubscriber`) is booted for every connected socket and would forward anything published on that channel as a `device_envelope` event — and the web client does listen for `device_envelope` (`apps/web/src/hooks/useInboundPipeline.ts:257`). But the *publish* side (`publishToDevice`) has no production callers, so nothing ever actually flows through this channel today.
+Defines a Redis pub/sub channel per device (`deliver:device:${deviceId}`) intended as an alternate, cross-gateway-instance delivery path. The _subscribe_ side (`GatewayDeviceSubscriber`) is booted for every connected socket and would forward anything published on that channel as a `device_envelope` event — and the web client does listen for `device_envelope` (`apps/web/src/hooks/useInboundPipeline.ts:257`). But the _publish_ side (`publishToDevice`) has no production callers, so nothing ever actually flows through this channel today.
 
 ## Step-by-step trace: `send_message` → every device → receipt back to sender
 
@@ -40,33 +40,36 @@ All of this happens inside `apps/backend/src/socket/messaging.ts`, wired up per-
 **1. Connection setup** — on `io.on('connection', ...)`, each socket joins a `` `device:${deviceId}` `` room (this is the exact room `deliveryPipeline.ts`'s `deviceRoom()` targets), the user's own `` `room:user:${userId}` `` room, and every conversation room it belongs to. `registerMessagingHandlers` then wires up the event handlers below.
 
 **2. Client emits `send_message`** — the handler in `socket/messaging.ts`:
-   - clears typing timers for the conversation
-   - validates `messageId`, `contentType`, `ciphertext`/`envelopes`/`fileId` via `validateMessagePayload`
-   - verifies sender conversation membership
-   - short-circuits (re-emits `message_ack`) if the message id already exists (idempotency)
-   - checks that the sender supplied envelopes for all of their **own** other active devices (`fetchSiblingDeviceIds`) — note this only covers the sender's sibling devices, not every recipient's devices (see gaps below)
-   - persists the `messages` row and the per-recipient-device `messageEnvelopes` rows in one transaction
-   - emits `message_ack` back to the sender
-   - calls `deliverMessage(io, message, conversationId)` — the hand-off into fan-out
+
+- clears typing timers for the conversation
+- validates `messageId`, `contentType`, `ciphertext`/`envelopes`/`fileId` via `validateMessagePayload`
+- verifies sender conversation membership
+- short-circuits (re-emits `message_ack`) if the message id already exists (idempotency)
+- checks that the sender supplied envelopes for all of their **own** other active devices (`fetchSiblingDeviceIds`) — note this only covers the sender's sibling devices, not every recipient's devices (see gaps below)
+- persists the `messages` row and the per-recipient-device `messageEnvelopes` rows in one transaction
+- emits `message_ack` back to the sender
+- calls `deliverMessage(io, message, conversationId)` — the hand-off into fan-out
 
 **3. Fan-out — `deliveryPipeline.ts`'s `deliverMessage`**:
-   - re-queries `conversationMembers` for the conversation (source of truth, not room state)
-   - loads active (non-revoked) devices for those members
-   - loads the envelopes just persisted, filtered to those active devices
-   - for each active device with a matching envelope: emits `message_envelope` (with ciphertext) to `` io.to(`device:${deviceId}`) ``. Because every connected socket already joined that room at connect time, and the Socket.IO Redis adapter fans room emits across gateway instances, this reaches the recipient wherever it's connected
-   - emits a ciphertext-free `new_message` to the conversation room(s) for UI/unread-count updates
+
+- re-queries `conversationMembers` for the conversation (source of truth, not room state)
+- loads active (non-revoked) devices for those members
+- loads the envelopes just persisted, filtered to those active devices
+- for each active device with a matching envelope: emits `message_envelope` (with ciphertext) to ``io.to(`device:${deviceId}`)``. Because every connected socket already joined that room at connect time, and the Socket.IO Redis adapter fans room emits across gateway instances, this reaches the recipient wherever it's connected
+- emits a ciphertext-free `new_message` to the conversation room(s) for UI/unread-count updates
 
 **4. Offline fallback** — after `deliverMessage` returns, `send_message` invalidates conversation-list caches and fires `dispatchOfflinePush` for any recipient device with no live socket connection, queuing a Web Push notification. This path is independent of the Socket.IO fan-out and never touches `messageEnvelopes.deliveredAt`.
 
 **5. Recipient acks receipt — `message_delivered`** — when a recipient device receives `message_envelope`, its client emits `message_delivered` with `{conversationId, messageId, envelopeId, sequenceNumber}`. The handler validates required fields and membership, then calls `handleDeviceDeliveryReceipt(io, redis, messageId, recipientDeviceId, recipientUserId, conversationId)`.
 
 **6. Aggregation — `deliveryAggregation.ts`'s `handleDeviceDeliveryReceipt`**:
-   - looks up the message's `senderId`
-   - short-circuits if this device's envelope is already marked delivered (idempotency)
-   - sets `messageEnvelopes.deliveredAt = now()` for `(messageId, recipientDeviceId)`
-   - checks `isMessageFullyDeliveredToUser`: whether every active device belonging to that recipient user now has `deliveredAt` set
-   - **if fully delivered**: emits `message_fully_delivered` to `` `room:user:${senderId}` `` — this is the moment a delivery receipt actually reaches the sender for full multi-device delivery — and republishes it over Redis (`publishEphemeral`) so it survives replay if the sender wasn't connected at that instant
-   - **always**: also emits a per-device `device_delivery_receipt` to the whole conversation room (`.volatile`), visible to all members, not just the sender
+
+- looks up the message's `senderId`
+- short-circuits if this device's envelope is already marked delivered (idempotency)
+- sets `messageEnvelopes.deliveredAt = now()` for `(messageId, recipientDeviceId)`
+- checks `isMessageFullyDeliveredToUser`: whether every active device belonging to that recipient user now has `deliveredAt` set
+- **if fully delivered**: emits `message_fully_delivered` to `` `room:user:${senderId}` `` — this is the moment a delivery receipt actually reaches the sender for full multi-device delivery — and republishes it over Redis (`publishEphemeral`) so it survives replay if the sender wasn't connected at that instant
+- **always**: also emits a per-device `device_delivery_receipt` to the whole conversation room (`.volatile`), visible to all members, not just the sender
 
 **7. Read receipts are a separate, simpler mechanism** (see below) and never touch `deliveryAggregation.ts` or `messageEnvelopes`.
 
