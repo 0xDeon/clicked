@@ -1,0 +1,75 @@
+name: Guard Main Branch
+
+# Closes any PR targeting `main` that was not opened by the repo maintainer.
+# Contributors must target the `dev` branch instead.
+# Uses pull_request_target so the token has write access for PRs from forks.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, edited, ready_for_review]
+    branches: [main]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  enforce-dev-target:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close non-maintainer PRs to main
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+
+            // Skip if the PR no longer targets main (relevant for `edited` events)
+            if (pr.base.ref !== 'main') {
+              core.info(`PR #${pr.number} targets ${pr.base.ref}, nothing to do.`);
+              return;
+            }
+
+            const author = pr.user.login;
+
+            // The repo owner is always allowed
+            let allowed = author === context.repo.owner;
+
+            // Also allow collaborators with admin or maintain permission
+            if (!allowed) {
+              try {
+                const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  username: author,
+                });
+                allowed = ['admin', 'maintain'].includes(data.permission);
+              } catch (e) {
+                core.info(`${author} is not a collaborator: treating as external contributor.`);
+              }
+            }
+
+            if (allowed) {
+              core.info(`PR #${pr.number} by ${author} is allowed to target main.`);
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body: [
+                `👋 Hi @${author}, thanks for your contribution!`,
+                '',
+                'Pull requests from contributors must target the **`dev`** branch — only the repo maintainer merges into `main`.',
+                '',
+                'This PR is being closed automatically. Please open a new PR (or retarget this one by reopening it after editing the base branch) against `dev`.',
+              ].join('\n'),
+            });
+
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              state: 'closed',
+            });
+
+            core.info(`Closed PR #${pr.number} by ${author} (targeted main).`);
