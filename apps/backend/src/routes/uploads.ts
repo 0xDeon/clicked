@@ -5,6 +5,8 @@ import { z } from 'zod';
 import { db } from '../db/index.js';
 import { files, conversationMembers } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
+import { rateLimit, defaultIdentifier } from '../middleware/rateLimit.js';
+import { consumeRateLimit } from '../services/rateLimiter.js';
 import { generatePresignedPut, generateStorageKey } from '../lib/storage.js';
 import { getGroupByConversation, isActiveMember } from '../services/mlsGroups.js';
 import { getObjectStore } from '../lib/objectStore.js';
@@ -161,6 +163,22 @@ uploadsRouter.post('/:fileId/confirm', async (req: AuthRequest, res) => {
     return;
   }
 
+  // The client re-declares the hash it believes it uploaded. Checking it
+  // against the value recorded when the slot was issued catches a confused
+  // client before any object is read.
+  const parsedConfirm = ConfirmUploadSchema.safeParse(req.body);
+  if (!parsedConfirm.success) {
+    res.status(422).json({ error: 'sha256 is required' });
+    return;
+  }
+
+  if (parsedConfirm.data.sha256 !== file.sha256) {
+    res.status(422).json({ error: 'sha256 mismatch' });
+    return;
+  }
+
+  // #356 — the object must actually exist, at the size the slot was issued
+  // for. Without this a file can be marked ready that was never uploaded.
   const head = await getObjectStore().headObject(file.storageKey);
 
   if (!head.exists) {
@@ -173,6 +191,26 @@ uploadsRouter.post('/:fileId/confirm', async (req: AuthRequest, res) => {
       error: 'Object size mismatch',
       expectedSize: file.size,
       actualSize: head.size,
+    });
+    return;
+  }
+
+  // #348 — presence and size prove *something* landed at the key; hashing the
+  // stored bytes proves it is the exact content the client intended. A file
+  // that fails here is tombstoned rather than left pending, so a corrupt blob
+  // can never be referenced by a message.
+  const integrity = await verifyFileIntegrity(file.storageKey, file.sha256);
+
+  if (!integrity.valid) {
+    await db
+      .update(files)
+      .set({ status: 'deleted', deletedAt: new Date() })
+      .where(eq(files.id, fileId));
+
+    res.status(422).json({
+      error: 'File integrity verification failed',
+      expectedHash: integrity.expectedHash,
+      computedHash: integrity.computedHash,
     });
     return;
   }

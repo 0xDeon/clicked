@@ -46,6 +46,18 @@ vi.mock('../lib/conversationCache.js', () => ({
 
 vi.mock('../lib/redis.js', () => ({ redis: null }));
 
+// The protocol/fan-out checks have their own suites; here they're stubbed so
+// these tests stay about the session-state rejection invariant.
+vi.mock('../services/e2eeProtocol.js', () => ({
+  checkEnvelopeProtocols: vi.fn().mockResolvedValue({ ok: true }),
+}));
+
+vi.mock('../services/mlsGroups.js', () => ({
+  getConversationEpochWindow: vi.fn().mockResolvedValue({ hasGroup: false, window: null }),
+  getGroupByConversation: vi.fn().mockResolvedValue(null),
+  isActiveMember: vi.fn().mockResolvedValue(false),
+}));
+
 vi.mock('../services/pushNotification.js', () => ({
   dispatchOfflinePush: vi.fn().mockResolvedValue(undefined),
   FILE_CONTENT_TYPES: new Set<string>(),
@@ -95,10 +107,22 @@ function makeIo() {
   };
 }
 
+// Handlers now run exclusively through the enveloped 'dispatch' path (#342)
+// — there's no more raw socket.on(type, ...) listener to grab directly.
+let envelopeSeq = 0;
 async function getHandler(eventName: string, socket: EventEmitter, io: unknown) {
   const { registerMessagingHandlers } = await import('../socket/messaging.js');
   registerMessagingHandlers(io as never, socket as never);
-  return socket.listeners(eventName)[0] as (p: unknown) => Promise<void>;
+  return async (payload: unknown) => {
+    envelopeSeq += 1;
+    EventEmitter.prototype.emit.call(socket, 'dispatch', {
+      eventId: `test-evt-${envelopeSeq}`,
+      type: eventName,
+      timestamp: Date.now(),
+      payload,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  };
 }
 
 const USER_ID = 'sender-1';

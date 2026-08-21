@@ -17,6 +17,17 @@ export interface IntegrityCheckResult {
 }
 
 /**
+ * `ObjectStoreLike.getObject` is deliberately typed `unknown` because the S3
+ * SDK response and the local disk store's plain object differ in optionality.
+ * Both expose the two fields this module needs, so narrow to just those.
+ */
+type ObjectBody = { Body?: unknown; ContentLength?: number };
+
+function asObjectBody(response: unknown): ObjectBody {
+  return (response ?? {}) as ObjectBody;
+}
+
+/**
  * Compute SHA-256 hash of a stream (streaming hashing for large files).
  *
  * @param stream - Readable stream of file content
@@ -68,7 +79,7 @@ export async function verifyFileIntegrity(
     const store = getObjectStore();
 
     // Fetch the object from storage
-    const response = await store.getObject(storageKey);
+    const response = asObjectBody(await store.getObject(storageKey));
 
     if (!response.Body) {
       return {
@@ -110,7 +121,7 @@ export async function verifyFileIntegrity(
 export async function verifyFileSize(storageKey: string, expectedSize: number): Promise<boolean> {
   try {
     const store = getObjectStore();
-    const response = await store.getObject(storageKey);
+    const response = asObjectBody(await store.getObject(storageKey));
 
     if (!response.Body) {
       return false;

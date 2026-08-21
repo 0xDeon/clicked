@@ -222,6 +222,32 @@ class CryptoStore {
   }
 
   /**
+   * The identity private key in JWK form.
+   *
+   * Used to derive the local cache-encryption key: deriving it from the public
+   * key would be pointless, since anyone who can read the cache can also read
+   * the public key. Prefers exporting the stored CryptoKey so the value stays
+   * correct even if the legacy record is absent.
+   */
+  async getIdentityPrivateKeyJwk(): Promise<JsonWebKey | null> {
+    const stored = await this.dbGet<{ keyPair: CryptoKeyPair; createdAt: number }>(
+      'identityKeyPair',
+      'current',
+    );
+
+    if (stored?.keyPair?.privateKey) {
+      try {
+        return await getWebCrypto().subtle.exportKey('jwk', stored.keyPair.privateKey);
+      } catch {
+        // Non-extractable key (older record): fall through to the stored JWK.
+      }
+    }
+
+    const legacyKey = await this.dbGet<StoredIdentityKeyPair>('keys', 'identity_keypair');
+    return legacyKey?.privateKey ?? null;
+  }
+
+  /**
    * Initialize or retrieve the identity key, ensuring the private key is persisted.
    */
   async initializeIdentityKey(): Promise<JsonWebKey> {

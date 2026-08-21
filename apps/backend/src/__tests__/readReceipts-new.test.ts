@@ -7,11 +7,10 @@ const mockUserFindFirst = vi.fn();
 const mockConversationMemberFindFirst = vi.fn();
 const mockMessageFindFirst = vi.fn();
 const mockFindMany = vi.fn();
-let dbUpdateMock;
 
-const setMock = vi.fn().mockReturnThis();
 const whereMock = vi.fn().mockResolvedValue(undefined);
-dbUpdateMock = vi.fn(() => ({ set: setMock, where: whereMock }));
+const setMock = vi.fn(() => ({ where: whereMock }));
+const dbUpdateMock = vi.fn(() => ({ set: setMock }));
 
 vi.mock('../db/index.js', () => ({
   db: {
@@ -38,14 +37,15 @@ vi.mock('../db/schema.js', () => ({
 vi.mock('../lib/redis.js', () => ({ redis: null }));
 
 vi.mock('drizzle-orm', () => ({
-  and: (...args) => `and(${args.join(', ')})`,
-  eq: (col, val) => `eq(${col}, ${val})`,
-  lt: (col, val) => `lt(${col}, ${val})`,
-  lte: (col, val) => `lte(${col}, ${val})`,
-  desc: (col) => `desc(${col})`,
-  sql: (strings, ...values) => `sql(${strings.join('?')}, ${values.join(', ')})`,
-  inArray: (col, values) => `inArray(${col}, [${values.join(', ')}])`,
-  isNull: (col) => `isNull(${col})`,
+  and: (...args: unknown[]) => `and(${args.join(', ')})`,
+  eq: (col: unknown, val: unknown) => `eq(${col}, ${val})`,
+  lt: (col: unknown, val: unknown) => `lt(${col}, ${val})`,
+  lte: (col: unknown, val: unknown) => `lte(${col}, ${val})`,
+  desc: (col: unknown) => `desc(${col})`,
+  sql: (strings: TemplateStringsArray, ...values: unknown[]) =>
+    `sql(${strings.join('?')}, ${values.join(', ')})`,
+  inArray: (col: unknown, values: unknown[]) => `inArray(${col}, [${values.join(', ')}])`,
+  isNull: (col: unknown) => `isNull(${col})`,
 }));
 
 // ── Mock Socket helpers ────────────────────────────────────────────────────
@@ -83,8 +83,23 @@ function makeIo() {
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
-describe('[NEW] message_read socket event', () => {
+// Handlers now run exclusively through the enveloped 'dispatch' path (#342)
+// — there's no more raw socket.on(type, ...) listener to grab directly.
+let envelopeSeq = 0;
+function dispatchEvent(socket: EventEmitter, type: string) {
+  return async (payload: unknown) => {
+    envelopeSeq += 1;
+    EventEmitter.prototype.emit.call(socket, 'dispatch', {
+      eventId: `test-evt-${envelopeSeq}`,
+      type,
+      timestamp: Date.now(),
+      payload,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  };
+}
 
+describe('[NEW] message_read socket event', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     setMock.mockClear();
@@ -107,7 +122,7 @@ describe('[NEW] message_read socket event', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('message_read')[0] as (p: any) => Promise<void>;
+    const handler = dispatchEvent(socket, 'message_read');
     await handler({ conversationId, lastReadMessageId });
 
     expect(io.to).not.toHaveBeenCalled();
@@ -122,8 +137,13 @@ describe('[NEW] message_read socket event', () => {
     const attemptedReadId = 'msg-5';
 
     mockUserFindFirst.mockResolvedValue({ id: userId, sendReadReceipts: true });
-    mockConversationMemberFindFirst.mockResolvedValue({ id: 'cm-2', userId, conversationId, lastReadMessageId: currentReadId });
-    
+    mockConversationMemberFindFirst.mockResolvedValue({
+      id: 'cm-2',
+      userId,
+      conversationId,
+      lastReadMessageId: currentReadId,
+    });
+
     const newerDate = new Date();
     const olderDate = new Date(newerDate.getTime() - 1000);
 
@@ -135,8 +155,8 @@ describe('[NEW] message_read socket event', () => {
     const io = makeIo();
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
-    
-    const handler = (socket as EventEmitter).listeners('message_read')[0] as (p: any) => Promise<void>;
+
+    const handler = dispatchEvent(socket, 'message_read');
     await handler({ conversationId, lastReadMessageId: attemptedReadId });
 
     expect(dbUpdateMock).not.toHaveBeenCalled();
@@ -162,14 +182,13 @@ describe('[NEW] message_read socket event', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('message_read')[0] as (p: any) => Promise<void>;
+    const handler = dispatchEvent(socket, 'message_read');
     await handler({ conversationId, lastReadMessageId });
-
     // conversationMembers update + messageEnvelopes update
     expect(dbUpdateMock).toHaveBeenCalledTimes(2);
-    
-    const updateCall = dbUpdateMock.mock.calls[1];
-    const setCall = setMock.mock.calls[1][0];
+
+    const updateCall = dbUpdateMock.mock.calls[1] as unknown[];
+    const setCall = (setMock.mock.calls[1] as unknown[])[0] as { readAt: unknown };
 
     expect(updateCall[0]).toBe('messageEnvelopes');
     expect(setCall.readAt).toBeInstanceOf(Date);

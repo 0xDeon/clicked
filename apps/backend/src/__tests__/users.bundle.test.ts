@@ -194,21 +194,29 @@ describe('GET /users/:userId/devices/:deviceId/key-bundle', () => {
     const claimed = { id: 'otp-row-1', keyId: 10, publicKey: 'otp-pub' };
     let locked = false;
     const updateWhere = vi.fn().mockResolvedValue(undefined);
+    // Two selects run inside the claim transaction: the locking OTP claim
+    // (…orderBy().limit().for('update', {skipLocked})) and the remaining-count
+    // query, which is awaited straight off where(). So where() has to be both
+    // chainable and thenable.
+    const remainingRows = [{ total: 4 }];
     const tx = {
       select: vi.fn().mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
             orderBy: vi.fn().mockReturnValue({
               limit: vi.fn().mockReturnValue({
-                for: vi.fn().mockImplementation(async (_mode: string, options: { skipLocked?: boolean }) => {
-                  expect(_mode).toBe('update');
-                  expect(options).toEqual({ skipLocked: true });
-                  if (locked) return [];
-                  locked = true;
-                  return [claimed];
-                }),
+                for: vi
+                  .fn()
+                  .mockImplementation(async (_mode: string, options: { skipLocked?: boolean }) => {
+                    expect(_mode).toBe('update');
+                    expect(options).toEqual({ skipLocked: true });
+                    if (locked) return [];
+                    locked = true;
+                    return [claimed];
+                  }),
               }),
             }),
+            then: (resolve: (value: unknown) => void) => resolve(remainingRows),
           }),
         }),
       }),
@@ -223,7 +231,9 @@ describe('GET /users/:userId/devices/:deviceId/key-bundle', () => {
 
     expect(firstRes.status).toBe(200);
     expect(secondRes.status).toBe(200);
-    expect([firstRes.body.oneTimePreKey, secondRes.body.oneTimePreKey].filter(Boolean)).toHaveLength(1);
+    expect(
+      [firstRes.body.oneTimePreKey, secondRes.body.oneTimePreKey].filter(Boolean),
+    ).toHaveLength(1);
     expect(updateWhere).toHaveBeenCalledTimes(1);
   });
 

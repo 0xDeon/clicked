@@ -313,19 +313,17 @@ describe('PATCH /users/me', () => {
       lastSeenVisible: false,
     } as any);
 
-    const mockReturning = vi
-      .fn()
-      .mockResolvedValue([
-        {
-          id: 'auth-user-id',
-          username: 'alice',
-          presenceVisible: false,
-          lastSeenVisible: false,
-          sendReadReceipts: false,
-          allowDirectMessages: true,
-          allowGroupInvites: false,
-        },
-      ]);
+    const mockReturning = vi.fn().mockResolvedValue([
+      {
+        id: 'auth-user-id',
+        username: 'alice',
+        presenceVisible: false,
+        lastSeenVisible: false,
+        sendReadReceipts: false,
+        allowDirectMessages: true,
+        allowGroupInvites: false,
+      },
+    ]);
     const mockWhere = vi.fn(() => ({ returning: mockReturning }));
     const mockSet = vi.fn(() => ({ where: mockWhere }));
     vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
@@ -361,16 +359,13 @@ describe('PATCH /users/me', () => {
     const mockSet = vi.fn(() => ({ where: mockWhere }));
     vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
 
-    const res = await request(app)
-      .patch('/users/me')
-      .set('Authorization', AUTH_HEADER)
-      .send({
-        presenceVisible: true,
-        lastSeenVisible: true,
-        sendReadReceipts: true,
-        allowDirectMessages: false,
-        allowGroupInvites: true,
-      });
+    const res = await request(app).patch('/users/me').set('Authorization', AUTH_HEADER).send({
+      presenceVisible: true,
+      lastSeenVisible: true,
+      sendReadReceipts: true,
+      allowDirectMessages: false,
+      allowGroupInvites: true,
+    });
 
     expect(res.status).toBe(200);
     expect(mockSet).toHaveBeenCalledWith(

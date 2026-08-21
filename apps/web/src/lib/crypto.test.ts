@@ -71,6 +71,9 @@ describe('sealed-box crypto', () => {
         return {
           device: {
             id: `device-${index + 1}`,
+            // Identity pinning is keyed by userId, so a DeviceRecord always
+            // carries the owning user.
+            userId: `user-${index + 1}`,
             identityPublicKey: bytesToB64(publicKey),
           } satisfies DeviceRecord,
           privateKey: keyPair.privateKey,

@@ -22,6 +22,7 @@ import {
 import { validateMessagePayload } from '../lib/validateMessagePayload.js';
 import { checkEnvelopeSizes } from '../services/rateLimit.js';
 import { dispatchOfflinePush, FILE_CONTENT_TYPES } from '../services/pushNotification.js';
+import { consumeRateLimit } from '../services/rateLimiter.js';
 import { deliverMessage } from '../services/deliveryPipeline.js';
 import { publishEphemeral, readMissedEvents } from '../services/resumeStream.js';
 import { handleDeviceDeliveryReceipt } from '../services/deliveryAggregation.js';
@@ -461,16 +462,14 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
       messageId?: string;
       fileId: string;
       content: string;
-      ciphertext?: string;
       contentType: 'file' | 'image' | 'video' | 'audio';
+      envelopes?: Array<{ recipientDeviceId: string; ciphertext: string; protocol?: E2eeProtocol }>;
     }) => {
-      const { conversationId, messageId, fileId, content, contentType } = payload;
+      const { conversationId, messageId, fileId, content, contentType, envelopes } = payload;
+      const deviceId = socket.auth!.deviceId;
 
       if (!messageId) {
-        socket.emit('error', {
-          event: 'send_file_message',
-          message: 'messageId is required',
-        });
+        socket.emit('error', { event: 'send_file_message', message: 'messageId is required' });
         return;
       }
 
@@ -482,11 +481,31 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         return;
       }
 
-      const validContentTypes = ['file', 'image', 'video', 'audio'] as const;
-      if (!validContentTypes.includes(contentType)) {
+      // Same shared validator the other send paths use (#335), so the
+      // content-type rules — known type, fileId present, and non-empty
+      // envelopes carrying the encrypted file key — cannot drift between
+      // send_message, POST /messages and this handler.
+      const validation = validateMessagePayload({
+        contentType,
+        ciphertext: content,
+        envelopes,
+        fileId,
+      });
+      if (!validation.ok) {
         socket.emit('error', {
           event: 'send_file_message',
-          message: 'contentType must be one of: file, image, video, audio',
+          code: validation.code,
+          message: validation.message,
+        });
+        return;
+      }
+
+      const envelopeSizeCheck = checkEnvelopeSizes(envelopes);
+      if (!envelopeSizeCheck.valid) {
+        socket.emit('error', {
+          event: 'send_file_message',
+          code: 'envelope_too_large',
+          message: `Envelope for device ${envelopeSizeCheck.oversizedDeviceId} exceeds size limit`,
         });
         return;
       }
@@ -506,6 +525,8 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         return;
       }
 
+      // Idempotency before any file work: a retry of an already-persisted
+      // message must ack without re-validating (or re-reading) the file.
       const existing = await db.query.messages.findFirst({
         where: eq(messages.id, messageId),
         columns: { createdAt: true },
@@ -549,7 +570,20 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
         return;
       }
 
+      // Enforce full sibling-device coverage (#188) — the same fan-out
+      // guarantee send_message and edit_message already require.
+      const missingSiblings = await findMissingSiblingDeviceIds(userId, deviceId, envelopes);
+      if (missingSiblings.length > 0) {
+        socket.emit('error', {
+          event: 'device_set_mismatch',
+          message: `Missing envelopes for ${missingSiblings.length} sibling device(s)`,
+          missingDeviceIds: missingSiblings,
+        });
+        return;
+      }
+
       let message;
+      let recipientDeviceIds: string[] = [];
       try {
         message = await db.transaction(async (tx) => {
           const [insertedMessage] = await tx
@@ -558,13 +592,16 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
               id: messageId,
               conversationId,
               senderId: userId,
+              senderDeviceId: deviceId,
               ciphertext: content.trim(),
               contentType,
               fileId,
             })
             .returning();
 
-          return insertedMessage;
+          recipientDeviceIds = await insertMessageEnvelopes(tx, messageId, envelopes);
+
+          return insertedMessage!;
         });
       } catch (error) {
         console.error('Transaction failed for file message:', error);
@@ -577,23 +614,17 @@ export function registerMessagingHandlers(io: Server, socket: AuthSocket): void 
 
       if (message) {
         socket.emit('message_ack', { messageId, createdAt: message.createdAt });
-        io.to(conversationId).emit('new_message', message);
+        await deliverMessage(io, message, conversationId);
 
         const members = await db.query.conversationMembers.findMany({
           where: eq(conversationMembers.conversationId, conversationId),
           columns: { userId: true },
         });
         await invalidateConversationCaches(members.map((member) => member.userId));
-
-        sendPushForMessage({
-          conversationId,
-          messageId: message.id,
-          senderId: userId,
-        });
+        void dispatchOfflinePush(conversationId, messageId, recipientDeviceIds, userId);
       }
     },
   );
-
   // ── message_history ────────────────────────────────────────────────────────
   dispatcher.register('message_history', async (payload) => {
     const { conversationId, before } = payload as {

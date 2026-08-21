@@ -47,7 +47,10 @@ export async function runEnvelopeGcPass(): Promise<number> {
     .delete(messageEnvelopes)
     .where(
       or(
-        and(isNotNull(messageEnvelopes.deliveredAt), lt(messageEnvelopes.deliveredAt, deliveredCutoff)),
+        and(
+          isNotNull(messageEnvelopes.deliveredAt),
+          lt(messageEnvelopes.deliveredAt, deliveredCutoff),
+        ),
         lt(messageEnvelopes.createdAt, maxAgeCutoff),
       ),
     )

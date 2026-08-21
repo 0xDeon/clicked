@@ -9,8 +9,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { assertDevicesTrusted, type DeviceRecord } from './crypto.js';
-import { IdentityKeyChangedError, trustDevices } from './identityTrust.js';
+import { assertDevicesTrusted, type DeviceRecord } from './crypto';
+import { IdentityKeyChangedError, trustDevices } from './identityTrust';
 
 let counter = 0;
 function freshUserId(): string {

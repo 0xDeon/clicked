@@ -58,14 +58,14 @@ async function loadBinding(): Promise<OpenMlsModule> {
     throw new Error('MLS is only available in a browser context');
   }
 
-  const module = (await import(MODULE_NAME)) as OpenMlsModule;
-  const initializer = module.default ?? module.init;
+  const binding = (await import(MODULE_NAME)) as OpenMlsModule;
+  const initializer = binding.default ?? binding.init;
   if (initializer) await initializer();
-  return module;
+  return binding;
 }
 
-function createBinding(module: OpenMlsModule, options: MlsClientOptions): OpenMlsInstance {
-  const Constructor = module.MlsClient ?? module.WasmClient ?? module.Client;
+function createBinding(binding: OpenMlsModule, options: MlsClientOptions): OpenMlsInstance {
+  const Constructor = binding.MlsClient ?? binding.WasmClient ?? binding.Client;
   if (!Constructor) throw new Error('OpenMLS WASM client constructor is unavailable');
 
   return new Constructor(options.credential, MLS_CIPHERSUITE, options.state ?? null);
@@ -81,8 +81,8 @@ export class MlsClient {
     if (!groupId) throw new Error('groupId is required');
     if (!(options.credential instanceof Uint8Array)) throw new Error('credential must be Uint8Array');
 
-    const module = await loadBinding();
-    return new MlsClient(createBinding(module, options), groupId);
+    const loaded = await loadBinding();
+    return new MlsClient(createBinding(loaded, options), groupId);
   }
 
   async createGroup(): Promise<MlsTransportMessage[]> {

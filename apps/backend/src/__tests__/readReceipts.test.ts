@@ -155,9 +155,12 @@ describe('message_read socket event', () => {
     const conversationId = 'conv-privacy';
     const lastReadMessageId = 'msg-privacy';
 
-    mockFindFirst
-      .mockResolvedValueOnce({ id: 'membership-1', userId, conversationId })
-      .mockResolvedValueOnce({ id: lastReadMessageId, conversationId });
+    mockConversationMemberFindFirst.mockResolvedValueOnce({
+      id: 'membership-1',
+      userId,
+      conversationId,
+    });
+    mockMessageFindFirst.mockResolvedValueOnce({ id: lastReadMessageId, conversationId });
     mockUserFindFirst.mockResolvedValueOnce({ sendReadReceipts: false });
 
     const setFn = vi.fn().mockReturnThis();
@@ -171,15 +174,13 @@ describe('message_read socket event', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('message_read')[0] as (
-      p: unknown,
-    ) => Promise<void>;
+    const handler = (payload: unknown) => dispatchEnvelope(socket, 'message_read', payload);
     await handler({ conversationId, lastReadMessageId });
 
-    expect(mockUpdate).toHaveBeenCalledTimes(2); // once for member, once for envelopes
+    // The cursor still advances — only the fan-out is suppressed.
     expect(setFn).toHaveBeenCalledWith({ lastReadMessageId });
-    expect(io.to).toHaveBeenCalledWith(conversationId);
-    expect(io.roomEmitted[0].event).toBe('read_receipt');
+    expect(io.to).not.toHaveBeenCalled();
+    expect(io.roomEmitted).toHaveLength(0);
   });
 
   it('emits error when caller is not a conversation member', async () => {
@@ -256,6 +257,7 @@ describe('message_read socket event', () => {
       conversationId,
     });
     mockMessageFindFirst.mockResolvedValueOnce(lastReadMessage);
+    mockFindMany.mockResolvedValueOnce([{ id: lastReadMessageId }]);
 
     const setFn = vi.fn().mockReturnThis();
     const whereFn = vi.fn().mockResolvedValue(undefined);
@@ -267,9 +269,7 @@ describe('message_read socket event', () => {
 
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
-    const handler = (socket as EventEmitter).listeners('message_read')[0] as (
-      p: unknown,
-    ) => Promise<void>;
+    const handler = (payload: unknown) => dispatchEnvelope(socket, 'message_read', payload);
     await handler({ conversationId, lastReadMessageId });
 
     expect(mockUpdate).toHaveBeenCalledTimes(2); // member and envelopes are still updated
@@ -306,9 +306,7 @@ describe('message_read socket event', () => {
     const io = makeIo();
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
-    const handler = (socket as EventEmitter).listeners('message_read')[0] as (
-      p: unknown,
-    ) => Promise<void>;
+    const handler = (payload: unknown) => dispatchEnvelope(socket, 'message_read', payload);
     await handler({ conversationId, lastReadMessageId: 'msg-old' });
 
     expect(mockUpdate).not.toHaveBeenCalled();
@@ -345,9 +343,7 @@ describe('message_read socket event', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('message_read')[0] as (
-      p: unknown,
-    ) => Promise<void>;
+    const handler = (payload: unknown) => dispatchEnvelope(socket, 'message_read', payload);
     await handler({ conversationId, lastReadMessageId });
 
     // one update for conversationMembers, one for messageEnvelopes
@@ -359,12 +355,14 @@ describe('message_read socket event', () => {
     const whereCall = whereFn.mock.calls[1];
 
     expect(secondUpdateCall).toBeDefined();
-    expect(setCall[0].readAt).toBeInstanceOf(Date);
-    expect(whereCall[0]).toEqual(
+    expect((setCall![0] as { readAt: unknown }).readAt).toBeInstanceOf(Date);
+    // The column stubs are opaque here; what matters is which values the
+    // envelope update is scoped to.
+    expect(whereCall![0]).toEqual(
       expect.arrayContaining([
-        { col: {}, val: deviceId },
-        { col: {}, vals: ['msg-98', 'msg-99'] },
-        { col: {}, op: 'isNull' },
+        expect.objectContaining({ val: deviceId }),
+        expect.objectContaining({ vals: ['msg-98', 'msg-99'] }),
+        expect.objectContaining({ op: 'isNull' }),
       ]),
     );
   });

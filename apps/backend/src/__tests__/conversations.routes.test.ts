@@ -42,6 +42,33 @@ const mockFrom = vi.fn(() => ({ where: mockWhere }));
 const mockSelect = vi.fn(() => ({ from: mockFrom }));
 const mockExecute = vi.fn().mockResolvedValue([]);
 
+// Membership changes now run inside a transaction together with their
+// group-control event (#369), so the mock db hands out a transaction handle
+// that behaves like the top-level one. Sequencing itself is covered by
+// groupControl.test.ts; here it is stubbed so these tests stay about routing.
+const mockTransaction = vi.fn((fn: (tx: unknown) => unknown) =>
+  fn({ delete: mockDelete, insert: mockInsert, update: mockUpdate }),
+);
+
+const mockAppendGroupControlEvent = vi.fn(async () => ({
+  event: { conversationId: 'conv-1', epoch: 1, sequence: 1, eventType: 'member_added' },
+  systemMessage: null,
+}));
+const mockBroadcastGroupControlEvent = vi.fn();
+const mockGetGroupState = vi.fn();
+const mockReadGroupControlEvents = vi.fn();
+
+vi.mock('../services/groupControl.js', () => ({
+  appendGroupControlEvent: mockAppendGroupControlEvent,
+  broadcastGroupControlEvent: mockBroadcastGroupControlEvent,
+  getGroupState: mockGetGroupState,
+  readGroupControlEvents: mockReadGroupControlEvents,
+  serializeGroupControlEvent: (event: unknown) => event,
+  DEFAULT_GROUP_CONTROL_PAGE_SIZE: 100,
+  MAX_GROUP_CONTROL_PAGE_SIZE: 500,
+  MAX_GROUP_CONTROL_PAYLOAD_BYTES: 65536,
+}));
+
 vi.mock('../db/index.js', () => ({
   db: {
     query: {
@@ -54,6 +81,7 @@ vi.mock('../db/index.js', () => ({
     update: mockUpdate,
     select: mockSelect,
     execute: mockExecute,
+    transaction: mockTransaction,
   },
 }));
 

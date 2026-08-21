@@ -17,7 +17,7 @@ import {
   onSessionReset,
   trustDevices,
   type TrustedDevice,
-} from './identityTrust.js';
+} from './identityTrust';
 
 let userCounter = 0;
 function freshUserId(): string {

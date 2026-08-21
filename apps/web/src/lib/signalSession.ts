@@ -23,7 +23,7 @@
 
 import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha2';
-import { onSessionReset } from './identityTrust.js';
+import { onSessionReset } from './identityTrust';
 import {
   initiateSession,
   rawEd25519PublicKeyToSpki,
@@ -31,7 +31,7 @@ import {
   type IdentityKeyPair,
   type InitialMessageHeader,
   type PreKeyBundle,
-} from './x3dh.js';
+} from './x3dh';
 
 export type { InitialMessageHeader };
 

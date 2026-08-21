@@ -703,7 +703,7 @@ export default function ConversationPage() {
                           token={transfer.token}
                           txHash={transfer.txHash}
                         />
-                      {message.unavailable ? (
+                      ) : message.unavailable ? (
                         <UnavailableMessagePlaceholder reason="undecryptable" />
                       ) : message.filePayload &&
                         (message.contentType === 'image' || message.contentType === 'video') ? (

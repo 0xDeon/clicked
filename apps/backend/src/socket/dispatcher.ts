@@ -11,7 +11,6 @@ import { isReplay } from '../services/replay-protection.service.js';
 
 type Handler = (payload: Record<string, unknown>) => Promise<void>;
 
-const IDEMPOTENCY_TTL_SECONDS = 86_400; // 24 h
 const SOCKET_EVENT_MAX_AGE_MS = parseInt(process.env['SOCKET_EVENT_MAX_AGE_MS'] ?? '300000', 10);
 const SOCKET_EVENT_MAX_FUTURE_SKEW_MS = parseInt(
   process.env['SOCKET_EVENT_MAX_FUTURE_SKEW_MS'] ?? '30000',
@@ -90,17 +89,18 @@ export class EventDispatcher {
         return;
       }
 
-      // Idempotency check: skip already-processed eventIds.
-      if (this.redis) {
-        const idempotencyKey = `event:idempotency:${envelope.eventId}`;
-        const set = await this.redis
-          .set(idempotencyKey, '1', 'EX', getIdempotencyTtlSeconds(), 'NX')
-          .catch(() => null);
-        if (set === null) {
-          // Already processed — acknowledge without re-running.
-          this.socket.emit('dispatch_ack', { eventId: envelope.eventId, duplicate: true });
-          return;
-        }
+      // Replay/idempotency check (#344). Scoped to the sending device, not
+      // global: two devices legitimately generating the same eventId must not
+      // block each other. Fails open when Redis is unavailable.
+      if (await isReplay(this.redis, this.socket.auth.deviceId, envelope.eventId)) {
+        console.debug('[replay-protection] Dropping replay event', {
+          deviceId: this.socket.auth.deviceId,
+          eventId: envelope.eventId,
+          type: envelope.type,
+        });
+        // Already processed — acknowledge without re-running.
+        this.socket.emit('dispatch_ack', { eventId: envelope.eventId, duplicate: true });
+        return;
       }
 
       const handler = this.handlers.get(envelope.type);

@@ -34,8 +34,8 @@ describe('ciphertext-only invariant', () => {
   );
 
   it('detects forbidden fields in a payload', () => {
-    expect(findForbiddenCiphertextFields({ ciphertext: 'encrypted', plaintext: 'secret' })).toEqual([
-      'plaintext',
-    ]);
+    expect(findForbiddenCiphertextFields({ ciphertext: 'encrypted', plaintext: 'secret' })).toEqual(
+      ['plaintext'],
+    );
   });
 });

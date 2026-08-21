@@ -230,7 +230,10 @@ export async function getDeviceSocketIds(redis: Redis, deviceId: string): Promis
   return redis.smembers(deviceSocketsByDeviceKey(deviceId));
 }
 
-export async function isDeviceConnectedInRegistry(redis: Redis, deviceId: string): Promise<boolean> {
+export async function isDeviceConnectedInRegistry(
+  redis: Redis,
+  deviceId: string,
+): Promise<boolean> {
   const count = await redis.scard(deviceSocketsByDeviceKey(deviceId));
   return count > 0;
 }

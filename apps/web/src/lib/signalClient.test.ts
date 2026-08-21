@@ -15,15 +15,15 @@ import {
   rawEd25519PublicKeyToSpki,
   toBase64,
   type PreKeyBundle,
-} from './x3dh.js';
-import type { DeviceRecord } from './crypto.js';
-import { clearAllSessions, hasSession } from './signalSession.js';
+} from './x3dh';
+import type { DeviceRecord } from './crypto';
+import { clearAllSessions, hasSession } from './signalSession';
 import {
   configureSignalClient,
   resetSignalClientConfig,
   SignalClient,
   type FetchKeyBundle,
-} from './signalClient.js';
+} from './signalClient';
 
 function buildBundle(deviceId: string): PreKeyBundle {
   const identity = generateIdentityKeyPair();

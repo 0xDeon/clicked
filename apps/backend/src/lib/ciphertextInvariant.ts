@@ -22,8 +22,7 @@ export const FORBIDDEN_PERSISTED_OR_UPLOADED_FIELDS = [
   'ratchet_state',
 ] as const;
 
-const normaliseFieldName = (field: string): string =>
-  field.replace(/[-_]/g, '').toLowerCase();
+const normaliseFieldName = (field: string): string => field.replace(/[-_]/g, '').toLowerCase();
 
 const FORBIDDEN_NORMALISED_FIELDS = new Set(
   FORBIDDEN_PERSISTED_OR_UPLOADED_FIELDS.map(normaliseFieldName),

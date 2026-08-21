@@ -111,6 +111,22 @@ function makeIo() {
   return { to: vi.fn(() => ({ emit: vi.fn(), volatile: { emit: vi.fn() } })) };
 }
 
+// Handlers now run exclusively through the enveloped 'dispatch' path (#342)
+// — there's no more raw socket.on(type, ...) listener to grab directly.
+let envelopeSeq = 0;
+function dispatchEvent(socket: EventEmitter, type: string) {
+  return async (payload: unknown) => {
+    envelopeSeq += 1;
+    EventEmitter.prototype.emit.call(socket, 'dispatch', {
+      eventId: `test-evt-${envelopeSeq}`,
+      type,
+      timestamp: Date.now(),
+      payload,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  };
+}
+
 describe('conversation privacy guards', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -135,9 +151,7 @@ describe('conversation privacy guards', () => {
     const { registerMessagingHandlers } = await import('../socket/messaging.js');
     registerMessagingHandlers(io as never, socket as never);
 
-    const handler = (socket as EventEmitter).listeners('create_conversation')[0] as (
-      payload: unknown,
-    ) => Promise<void>;
+    const handler = dispatchEvent(socket, 'create_conversation');
     await handler({ type: 'dm', memberIds: ['user-2'] });
 
     expect(socket.emit).toHaveBeenCalledWith(

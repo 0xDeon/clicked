@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { sealedBoxEncrypt, buildEnvelopes } from '../crypto';
 import {
   setSessionKey,
@@ -26,12 +26,14 @@ function bytesToB64(bytes: Uint8Array<ArrayBuffer>): string {
 }
 
 function generateEd25519SpkiPublicKey(): string {
-  const raw = new Uint8Array(32);
-  crypto.getRandomValues(raw);
+  // Ed25519 SPKI DER is a fixed 12-byte header followed by the 32-byte key:
+  //   30 2A  SEQUENCE(42)
+  //     30 05  SEQUENCE(5)  06 03 2B 65 70   OID 1.3.101.112
+  //     03 21 00  BIT STRING(33, 0 unused)
   const spki = new Uint8Array(44);
-  spki.set([48, 42, 48, 5, 6, 3, 43, 101, 112, 3, 34, 0, 4, 32], 0);
-  spki.set(raw, 14);
-  return bytesToB64(spki);
+  spki.set([0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00], 0);
+  crypto.getRandomValues(spki.subarray(12));
+  return bytesToB64(spki as Uint8Array<ArrayBuffer>);
 }
 
 function generateTestKey(): string {
@@ -45,13 +47,64 @@ function buildEncryptedEnvelopePlaintext(iv: string, ct: string, sig?: string): 
   return btoa(JSON.stringify(payload));
 }
 
+/**
+ * crypto.getRandomValues rejects requests over 65,536 bytes, so anything
+ * larger has to be filled in chunks.
+ */
+function randomBytes(length: number): Uint8Array {
+  const bytes = new Uint8Array(length);
+  const MAX_CHUNK = 65_536;
+  for (let offset = 0; offset < length; offset += MAX_CHUNK) {
+    crypto.getRandomValues(bytes.subarray(offset, Math.min(offset + MAX_CHUNK, length)));
+  }
+  return bytes;
+}
+
+/**
+ * downloadAndDecryptFile does two real fetches (presigned URL, then the
+ * ciphertext). These are round-trip tests of the crypto, not of the transport,
+ * so both are served from memory — no backend required.
+ */
+function stubDownload(cipherBlob: Blob): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/files/')) {
+        return new Response(JSON.stringify({ url: 'https://storage.test/object' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(await cipherBlob.arrayBuffer(), { status: 200 });
+    }),
+  );
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+/**
+ * Identity pinning is trust-on-first-use, keyed by userId. Each test gets a
+ * fresh owner so one test's pinned keys can't make the next look like a key
+ * change.
+ */
+let deviceOwnerSeq = 0;
+function makeDevices(ids: string[]) {
+  deviceOwnerSeq += 1;
+  const userId = `user-${deviceOwnerSeq}`;
+  return ids.map((id) => ({
+    id,
+    userId,
+    identityPublicKey: generateEd25519SpkiPublicKey(),
+  }));
+}
+
 describe('Per-device message encryption (#353)', () => {
   it('produces distinct ciphertext per recipient device', async () => {
     const plaintext = 'Hello, E2EE world!';
-    const devices = [
-      { id: 'device-a', identityPublicKey: generateEd25519SpkiPublicKey() },
-      { id: 'device-b', identityPublicKey: generateEd25519SpkiPublicKey() },
-    ];
+    const devices = makeDevices(['device-a', 'device-b']);
 
     const envelopes = await buildEnvelopes(plaintext, devices);
 
@@ -63,9 +116,7 @@ describe('Per-device message encryption (#353)', () => {
 
   it('ciphertext differs from plaintext input', async () => {
     const plaintext = 'Sensitive message content';
-    const devices = [
-      { id: 'device-a', identityPublicKey: generateEd25519SpkiPublicKey() },
-    ];
+    const devices = makeDevices(['device-a']);
 
     const envelopes = await buildEnvelopes(plaintext, devices);
 
@@ -75,9 +126,7 @@ describe('Per-device message encryption (#353)', () => {
 
   it('each envelope is a valid sealed box wire format', async () => {
     const plaintext = 'Test message';
-    const devices = [
-      { id: 'device-a', identityPublicKey: generateEd25519SpkiPublicKey() },
-    ];
+    const devices = makeDevices(['device-a']);
 
     const envelopes = await buildEnvelopes(plaintext, devices);
 
@@ -96,9 +145,6 @@ describe('Inbound decrypt round trip (#354)', () => {
       false,
       ['encrypt', 'decrypt'],
     );
-    const rawKey = new Uint8Array(await crypto.subtle.exportKey('raw', sessionKey));
-    const keyB64 = bytesToB64(rawKey);
-
     setSessionKey(senderDeviceId, sessionKey);
 
     const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -156,6 +202,8 @@ describe('File encryption round trip (#355)', () => {
     expect(fileKeyB64.length).toBeGreaterThan(0);
     expect(ivB64.length).toBeGreaterThan(0);
 
+    stubDownload(cipherBlob);
+
     const decryptedBlob = await downloadAndDecryptFile(
       'fake-file-id',
       fileKeyB64,
@@ -192,11 +240,12 @@ describe('File encryption round trip (#355)', () => {
 
 describe('Encrypted thumbnail round trip (#356)', () => {
   it('encrypts and decrypts a thumbnail-sized blob', async () => {
-    const thumbnailBytes = new Uint8Array(320 * 320 * 3);
-    crypto.getRandomValues(thumbnailBytes);
-    const thumbnailBlob = new Blob([thumbnailBytes], { type: 'image/jpeg' });
+    const thumbnailBytes = randomBytes(320 * 320 * 3);
+    const thumbnailBlob = new Blob([new Uint8Array(thumbnailBytes)], { type: 'image/jpeg' });
 
     const { cipherBlob, fileKeyB64, ivB64 } = await encryptFile(thumbnailBlob);
+
+    stubDownload(cipherBlob);
 
     const decrypted = await downloadAndDecryptFile(
       'fake-thumb-id',
@@ -211,9 +260,8 @@ describe('Encrypted thumbnail round trip (#356)', () => {
   });
 
   it('thumbnail ciphertext never exposes plaintext bytes', async () => {
-    const thumbnailBytes = new Uint8Array(100);
-    crypto.getRandomValues(thumbnailBytes);
-    const thumbnailBlob = new Blob([thumbnailBytes], { type: 'image/jpeg' });
+    const thumbnailBytes = randomBytes(100);
+    const thumbnailBlob = new Blob([new Uint8Array(thumbnailBytes)], { type: 'image/jpeg' });
 
     const { cipherBlob } = await encryptFile(thumbnailBlob);
     const cipherArray = new Uint8Array(await cipherBlob.arrayBuffer());

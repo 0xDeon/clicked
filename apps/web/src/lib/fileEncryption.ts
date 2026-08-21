@@ -22,7 +22,7 @@
  *   ✓ Download path decrypts + verifies AEAD tag
  */
 
-import { buildEnvelopes, type DeviceRecord, type MessageEnvelope } from './crypto.js';
+import { buildEnvelopes, type DeviceRecord, type MessageEnvelope } from './crypto';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

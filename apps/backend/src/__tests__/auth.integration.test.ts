@@ -71,6 +71,15 @@ const SIGNATURE = 'aabbccdd';
 const NONCE = 'test-nonce-abc123';
 const IDENTITY_KEY = Buffer.alloc(44, 1).toString('base64'); // 44-byte SPKI placeholder
 
+// `device` is a required part of the verify payload (#232) — a session must
+// always be bound to a registered device, so there is no deviceless variant.
+const DEVICE_PAYLOAD = {
+  deviceName: 'Test Device',
+  platform: 'web' as const,
+  identityPublicKey: IDENTITY_KEY,
+  registrationId: 1,
+};
+
 function setupInsert(userId = 'new-user-id', deviceId = 'new-device-id') {
   // New-user flow inserts: users → wallets → devices (3 calls total).
   const userReturning = vi.fn().mockResolvedValue([{ id: userId }]);
@@ -149,6 +158,7 @@ describe('POST /auth/verify', () => {
       signature: SIGNATURE,
       nonce: NONCE,
       identityPublicKey: IDENTITY_KEY,
+      device: DEVICE_PAYLOAD,
     });
 
     expect(res.status).toBe(200);
@@ -168,6 +178,7 @@ describe('POST /auth/verify', () => {
       signature: SIGNATURE,
       nonce: NONCE,
       identityPublicKey: IDENTITY_KEY,
+      device: DEVICE_PAYLOAD,
     });
 
     expect(res.status).toBe(200);
@@ -186,6 +197,7 @@ describe('POST /auth/verify', () => {
       signature: SIGNATURE,
       nonce: NONCE,
       identityPublicKey: IDENTITY_KEY,
+      device: DEVICE_PAYLOAD,
     });
 
     expect(res.status).toBe(200);
@@ -200,6 +212,7 @@ describe('POST /auth/verify', () => {
       signature: SIGNATURE,
       nonce: 'expired-nonce',
       identityPublicKey: IDENTITY_KEY,
+      device: DEVICE_PAYLOAD,
     });
 
     expect(res.status).toBe(401);
@@ -215,6 +228,7 @@ describe('POST /auth/verify', () => {
       signature: 'badsig',
       nonce: NONCE,
       identityPublicKey: IDENTITY_KEY,
+      device: DEVICE_PAYLOAD,
     });
 
     expect(res.status).toBe(401);
@@ -232,6 +246,7 @@ describe('POST /auth/verify', () => {
       signature: SIGNATURE,
       nonce: NONCE,
       identityPublicKey: IDENTITY_KEY,
+      device: DEVICE_PAYLOAD,
     });
 
     expect(res.status).toBe(401);
@@ -272,6 +287,7 @@ describe('POST /auth/verify', () => {
       signature: SIGNATURE,
       nonce: NONCE,
       identityPublicKey: IDENTITY_KEY,
+      device: DEVICE_PAYLOAD,
     });
 
     expect(res.status).toBe(401);
@@ -307,6 +323,7 @@ describe('Auth rate limiting', () => {
         signature: SIGNATURE,
         nonce: NONCE,
         identityPublicKey: IDENTITY_KEY,
+        device: DEVICE_PAYLOAD,
       });
       expect(res.status).toBe(200);
     }
@@ -316,6 +333,7 @@ describe('Auth rate limiting', () => {
       signature: SIGNATURE,
       nonce: NONCE,
       identityPublicKey: IDENTITY_KEY,
+      device: DEVICE_PAYLOAD,
     });
     expect(blocked.status).toBe(429);
     expect(blocked.headers['retry-after']).toBeDefined();
@@ -329,6 +347,7 @@ describe('Auth rate limiting', () => {
         signature: SIGNATURE,
         nonce: NONCE,
         identityPublicKey: IDENTITY_KEY,
+        device: DEVICE_PAYLOAD,
       });
     }
     const verifyBlocked = await request(app).post('/auth/verify').send({
@@ -336,6 +355,7 @@ describe('Auth rate limiting', () => {
       signature: SIGNATURE,
       nonce: NONCE,
       identityPublicKey: IDENTITY_KEY,
+      device: DEVICE_PAYLOAD,
     });
     expect(verifyBlocked.status).toBe(429);
 

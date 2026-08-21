@@ -680,6 +680,44 @@ export const auditLogs = pgTable(
 export type AuditLog = typeof auditLogs.$inferSelect;
 export type NewAuditLog = typeof auditLogs.$inferInsert;
 
+export const groupControlEventTypeEnum = pgEnum('group_control_event_type', [
+  'member_added',
+  'member_removed',
+  'member_left',
+  'commit',
+]);
+
+export type GroupControlEventType = (typeof groupControlEventTypeEnum.enumValues)[number];
+
+export const groupControlEvents = pgTable(
+  'group_control_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    /** Strictly increasing from 1, gap-free within a conversation. */
+    sequence: integer('sequence').notNull(),
+    /** Group epoch after this event was applied. */
+    epoch: integer('epoch').notNull(),
+    eventType: groupControlEventTypeEnum('event_type').notNull(),
+    actorUserId: uuid('actor_user_id').references(() => users.id, { onDelete: 'set null' }),
+    targetUserId: uuid('target_user_id').references(() => users.id, { onDelete: 'set null' }),
+    /** The system message emitted for this event, when one was created. */
+    messageId: uuid('message_id').references(() => messages.id, { onDelete: 'set null' }),
+    /** Opaque client-supplied MLS commit/welcome material. Never parsed here. */
+    payload: text('payload'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    // Both the gap-free guarantee and the catch-up read path.
+    uniqueIndex('group_control_conversation_sequence_idx').on(table.conversationId, table.sequence),
+  ],
+);
+
+export type GroupControlEvent = typeof groupControlEvents.$inferSelect;
+export type NewGroupControlEvent = typeof groupControlEvents.$inferInsert;
+
 // ─── Relations ────────────────────────────────────────────────────────────────
 
 export const usersRelations = relations(users, ({ many }) => ({
@@ -702,6 +740,7 @@ export const conversationsRelations = relations(conversations, ({ one, many }) =
   treasuryProposals: many(treasuryProposals),
   files: many(files),
   mlsGroup: one(mlsGroups),
+  groupControlEvents: many(groupControlEvents),
 }));
 
 export const mlsGroupsRelations = relations(mlsGroups, ({ one, many }) => ({
@@ -731,7 +770,6 @@ export const mlsCommitsRelations = relations(mlsCommits, ({ one }) => ({
 export const mlsWelcomesRelations = relations(mlsWelcomes, ({ one }) => ({
   group: one(mlsGroups, { fields: [mlsWelcomes.mlsGroupId], references: [mlsGroups.id] }),
   device: one(devices, { fields: [mlsWelcomes.deviceId], references: [devices.id] }),
-  groupControlEvents: many(groupControlEvents),
 }));
 
 export const groupControlEventsRelations = relations(groupControlEvents, ({ one }) => ({

@@ -51,10 +51,14 @@ export const VerifySchema = z
  * proof of wallet ownership *now* — the caller's JWT alone is not enough to
  * add a device to an account.
  */
+// Strict: this is the only endpoint that registers a device, so an
+// unrecognized field must be rejected outright rather than silently stripped.
+// The server never accepts session, ratchet, or private-key state — a payload
+// carrying one is a client bug worth surfacing, not something to quietly drop.
 export const DeviceLinkVerifySchema = DeviceSchema.extend({
   signature: z.string().min(1, 'signature is required'),
   nonce: z.string().min(1, 'nonce is required'),
-});
+}).strict();
 
 export type ChallengeBody = z.infer<typeof ChallengeSchema>;
 export type DeviceBody = z.infer<typeof DeviceSchema>;

@@ -1,9 +1,11 @@
 {
   // Visit https://aka.ms/tsconfig to read more about this file
   "compilerOptions": {
-    // File Layout
-    // "rootDir": "./src",
-    // "outDir": "./dist",
+    // File Layout — build output must land in dist/, not beside the sources.
+    // Without these, `pnpm build` emits .js/.d.ts/.js.map throughout src/,
+    // which then get linted as if they were source files.
+    "rootDir": "./src",
+    "outDir": "./dist",
 
     // Environment Settings
     // See also https://aka.ms/tsconfig/module
@@ -40,5 +42,10 @@
     "noUncheckedSideEffectImports": true,
     "moduleDetection": "force",
     "skipLibCheck": true
-  }
+  },
+
+  // Scoped to the source tree so `rootDir` holds: root-level config files
+  // (drizzle.config.ts, vitest.config.ts) are tooling, not build inputs.
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
 }
