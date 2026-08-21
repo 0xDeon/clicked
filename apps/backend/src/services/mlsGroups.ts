@@ -166,8 +166,7 @@ export interface CommitInput {
 }
 
 export type CommitResult =
-  | { ok: true; epoch: number }
-  | { ok: false; reason: 'epoch_conflict'; currentEpoch: number };
+  { ok: true; epoch: number } | { ok: false; reason: 'epoch_conflict'; currentEpoch: number };
 
 /**
  * Applies a commit and everything that follows from it in one transaction:

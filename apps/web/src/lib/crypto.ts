@@ -17,7 +17,7 @@
  *   buildEnvelopes() → Array<{ recipientDeviceId, ciphertext }>
  */
 
-import { checkIdentityChange, IdentityKeyChangedError } from './identityTrust.js';
+import { checkIdentityChange, IdentityKeyChangedError } from './identityTrust';
 
 export { IdentityKeyChangedError };
 

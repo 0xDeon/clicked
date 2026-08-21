@@ -48,6 +48,18 @@ export const RATE_LIMIT_DEFAULTS = {
     windowSeconds: MINUTE,
     description: 'Signature verification attempts',
   },
+  // Mirrors the auth challenge/verify limits but in separate buckets so
+  // hammering the device-link flow cannot lock out sign-in.
+  device_link_challenge: {
+    limit: 10,
+    windowSeconds: MINUTE,
+    description: 'Device-link challenge nonce issuance',
+  },
+  device_link_verify: {
+    limit: 5,
+    windowSeconds: MINUTE,
+    description: 'Device-link signature verification attempts',
+  },
 
   // ── HTTP: authenticated ────────────────────────────────────────────────────
   key_bundle: {

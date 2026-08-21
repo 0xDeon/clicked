@@ -27,7 +27,7 @@ pushRouter.get('/vapid-public-key', (_req: AuthRequest, res) => {
   res.status(200).json({ configured: true, vapidPublicKey });
 });
 
-pushRouter.post('/subscriptions', async (req: AuthRequest, res) => {
+pushRouter.post('/subscriptions', rateLimit('push_subscribe'), async (req: AuthRequest, res) => {
   const deviceId = req.auth!.deviceId;
   const { endpoint, keys } = req.body;
 

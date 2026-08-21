@@ -30,11 +30,11 @@ Thin wrapper around `@stellar/freighter-api`:
 
 ## Contract functions invoked from the frontend
 
-| Function | Called via | Triggered from | User action |
-|---|---|---|---|
-| `transfer` (token-transfer contract) | `transferToken` in `lib/soroban.ts` | `components/chat/MessageInput.tsx` (`handleConfirmTransfer`) | Clicking the token icon in the chat message input to open the "Send token" popover, entering an amount, then clicking **Confirm** |
-| Freighter `requestAccess` (wallet connect, not a contract call) | `requestWalletAccess` in `lib/freighter.ts` | `app/app/layout.tsx` (`handleWalletAction`) | Clicking **Connect Wallet** in the app sidebar |
-| Freighter `signMessage` (message signing, not a contract call) | `signWalletMessage` in `lib/freighter.ts` | `components/treasury/ProposalCard.tsx` (`castVote`) | Clicking **Approve** or **Reject** on a treasury proposal card — signs `` `${type}:${proposalId}` `` and POSTs it to the backend for verification |
+| Function                                                        | Called via                                  | Triggered from                                               | User action                                                                                                                                       |
+| --------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `transfer` (token-transfer contract)                            | `transferToken` in `lib/soroban.ts`         | `components/chat/MessageInput.tsx` (`handleConfirmTransfer`) | Clicking the token icon in the chat message input to open the "Send token" popover, entering an amount, then clicking **Confirm**                 |
+| Freighter `requestAccess` (wallet connect, not a contract call) | `requestWalletAccess` in `lib/freighter.ts` | `app/app/layout.tsx` (`handleWalletAction`)                  | Clicking **Connect Wallet** in the app sidebar                                                                                                    |
+| Freighter `signMessage` (message signing, not a contract call)  | `signWalletMessage` in `lib/freighter.ts`   | `components/treasury/ProposalCard.tsx` (`castVote`)          | Clicking **Approve** or **Reject** on a treasury proposal card — signs `` `${type}:${proposalId}` `` and POSTs it to the backend for verification |
 
 `transferToken` is currently the only function that submits an actual Soroban **contract** invocation; `requestWalletAccess`/`signWalletMessage` are Freighter wallet operations (connect / sign-message) used for wallet connection and off-chain approval signatures respectively, not contract calls.
 
@@ -66,12 +66,12 @@ All steps are in `apps/web/src/lib/soroban.ts`:
 
 Configuration is read directly in `soroban.ts` from `NEXT_PUBLIC_*` environment variables, each with a hardcoded fallback:
 
-| Env var | Default if unset | Used for |
-|---|---|---|
-| `NEXT_PUBLIC_SOROBAN_RPC_URL` | `https://soroban-testnet.stellar.org` | Soroban RPC server URL |
-| `NEXT_PUBLIC_NETWORK_PASSPHRASE` | `Networks.TESTNET` (from `stellar-sdk`) | Network passphrase for building/signing the transaction |
-| `NEXT_PUBLIC_TOKEN_TRANSFER_CONTRACT` | literal placeholder string `REPLACE_WITH_TOKEN_TRANSFER_CONTRACT_ID` | Contract ID passed to `new Contract(...)` |
-| `NEXT_PUBLIC_NETWORK` (read separately in `components/chat/TransferCard.tsx`) | `test` | Only used to build the Stellar Explorer link, not for building/submitting the transaction |
+| Env var                                                                       | Default if unset                                                     | Used for                                                                                  |
+| ----------------------------------------------------------------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_SOROBAN_RPC_URL`                                                 | `https://soroban-testnet.stellar.org`                                | Soroban RPC server URL                                                                    |
+| `NEXT_PUBLIC_NETWORK_PASSPHRASE`                                              | `Networks.TESTNET` (from `stellar-sdk`)                              | Network passphrase for building/signing the transaction                                   |
+| `NEXT_PUBLIC_TOKEN_TRANSFER_CONTRACT`                                         | literal placeholder string `REPLACE_WITH_TOKEN_TRANSFER_CONTRACT_ID` | Contract ID passed to `new Contract(...)`                                                 |
+| `NEXT_PUBLIC_NETWORK` (read separately in `components/chat/TransferCard.tsx`) | `test`                                                               | Only used to build the Stellar Explorer link, not for building/submitting the transaction |
 
 None of these are currently listed in the root `.env.example` — that file only defines backend-facing equivalents without the `NEXT_PUBLIC_` prefix (`RPC_URL`, `TOKEN_TRANSFER_CONTRACT_ID`, `GROUP_TREASURY_CONTRACT_ID`, `PROPOSALS_CONTRACT_ID`), which are validated separately in `apps/backend/src/config.ts` and are not exposed to the browser. `next.config.ts` doesn't do anything special for the Soroban vars — Next.js exposes any `NEXT_PUBLIC_*` var automatically — but because they aren't documented anywhere in `apps/web`, it's easy to leave `NEXT_PUBLIC_TOKEN_TRANSFER_CONTRACT` unset and silently deploy with the placeholder contract ID. Backend and frontend contract IDs are validated independently and can point at different contracts if misconfigured.
 

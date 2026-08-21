@@ -33,14 +33,14 @@
  * & audit status: see docs/signal-integration.md.
  */
 
-import type { DeviceRecord, MessageEnvelope } from './crypto.js';
-import { toBase64, type IdentityKeyPair, type PreKeyBundle } from './x3dh.js';
+import type { DeviceRecord, MessageEnvelope } from './crypto';
+import { toBase64, type IdentityKeyPair, type PreKeyBundle } from './x3dh';
 import {
   establishSession,
   hasSession,
   ratchetEncryptStep,
   type InitialMessageHeader,
-} from './signalSession.js';
+} from './signalSession';
 
 export { hasSession };
 
@@ -107,21 +107,34 @@ async function ensureSession(device: DeviceRecord): Promise<void> {
 
 // ─── AES-GCM message encryption ───────────────────────────────────────────────
 
+/**
+ * WebCrypto's BufferSource requires a view backed by a plain ArrayBuffer,
+ * while a Uint8Array may be backed by a SharedArrayBuffer. Copying into a
+ * fresh array satisfies the type and costs nothing at these sizes.
+ */
+function asBufferSource(bytes: Uint8Array): BufferSource {
+  return new Uint8Array(bytes);
+}
+
 async function aesGcmEncrypt(
   messageKey: Uint8Array,
   associatedData: Uint8Array,
   plaintext: string,
 ): Promise<{ iv: string; ciphertext: string }> {
-  const key = await crypto.subtle.importKey('raw', messageKey, { name: 'AES-GCM' }, false, [
-    'encrypt',
-  ]);
+  const key = await crypto.subtle.importKey(
+    'raw',
+    asBufferSource(messageKey),
+    { name: 'AES-GCM' },
+    false,
+    ['encrypt'],
+  );
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const plaintextBytes = new TextEncoder().encode(plaintext);
 
   const encrypted = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv, additionalData: associatedData },
+    { name: 'AES-GCM', iv, additionalData: asBufferSource(associatedData) },
     key,
-    plaintextBytes,
+    asBufferSource(plaintextBytes),
   );
 
   return { iv: toBase64(iv), ciphertext: toBase64(new Uint8Array(encrypted)) };

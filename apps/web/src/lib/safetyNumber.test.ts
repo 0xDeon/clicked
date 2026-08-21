@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { setSessionKey, getSessionKey, clearSessionKeys, hasSessionKey } from '@/lib/crypto/sessionStore';
+import {
+  setSessionKey,
+  getSessionKey,
+  clearSessionKeys,
+  hasSessionKey,
+} from '@/lib/crypto/sessionStore';
 import { sessionStore } from '@/lib/sessionStore';
 
 describe('Safety Number & Session Key Invalidation (#359)', () => {

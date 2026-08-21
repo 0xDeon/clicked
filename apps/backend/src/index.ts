@@ -229,6 +229,7 @@ io.on('connection', async (socket: AuthSocket) => {
       columns: { presenceVisible: true, lastSeenVisible: true },
     });
     const presenceVisible = connectUser?.presenceVisible ?? true;
+    const lastSeenVisible = connectUser?.lastSeenVisible ?? false;
     if (becameOnline && presenceVisible && !cancelledPendingOffline) {
       for (const m of memberships) {
         io.to(conversationRoom(m.conversationId)).emit('user_online', { userId });
@@ -344,20 +345,23 @@ io.on('connection', async (socket: AuthSocket) => {
             });
 
             const { lastSeen } = await deriveDevicePresence(userId);
+            // Honour the per-user last-seen setting: a user may be visible as
+            // offline without disclosing *when* they were last around.
+            const lastSeenField = lastSeenVisible && lastSeen ? { lastSeen } : {};
 
             for (const m of memberships) {
               io.to(conversationRoom(m.conversationId)).emit('user_offline', { userId });
               io.to(conversationRoom(m.conversationId)).emit('presence_update', {
                 userId,
                 online: false,
-                ...(lastSeen ? { lastSeen } : {}),
+                ...lastSeenField,
               });
               // Also emit to direct conversation room for backward compatibility
               io.to(m.conversationId).emit('user_offline', { userId });
               io.to(m.conversationId).emit('presence_update', {
                 userId,
                 online: false,
-                ...(lastSeen ? { lastSeen } : {}),
+                ...lastSeenField,
               });
             }
             await recordPresenceForCoMembers(

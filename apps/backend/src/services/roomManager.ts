@@ -59,7 +59,9 @@ export async function rebuildRoomsAfterRestart(io: Server): Promise<void> {
   const sockets = await io.fetchSockets();
 
   for (const socket of sockets) {
-    const authSocket = socket as AuthSocket;
+    // `fetchSockets()` returns RemoteSocket, which carries the same `auth`
+    // data attached at handshake but none of the local Socket methods.
+    const authSocket = socket as unknown as AuthSocket;
     const userId = authSocket.auth?.userId;
     const deviceId = authSocket.auth?.deviceId;
 

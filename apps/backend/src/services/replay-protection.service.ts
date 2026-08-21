@@ -65,7 +65,10 @@ export async function isReplay(
     return result === null; // null means key existed (is a replay)
   } catch (err) {
     // Redis error — fail open and log a warning
-    console.warn('[replay-protection] Redis error during SET:', err instanceof Error ? err.message : String(err));
+    console.warn(
+      '[replay-protection] Redis error during SET:',
+      err instanceof Error ? err.message : String(err),
+    );
     return false; // Allow the event through
   }
 }
@@ -105,6 +108,9 @@ export async function markSeen(
   try {
     await redis.setex(key, ttl, '1');
   } catch (err) {
-    console.warn('[replay-protection] Redis error during SETEX:', err instanceof Error ? err.message : String(err));
+    console.warn(
+      '[replay-protection] Redis error during SETEX:',
+      err instanceof Error ? err.message : String(err),
+    );
   }
 }

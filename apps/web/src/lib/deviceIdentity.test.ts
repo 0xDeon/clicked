@@ -20,14 +20,11 @@ function makeLocalStorage() {
 
 beforeEach(() => {
   const localStorage = makeLocalStorage();
-  vi.stubGlobal(
-    'crypto',
-    {
-      subtle: webcrypto.subtle,
-      getRandomValues: webcrypto.getRandomValues.bind(webcrypto),
-      randomUUID: () => 'device-uuid-fixed',
-    },
-  );
+  vi.stubGlobal('crypto', {
+    subtle: webcrypto.subtle,
+    getRandomValues: webcrypto.getRandomValues.bind(webcrypto),
+    randomUUID: () => 'device-uuid-fixed',
+  });
   vi.stubGlobal('window', {
     localStorage,
     btoa: (value: string) => Buffer.from(value, 'binary').toString('base64'),

@@ -8,9 +8,9 @@ All events dispatched via the `EventDispatcher` must be wrapped in a standard en
 
 ```typescript
 {
-  eventId: string;     // Required (min 1). Unique identifier for the event.
-  type: string;        // Required (min 1). The event type name.
-  timestamp: number;   // Required. Positive integer representing the time of the event.
+  eventId: string; // Required (min 1). Unique identifier for the event.
+  type: string; // Required (min 1). The event type name.
+  timestamp: number; // Required. Positive integer representing the time of the event.
   payload: Record<string, unknown>; // Optional. Defaults to {}. Contains the event-specific data.
 }
 ```
@@ -20,6 +20,7 @@ All events dispatched via the `EventDispatcher` must be wrapped in a standard en
 The central registry of valid socket event types, as defined in `lib/eventEnvelope.ts`.
 
 **Inbound (Client → Server):**
+
 - `join_room`
 - `send_message`
 - `message_history`
@@ -33,6 +34,7 @@ The central registry of valid socket event types, as defined in `lib/eventEnvelo
 - `join_device_channel`
 
 **Outbound (Server → Client):**
+
 - `room_joined`
 - `new_message`
 - `message_ack`
@@ -49,6 +51,7 @@ The central registry of valid socket event types, as defined in `lib/eventEnvelo
 The following are the precise payload shapes expected by the handlers in `socket/messaging.ts`. These schemas correspond to the `payload` property of the `EventEnvelope`.
 
 ### `join_room`
+
 ```typescript
 {
   conversationId: string;
@@ -56,6 +59,7 @@ The following are the precise payload shapes expected by the handlers in `socket
 ```
 
 ### `send_message`
+
 ```typescript
 {
   conversationId: string;
@@ -72,6 +76,7 @@ The following are the precise payload shapes expected by the handlers in `socket
 ```
 
 ### `edit_message`
+
 ```typescript
 {
   originalMessageId: string;
@@ -86,7 +91,9 @@ The following are the precise payload shapes expected by the handlers in `socket
 ```
 
 ### `send_file_message`
-*Note: Handled directly via `socket.on`, not wrapped in the standard `EventDispatcher` envelope.*
+
+_Note: Handled directly via `socket.on`, not wrapped in the standard `EventDispatcher` envelope._
+
 ```typescript
 {
   conversationId: string;
@@ -97,6 +104,7 @@ The following are the precise payload shapes expected by the handlers in `socket
 ```
 
 ### `message_history`
+
 ```typescript
 {
   conversationId: string;
@@ -105,6 +113,7 @@ The following are the precise payload shapes expected by the handlers in `socket
 ```
 
 ### `delete_message`
+
 ```typescript
 {
   messageId: string;
@@ -112,6 +121,7 @@ The following are the precise payload shapes expected by the handlers in `socket
 ```
 
 ### `message_read`
+
 ```typescript
 {
   conversationId: string;
@@ -120,6 +130,7 @@ The following are the precise payload shapes expected by the handlers in `socket
 ```
 
 ### `message_delivered`
+
 ```typescript
 {
   conversationId?: string;
@@ -130,6 +141,7 @@ The following are the precise payload shapes expected by the handlers in `socket
 ```
 
 ### `resume`
+
 ```typescript
 {
   lastEventId?: string;
@@ -137,6 +149,7 @@ The following are the precise payload shapes expected by the handlers in `socket
 ```
 
 ### `create_conversation`
+
 ```typescript
 {
   type: 'dm' | 'group';
@@ -146,6 +159,7 @@ The following are the precise payload shapes expected by the handlers in `socket
 ```
 
 ### `typing_start`
+
 ```typescript
 {
   conversationId: string;
@@ -154,6 +168,7 @@ The following are the precise payload shapes expected by the handlers in `socket
 ```
 
 ### `typing_stop`
+
 ```typescript
 {
   conversationId: string;
@@ -162,6 +177,7 @@ The following are the precise payload shapes expected by the handlers in `socket
 ```
 
 ### `ask_assistant`
+
 ```typescript
 {
   conversationId: string;

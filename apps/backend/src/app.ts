@@ -18,8 +18,12 @@ import { syncRouter } from './routes/sync.js';
 import { userDevicesRouter } from './routes/userDevices.js';
 import { mlsRouter } from './routes/mls.js';
 import { localStorageRouter } from './routes/localStorage.js';
+import { securityRouter } from './routes/security.js';
 import { requireAuth, type AuthRequest } from './middleware/auth.js';
 import { registry } from './lib/metrics.js';
+import { trustProxyHops, isOriginAllowed, allowedOrigins } from './lib/transportSecurity.js';
+import { enforceTransportSecurity, enforceOriginPolicy } from './middleware/transportSecurity.js';
+import { rateLimit, ipIdentifier } from './middleware/rateLimit.js';
 
 const packageJson = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
@@ -87,6 +91,14 @@ app.use('/push', pushRouter);
 app.use('/sync', syncRouter);
 app.use('/user-devices', userDevicesRouter);
 app.use('/security', securityRouter);
+
+// #330 — dev/test only: serves the fs-backed object store so presigned URLs
+// issued locally are real, working URLs. Deliberately outside requireAuth
+// (a presigned URL carries its own HMAC + expiry, exactly like S3), and never
+// mounted in production, where the real object store answers these requests.
+if (process.env['NODE_ENV'] !== 'production') {
+  app.use('/local-storage', localStorageRouter);
+}
 
 // #393 — Prometheus scrape endpoint. Never includes message content: only
 // counters/histograms defined in lib/metrics.ts, which take no ciphertext

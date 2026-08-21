@@ -12,8 +12,8 @@ import {
   rawEd25519PublicKeyToSpki,
   toBase64,
   type PreKeyBundle,
-} from './x3dh.js';
-import { checkIdentityChange } from './identityTrust.js';
+} from './x3dh';
+import { checkIdentityChange } from './identityTrust';
 import {
   clearAllSessions,
   deleteSession,
@@ -21,7 +21,7 @@ import {
   getSession,
   hasSession,
   ratchetEncryptStep,
-} from './signalSession.js';
+} from './signalSession';
 
 function buildResponder(deviceId: string) {
   const identity = generateIdentityKeyPair();

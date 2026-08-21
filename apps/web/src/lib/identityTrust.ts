@@ -161,10 +161,7 @@ export interface IdentityCheckResult {
  * every send without extra network round-trips (callers already fetched the
  * live device set for envelope-building).
  */
-export function checkIdentityChange(
-  userId: string,
-  devices: TrustedDevice[],
-): IdentityCheckResult {
+export function checkIdentityChange(userId: string, devices: TrustedDevice[]): IdentityCheckResult {
   const snapshot = getTrustedSnapshot(userId);
 
   if (!snapshot) {

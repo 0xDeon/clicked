@@ -11,10 +11,10 @@ There are **no refresh or logout routes** in `auth.ts`. Session expiry is handle
 
 Two named rate-limiters are applied to individual routes. Both use express-rate-limit with `standardHeaders: 'draft-7'` and `legacyHeaders: false`.
 
-| Limiter | Window | Max requests | Applied to |
-|---|---|---|---|
-| `challengeLimiter` | 60 s | 10 | `POST /auth/challenge` |
-| `verifyLimiter` | 60 s | 5 | `POST /auth/verify` |
+| Limiter            | Window | Max requests | Applied to             |
+| ------------------ | ------ | ------------ | ---------------------- |
+| `challengeLimiter` | 60 s   | 10           | `POST /auth/challenge` |
+| `verifyLimiter`    | 60 s   | 5            | `POST /auth/verify`    |
 
 When a limiter is breached the server responds with HTTP `429`:
 
@@ -40,9 +40,9 @@ Validated against `ChallengeSchema` (`apps/backend/src/schemas/auth.schemas.ts`)
 }
 ```
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `walletAddress` | `string` | yes | Stellar public key (starting with `G`) |
+| Field           | Type     | Required | Description                            |
+| --------------- | -------- | -------- | -------------------------------------- |
+| `walletAddress` | `string` | yes      | Stellar public key (starting with `G`) |
 
 ### Responses
 
@@ -55,10 +55,10 @@ Validated against `ChallengeSchema` (`apps/backend/src/schemas/auth.schemas.ts`)
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
+| Field     | Type     | Description                                                                                                        |
+| --------- | -------- | ------------------------------------------------------------------------------------------------------------------ |
 | `message` | `string` | Human-readable message the wallet must sign. Format: `Sign in to Clicked\nWallet: {walletAddress}\nNonce: {nonce}` |
-| `nonce` | `string` | Hex-encoded 16-byte random nonce. Single-use, expires after 5 minutes. |
+| `nonce`   | `string` | Hex-encoded 16-byte random nonce. Single-use, expires after 5 minutes.                                             |
 
 #### `400` — Validation error
 
@@ -110,17 +110,17 @@ Validated against `VerifySchema` (`apps/backend/src/schemas/auth.schemas.ts`).
 }
 ```
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `walletAddress` | `string` | yes | Stellar public key (starting with `G`) |
-| `signature` | `string` | yes | Wallet signature of the challenge message. Accepts both hex and base64 encodings (the server tries both). |
-| `nonce` | `string` | yes | The nonce returned by `POST /auth/challenge`. Single-use. |
-| `identityPublicKey` | `string` | yes | Base64-encoded Ed25519 SPKI DER public key (44 bytes decoded). The long-term device identity key. |
-| `device` | `object` | no | Optional device metadata. |
-| `device.deviceName` | `string` | no | Human-readable device name (max 100 chars). |
-| `device.platform` | `string` | no | One of `"web"`, `"ios"`, or `"android"`. |
-| `device.registrationId` | `number` | no | Non-negative integer for push notification routing. |
-| `device.identityPublicKey` | `string` | no | If provided, must match the top-level `identityPublicKey`. Validated via `superRefine`. |
+| Field                      | Type     | Required | Description                                                                                               |
+| -------------------------- | -------- | -------- | --------------------------------------------------------------------------------------------------------- |
+| `walletAddress`            | `string` | yes      | Stellar public key (starting with `G`)                                                                    |
+| `signature`                | `string` | yes      | Wallet signature of the challenge message. Accepts both hex and base64 encodings (the server tries both). |
+| `nonce`                    | `string` | yes      | The nonce returned by `POST /auth/challenge`. Single-use.                                                 |
+| `identityPublicKey`        | `string` | yes      | Base64-encoded Ed25519 SPKI DER public key (44 bytes decoded). The long-term device identity key.         |
+| `device`                   | `object` | no       | Optional device metadata.                                                                                 |
+| `device.deviceName`        | `string` | no       | Human-readable device name (max 100 chars).                                                               |
+| `device.platform`          | `string` | no       | One of `"web"`, `"ios"`, or `"android"`.                                                                  |
+| `device.registrationId`    | `number` | no       | Non-negative integer for push notification routing.                                                       |
+| `device.identityPublicKey` | `string` | no       | If provided, must match the top-level `identityPublicKey`. Validated via `superRefine`.                   |
 
 ### Responses
 
@@ -133,10 +133,10 @@ Validated against `VerifySchema` (`apps/backend/src/schemas/auth.schemas.ts`).
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `token` | `string` | Signed JWT (7-day expiry). Payload: `{ userId, walletAddress, deviceId }`. |
-| `deviceId` | `string` | UUID of the resolved or newly-registered device row. |
+| Field      | Type     | Description                                                                |
+| ---------- | -------- | -------------------------------------------------------------------------- |
+| `token`    | `string` | Signed JWT (7-day expiry). Payload: `{ userId, walletAddress, deviceId }`. |
+| `deviceId` | `string` | UUID of the resolved or newly-registered device row.                       |
 
 #### `400` — Validation error
 

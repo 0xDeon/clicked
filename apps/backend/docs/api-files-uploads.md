@@ -12,13 +12,13 @@ All three routes require authentication (see `POST /auth/verify` in [`api-auth.m
 
 ## Size & MIME constraints
 
-| Constraint | Value | Source |
-|---|---|---|
-| Max file size | **100 MB** (`100 * 1024 * 1024` bytes) | `routes/uploads.ts:14` |
+| Constraint         | Value                                                | Source                    |
+| ------------------ | ---------------------------------------------------- | ------------------------- |
+| Max file size      | **100 MB** (`100 * 1024 * 1024` bytes)               | `routes/uploads.ts:14`    |
 | Allowed MIME types | `image/jpeg`, `image/png`, `image/gif`, `image/webp` | `routes/uploads.ts:16-21` |
-| | `video/mp4`, `video/webm` | |
-| | `audio/mpeg`, `audio/ogg`, `audio/wav` | |
-| | `application/pdf`, `application/octet-stream` | |
+|                    | `video/mp4`, `video/webm`                            |                           |
+|                    | `audio/mpeg`, `audio/ogg`, `audio/wav`               |                           |
+|                    | `application/pdf`, `application/octet-stream`        |                           |
 
 Any MIME type outside this set is rejected with HTTP `415` during slot request.
 
@@ -42,13 +42,13 @@ Requests a presigned upload slot for a file. The caller must be a member of the 
 }
 ```
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `conversationId` | `string` (uuid) | yes | Target conversation UUID. |
-| `size` | `number` (int) | yes | File size in bytes. Must be 1 ≤ size ≤ 100,000,000. |
-| `mimeType` | `string` | yes | Must be in the allowed MIME types set (see above). |
-| `sha256` | `string` | yes | Hex-encoded SHA-256 hash of the file content. |
-| `isThumbnail` | `boolean` | no | Whether this is a thumbnail of a larger file. Defaults to `false`. |
+| Field            | Type            | Required | Description                                                        |
+| ---------------- | --------------- | -------- | ------------------------------------------------------------------ |
+| `conversationId` | `string` (uuid) | yes      | Target conversation UUID.                                          |
+| `size`           | `number` (int)  | yes      | File size in bytes. Must be 1 ≤ size ≤ 100,000,000.                |
+| `mimeType`       | `string`        | yes      | Must be in the allowed MIME types set (see above).                 |
+| `sha256`         | `string`        | yes      | Hex-encoded SHA-256 hash of the file content.                      |
+| `isThumbnail`    | `boolean`       | no       | Whether this is a thumbnail of a larger file. Defaults to `false`. |
 
 ### Responses
 
@@ -61,9 +61,9 @@ Requests a presigned upload slot for a file. The caller must be a member of the 
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `fileId` | `string` | UUID of the newly created file row (status: `pending`). |
+| Field       | Type     | Description                                                                    |
+| ----------- | -------- | ------------------------------------------------------------------------------ |
+| `fileId`    | `string` | UUID of the newly created file row (status: `pending`).                        |
 | `uploadUrl` | `string` | Presigned PUT URL. Valid for 15 minutes (production) or a fake URL (dev/test). |
 
 The client must perform a `PUT` request to `uploadUrl` with the file bytes as the body and the declared `mimeType` as `Content-Type`. **There is no server-side storage verification** — see confirm step below.
@@ -107,9 +107,9 @@ Marks a `pending` file as `ready`. The client should call this after successfull
 
 ### Path parameter
 
-| Parameter | Description |
-|---|---|
-| `fileId` | UUID of the file row returned by `POST /uploads`. |
+| Parameter | Description                                       |
+| --------- | ------------------------------------------------- |
+| `fileId`  | UUID of the file row returned by `POST /uploads`. |
 
 ### Responses
 
@@ -159,11 +159,13 @@ Returned when the authenticated user is not the original uploader.
 ### What confirm does and does not verify
 
 **Does:**
+
 - Asserts the requesting user is the original uploader (`uploaderId` check).
 - Asserts the file exists and is in a confirmable state (`pending`).
 - Transitions status from `pending` → `ready`.
 
 **Does NOT:**
+
 - Verify the file bytes were actually uploaded to storage.
 - Check the uploaded content's SHA-256 hash against the value declared in the slot request.
 - Re-check file size or MIME type against the stored metadata.
@@ -181,9 +183,9 @@ Issues a short-lived presigned GET URL so the client can download the file (ciph
 
 ### Path parameter
 
-| Parameter | Description |
-|---|---|
-| `fileId` | UUID of the file row. |
+| Parameter | Description           |
+| --------- | --------------------- |
+| `fileId`  | UUID of the file row. |
 
 ### Responses
 
@@ -197,8 +199,8 @@ Issues a short-lived presigned GET URL so the client can download the file (ciph
 
 The presigned URL is valid for **5 minutes** (300 seconds). The client should start the download immediately. In dev/test environments the URL is a structurally-plausible fake (see `storage.ts:15-19`).
 
-| Field | Type | Description |
-|---|---|---|
+| Field | Type     | Description        |
+| ----- | -------- | ------------------ |
 | `url` | `string` | Presigned GET URL. |
 
 #### `400` — Missing fileId

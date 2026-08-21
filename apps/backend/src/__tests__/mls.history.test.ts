@@ -30,7 +30,7 @@ vi.mock('../db/index.js', () => ({
     insert: vi.fn(),
     update: vi.fn(),
     delete: vi.fn(),
-    select: vi.fn(),
+    select: vi.fn(() => ({ from: () => ({ where: async () => [] }) })),
     transaction: vi.fn(),
   },
 }));
@@ -38,7 +38,12 @@ vi.mock('../db/index.js', () => ({
 vi.mock('../db/schema.js', () => ({
   conversationMembers: { conversationId: 'conversationId', userId: 'userId' },
   conversations: { id: 'id' },
-  messages: { id: 'id', conversationId: 'conversationId', createdAt: 'createdAt' },
+  messages: {
+    id: 'id',
+    conversationId: 'conversationId',
+    createdAt: 'createdAt',
+    editsMessageId: 'editsMessageId',
+  },
   messageEnvelopes: { recipientDeviceId: 'recipientDeviceId' },
   tokenTransfers: {},
   devices: {},
@@ -51,8 +56,11 @@ vi.mock('drizzle-orm', () => ({
   desc: vi.fn((col: unknown) => col),
   eq: vi.fn((col: unknown, val: unknown) => ({ op: 'eq', col, val })),
   inArray: vi.fn(),
+  isNotNull: vi.fn((col: unknown) => ({ op: 'isNotNull', col })),
+  isNull: vi.fn((col: unknown) => ({ op: 'isNull', col })),
   lt: vi.fn((col: unknown, val: unknown) => ({ op: 'lt', col, val })),
   ne: vi.fn(),
+  notInArray: vi.fn((col: unknown, arr: unknown) => ({ op: 'notInArray', col, arr })),
   or: vi.fn((...args: unknown[]) => ({ op: 'or', args })),
   sql: vi.fn(),
 }));
@@ -72,6 +80,27 @@ vi.mock('../services/mlsGroups.js', () => ({
 }));
 
 const DEVICE_ID = 'device-new';
+
+vi.mock('../services/groupControl.js', () => ({
+  appendGroupControlEvent: vi.fn(),
+  broadcastGroupControlEvent: vi.fn(),
+  getGroupState: vi.fn(),
+  readGroupControlEvents: vi.fn(),
+  serializeGroupControlEvent: (e: unknown) => e,
+  DEFAULT_GROUP_CONTROL_PAGE_SIZE: 100,
+  MAX_GROUP_CONTROL_PAGE_SIZE: 500,
+  MAX_GROUP_CONTROL_PAYLOAD_BYTES: 65536,
+}));
+
+vi.mock('../services/rateLimit.js', () => ({
+  checkFirstContactLimit: vi.fn().mockResolvedValue({ allowed: true, count: 0 }),
+  checkGroupInviteLimit: vi.fn().mockResolvedValue({ allowed: true, count: 0 }),
+}));
+
+vi.mock('../services/auditLog.js', () => ({
+  actorFromRequest: vi.fn(() => ({})),
+  recordAuditEvent: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock('../middleware/auth.js', () => ({
   requireAuth: (req: express.Request, _res: express.Response, next: express.NextFunction) => {

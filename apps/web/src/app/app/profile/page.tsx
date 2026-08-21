@@ -404,7 +404,8 @@ export default function ProfilePage() {
                 {
                   id: 'allowDirectMessages',
                   label: 'Allow direct messages',
-                  description: 'Permit new one-to-one conversations to be created with your account.',
+                  description:
+                    'Permit new one-to-one conversations to be created with your account.',
                   checked: allowDirectMessages,
                   onChange: setAllowDirectMessages,
                 },

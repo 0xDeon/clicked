@@ -7,72 +7,59 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
-  checkRateLimit,
+  checkSocketEventRateLimit,
   checkPayloadSize,
   checkEnvelopeSizes,
   recordViolation,
   clearViolations,
 } from '../services/rateLimit.js';
+import { clearLocalRateLimitCounters } from '../services/rateLimiter.js';
+import { RATE_LIMIT_DEFAULTS } from '../config/rateLimits.js';
 
-describe('checkRateLimit', () => {
-  it('allows all requests when redis is null', async () => {
-    const result = await checkRateLimit(null, 'socket-1');
-    expect(result.allowed).toBe(true);
+// Budgets live in config/rateLimits.ts (#375); this module only decides which
+// bucket an event is charged to. With no Redis configured, consumeRateLimit
+// falls back to in-process counters, so these run without a server.
+describe('checkSocketEventRateLimit', () => {
+  beforeEach(() => {
+    clearLocalRateLimitCounters();
   });
 
-  it('allows requests under the per-second limit', async () => {
-    const redis = {
-      incr: vi.fn().mockResolvedValue(1),
-      expire: vi.fn().mockResolvedValue(1),
-    };
-    const result = await checkRateLimit(redis as never, 'socket-1');
-    expect(result.allowed).toBe(true);
-    expect(result.count).toBe(1);
+  it('charges the device, not the socket, so reconnecting cannot reset the budget', async () => {
+    const first = await checkSocketEventRateLimit('send_message', 'device-1');
+    const second = await checkSocketEventRateLimit('send_message', 'device-1');
+
+    expect(first.allowed).toBe(true);
+    expect(second.allowed).toBe(true);
+    expect(second.remaining).toBeLessThan(first.remaining);
   });
 
-  it('sets a 1s expiry on the first increment', async () => {
-    const redis = {
-      incr: vi.fn().mockResolvedValue(1),
-      expire: vi.fn().mockResolvedValue(1),
-    };
-    await checkRateLimit(redis as never, 'socket-1');
-    expect(redis.expire).toHaveBeenCalledWith('rl:socket:socket-1', 1);
+  it('tracks each device independently', async () => {
+    await checkSocketEventRateLimit('send_message', 'device-1');
+    const other = await checkSocketEventRateLimit('send_message', 'device-2');
+
+    expect(other.remaining).toBe(RATE_LIMIT_DEFAULTS.socket_send_message.limit - 1);
   });
 
-  it('does not re-set expiry on subsequent increments', async () => {
-    const redis = {
-      incr: vi.fn().mockResolvedValue(2),
-      expire: vi.fn().mockResolvedValue(1),
-    };
-    await checkRateLimit(redis as never, 'socket-1');
-    expect(redis.expire).not.toHaveBeenCalled();
+  it('routes an event with no dedicated bucket to socket_default', async () => {
+    const result = await checkSocketEventRateLimit('some_unmapped_event', 'device-1');
+    expect(result.limit).toBe(RATE_LIMIT_DEFAULTS.socket_default.limit);
   });
 
-  it('rejects requests once the configured per-second limit is exceeded', async () => {
-    vi.stubEnv('SOCKET_RATE_LIMIT_PER_SEC', '5');
-    vi.resetModules();
-    const { checkRateLimit: checkRateLimitFresh } = await import('../services/rateLimit.js');
-    const redis = {
-      incr: vi.fn().mockResolvedValue(6),
-      expire: vi.fn().mockResolvedValue(1),
-    };
-    const result = await checkRateLimitFresh(redis as never, 'socket-1');
-    expect(result.allowed).toBe(false);
-    expect(result.count).toBe(6);
-    vi.unstubAllEnvs();
+  it('routes send_file_message to the same bucket as send_message', async () => {
+    const result = await checkSocketEventRateLimit('send_file_message', 'device-1');
+    expect(result.limit).toBe(RATE_LIMIT_DEFAULTS.socket_send_message.limit);
   });
 
-  it('falls back to the default limit of 10 when env var is unset', async () => {
-    vi.stubEnv('SOCKET_RATE_LIMIT_PER_SEC', '');
-    vi.resetModules();
-    const { checkRateLimit: checkRateLimitFresh } = await import('../services/rateLimit.js');
-    const redis = {
-      incr: vi.fn().mockResolvedValue(10),
-      expire: vi.fn().mockResolvedValue(1),
-    };
-    const result = await checkRateLimitFresh(redis as never, 'socket-1');
-    expect(result.allowed).toBe(true);
-    vi.unstubAllEnvs();
+  it('rejects once the bucket limit is exhausted', async () => {
+    const limit = RATE_LIMIT_DEFAULTS.socket_ask_assistant.limit;
+    let last = await checkSocketEventRateLimit('ask_assistant', 'device-1');
+    for (let i = 1; i < limit; i += 1) {
+      last = await checkSocketEventRateLimit('ask_assistant', 'device-1');
+    }
+    expect(last.allowed).toBe(true);
+
+    const overflow = await checkSocketEventRateLimit('ask_assistant', 'device-1');
+    expect(overflow.allowed).toBe(false);
   });
 });
 
@@ -138,9 +125,8 @@ describe('checkEnvelopeSizes', () => {
   it('respects a configured MAX_ENVELOPE_SIZE override', async () => {
     vi.stubEnv('MAX_ENVELOPE_SIZE', '5');
     vi.resetModules();
-    const { checkEnvelopeSizes: checkEnvelopeSizesFresh } = await import(
-      '../services/rateLimit.js'
-    );
+    const { checkEnvelopeSizes: checkEnvelopeSizesFresh } =
+      await import('../services/rateLimit.js');
     const result = checkEnvelopeSizesFresh([
       { recipientDeviceId: 'dev-1', ciphertext: 'this-is-too-long' },
     ]);

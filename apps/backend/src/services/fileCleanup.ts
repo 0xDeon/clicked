@@ -61,7 +61,8 @@ export async function softDeleteFile(fileId: string): Promise<void> {
 export async function runHardDeletePass(): Promise<void> {
   const graceCutoff = new Date(Date.now() - getHardDeleteGraceMs());
   const candidates = await db.query.files.findMany({
-    where: (f) => and(isNotNull(f.deletedAt), isNull(f.hardDeletedAt), lt(f.deletedAt, graceCutoff)),
+    where: (f) =>
+      and(isNotNull(f.deletedAt), isNull(f.hardDeletedAt), lt(f.deletedAt, graceCutoff)),
     columns: { id: true, storageKey: true },
   });
 

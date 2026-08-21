@@ -8,8 +8,8 @@
  */
 
 import { createHash } from 'node:crypto';
-import { Router, type Router as RouterType } from 'express';
-import rateLimit, { type RateLimitRequestHandler } from 'express-rate-limit';
+import { Router, type Router as RouterType, type RequestHandler } from 'express';
+import { rateLimit } from '../middleware/rateLimit.js';
 import { Keypair } from '@stellar/stellar-sdk';
 import { eq, and, ne, count, desc, isNull, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -25,6 +25,7 @@ import {
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { DeviceLinkVerifySchema, type DeviceLinkVerifyBody } from '../schemas/auth.schemas.js';
+import { normalizeCapabilities } from '../lib/capabilities.js';
 import { createDeviceLinkNonce, consumeDeviceLinkNonce } from '../lib/nonce.js';
 import { getSocketServer } from '../lib/socket.js';
 import { invalidateConversationCaches } from '../lib/conversationCache.js';
@@ -65,8 +66,6 @@ const UploadPreKeysSchema = z
   })
   .strict();
 
-const RegisterDeviceSchema = DeviceSchema;
-
 /**
  * MLS key package batch upload. `keyPackage` is validated as base64 of a
  * 32–4096 byte TLS-serialised KeyPackage by the shared key validator; the
@@ -92,26 +91,12 @@ const UploadMlsKeyPackagesSchema = z.object({
 const OTP_CAP = 200;
 
 // ─── Device-link rate limiters ────────────────────────────────────────────────
-// Mirrors the auth challenge/verify limiters (src/routes/auth.ts). Kept as
-// separate instances so hammering the link flow cannot lock out sign-in.
+// Mirrors the auth challenge/verify limits (config/rateLimits.ts). Kept as
+// separate buckets so hammering the link flow cannot lock out sign-in.
 
-const rateLimitedResponse = { error: 'Too many requests' };
+export const deviceLinkChallengeLimiter: RequestHandler = rateLimit('device_link_challenge');
 
-export const deviceLinkChallengeLimiter: RateLimitRequestHandler = rateLimit({
-  windowMs: 60 * 1000,
-  limit: 10,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: rateLimitedResponse,
-});
-
-export const deviceLinkVerifyLimiter: RateLimitRequestHandler = rateLimit({
-  windowMs: 60 * 1000,
-  limit: 5,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: rateLimitedResponse,
-});
+export const deviceLinkVerifyLimiter: RequestHandler = rateLimit('device_link_verify');
 
 // ─── GET /devices ─────────────────────────────────────────────────────────────
 

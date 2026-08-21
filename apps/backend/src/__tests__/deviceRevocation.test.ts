@@ -133,9 +133,8 @@ describe('isDeviceConnected — Redis-backed registry (#341)', () => {
 
   it('returns false again after the only socket unregisters', async () => {
     const { isDeviceConnected } = await import('../services/deviceRevocation.js');
-    const { registerPresenceSocket, unregisterPresenceSocket } = await import(
-      '../services/presence.js'
-    );
+    const { registerPresenceSocket, unregisterPresenceSocket } =
+      await import('../services/presence.js');
     const redis = new FakeRedis();
 
     await registerPresenceSocket(redis as never, 'user-1', 'device-1', 'socket-1');
@@ -147,9 +146,8 @@ describe('isDeviceConnected — Redis-backed registry (#341)', () => {
 
   it('stays true when one of two sockets for the same device disconnects', async () => {
     const { isDeviceConnected } = await import('../services/deviceRevocation.js');
-    const { registerPresenceSocket, unregisterPresenceSocket } = await import(
-      '../services/presence.js'
-    );
+    const { registerPresenceSocket, unregisterPresenceSocket } =
+      await import('../services/presence.js');
     const redis = new FakeRedis();
 
     await registerPresenceSocket(redis as never, 'user-1', 'device-1', 'socket-1');
@@ -167,9 +165,8 @@ describe('revocation disconnect flow — no regression from the registry swap (#
   });
 
   it('disconnects a locally-connected socket when its device is revoked', async () => {
-    const { startDeviceRevocationListener, isDeviceRevoked } = await import(
-      '../services/deviceRevocation.js'
-    );
+    const { startDeviceRevocationListener, isDeviceRevoked } =
+      await import('../services/deviceRevocation.js');
     const { registerPresenceSocket } = await import('../services/presence.js');
     const redis = new FakeRedis();
 
@@ -188,9 +185,8 @@ describe('revocation disconnect flow — no regression from the registry swap (#
   });
 
   it('marks the device revoked even when no socket is registered for it', async () => {
-    const { startDeviceRevocationListener, isDeviceRevoked } = await import(
-      '../services/deviceRevocation.js'
-    );
+    const { startDeviceRevocationListener, isDeviceRevoked } =
+      await import('../services/deviceRevocation.js');
     const redis = new FakeRedis();
     mockIo = { sockets: { sockets: new Map() } };
 

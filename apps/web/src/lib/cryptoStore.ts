@@ -191,14 +191,14 @@ class CryptoStore {
       'identityKeyPair',
       'current',
     );
-    
+
     if (stored?.keyPair?.privateKey) {
       return stored.keyPair.privateKey;
     }
 
     // Fallback: check if we have legacy data (migration path)
     const legacyKey = await this.dbGet<StoredIdentityKeyPair>('keys', 'identity_keypair');
-    
+
     if (!legacyKey) {
       return null;
     }
@@ -219,6 +219,32 @@ class CryptoStore {
     const keyData = await this.dbGet<StoredIdentityKeyPair>('keys', 'identity_keypair');
     if (!keyData) return null;
     return keyData.publicKey;
+  }
+
+  /**
+   * The identity private key in JWK form.
+   *
+   * Used to derive the local cache-encryption key: deriving it from the public
+   * key would be pointless, since anyone who can read the cache can also read
+   * the public key. Prefers exporting the stored CryptoKey so the value stays
+   * correct even if the legacy record is absent.
+   */
+  async getIdentityPrivateKeyJwk(): Promise<JsonWebKey | null> {
+    const stored = await this.dbGet<{ keyPair: CryptoKeyPair; createdAt: number }>(
+      'identityKeyPair',
+      'current',
+    );
+
+    if (stored?.keyPair?.privateKey) {
+      try {
+        return await getWebCrypto().subtle.exportKey('jwk', stored.keyPair.privateKey);
+      } catch {
+        // Non-extractable key (older record): fall through to the stored JWK.
+      }
+    }
+
+    const legacyKey = await this.dbGet<StoredIdentityKeyPair>('keys', 'identity_keypair');
+    return legacyKey?.privateKey ?? null;
   }
 
   /**

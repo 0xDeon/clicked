@@ -15,15 +15,15 @@ import {
   rawEd25519PublicKeyToSpki,
   toBase64,
   type PreKeyBundle,
-} from './x3dh.js';
-import type { DeviceRecord } from './crypto.js';
-import { clearAllSessions, hasSession } from './signalSession.js';
+} from './x3dh';
+import type { DeviceRecord } from './crypto';
+import { clearAllSessions, hasSession } from './signalSession';
 import {
   configureSignalClient,
   resetSignalClientConfig,
   SignalClient,
   type FetchKeyBundle,
-} from './signalClient.js';
+} from './signalClient';
 
 function buildBundle(deviceId: string): PreKeyBundle {
   const identity = generateIdentityKeyPair();
@@ -120,7 +120,7 @@ describe('buildEnvelopes — multi-device fan-out', () => {
     }
   });
 
-  it('establishes an independent session per device, including the sender\'s own siblings', async () => {
+  it("establishes an independent session per device, including the sender's own siblings", async () => {
     // Recipient's phone, recipient's laptop, and the sender's own second
     // device (a "sibling" of whichever device is calling this) — all three
     // are just entries in the device list crypto.ts's fetchConversationDevices

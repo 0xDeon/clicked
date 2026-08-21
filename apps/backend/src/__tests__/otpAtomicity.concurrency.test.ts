@@ -59,6 +59,8 @@ vi.mock('drizzle-orm', () => ({
   ilike: vi.fn(),
   exists: vi.fn(),
   isNull: vi.fn((col: unknown) => ({ op: 'isNull', col })),
+  asc: vi.fn((col: unknown) => ({ op: 'asc', col })),
+  count: vi.fn(() => 'count(*)'),
   sql: vi.fn(),
 }));
 
@@ -112,7 +114,11 @@ function createFakeOtpStore(seedCount: number) {
     return {
       select: () => ({
         from: () => ({
+          // The claim transaction also counts the remaining OTPs, awaiting
+          // where() directly, so it has to be thenable as well as chainable.
           where: () => ({
+            then: (resolve: (value: unknown) => void) =>
+              resolve([{ total: rows.filter((r) => !r.consumed).length }]),
             orderBy: () => ({
               limit: () => ({
                 for: async () => {

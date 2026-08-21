@@ -36,4 +36,3 @@ export async function importSessionKey(
   sessionKeys.set(senderDeviceId, key);
   return key;
 }
-

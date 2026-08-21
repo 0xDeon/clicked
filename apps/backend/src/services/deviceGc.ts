@@ -104,7 +104,11 @@ export async function runDeviceStaleFlagPass(): Promise<number> {
     .update(devices)
     .set({ staleFlaggedAt: new Date() })
     .where(
-      and(isNotNull(devices.revokedAt), lt(devices.revokedAt, cutoff), isNull(devices.staleFlaggedAt)),
+      and(
+        isNotNull(devices.revokedAt),
+        lt(devices.revokedAt, cutoff),
+        isNull(devices.staleFlaggedAt),
+      ),
     )
     .returning({ id: devices.id });
 

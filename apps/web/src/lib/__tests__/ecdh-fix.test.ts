@@ -1,10 +1,10 @@
 /**
  * Tests for ECDH session establishment fix.
- * 
+ *
  * Verifies that deriveSharedSecret now correctly uses:
  * - Caller's private key
  * - Peer's public key
- * 
+ *
  * And that both parties derive identical session keys.
  */
 
@@ -42,10 +42,10 @@ describe('ECDH Session Establishment (Fixed)', () => {
 
   /**
    * Core ECDH test: Alice and Bob should derive the same shared secret.
-   * 
+   *
    * Alice computes: ECDH(alice_private, bob_public)
    * Bob computes: ECDH(bob_private, alice_public)
-   * 
+   *
    * Both should produce identical shared secrets.
    */
   it('Alice and Bob derive identical shared secrets', async () => {
@@ -116,18 +116,15 @@ describe('ECDH Session Establishment (Fixed)', () => {
         256,
       );
 
-      return window.crypto.subtle.importKey(
-        'raw',
-        sharedBits,
-        { name: 'AES-GCM' },
-        true,
-        ['encrypt', 'decrypt'],
-      );
+      return window.crypto.subtle.importKey('raw', sharedBits, { name: 'AES-GCM' }, true, [
+        'encrypt',
+        'decrypt',
+      ]);
     };
 
     // Alice calls with HER private key and Bob's public JWK
     const aliceSecret = await deriveSharedSecret(aliceKeyPair.privateKey, bobPublicJwk);
-    
+
     // Bob calls with HIS private key and Alice's public JWK
     const bobSecret = await deriveSharedSecret(bobKeyPair.privateKey, alicePublicJwk);
 

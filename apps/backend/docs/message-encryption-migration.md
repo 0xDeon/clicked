@@ -114,7 +114,7 @@ It:
 **Rollback limitations** (also called out at the top of the script itself):
 
 - Only rows present in the archive get plaintext restored. Any message sent
-  *after* the forward migration ran was only ever stored as ciphertext —
+  _after_ the forward migration ran was only ever stored as ciphertext —
   there is nothing to restore for it, by design.
 - The recreated index is a reasonable equivalent, not necessarily
   byte-identical to whatever definition existed pre-squash.

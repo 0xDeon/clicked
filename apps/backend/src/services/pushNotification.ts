@@ -11,7 +11,7 @@ import webpush from 'web-push';
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { pushSubscriptions } from '../db/schema.js';
-import { isDeviceConnected } from './deviceRevocation.js';
+import { getEligiblePushRecipients } from './pushFilter.js';
 import { pushResultTotal } from '../lib/metrics.js';
 import { redis } from '../lib/redis.js';
 

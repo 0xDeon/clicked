@@ -168,8 +168,8 @@ describe('Room Manager', () => {
     await rebuildRoomsAfterRestart(mockIo);
 
     // Verify each socket joined user room
-    expect(mockSockets[0].join).toHaveBeenCalledWith('room:user:user-123');
-    expect(mockSockets[1].join).toHaveBeenCalledWith('room:user:user-124');
+    expect(mockSockets[0]!.join).toHaveBeenCalledWith('room:user:user-123');
+    expect(mockSockets[1]!.join).toHaveBeenCalledWith('room:user:user-124');
 
     // Verify conversation rooms were joined (mockFindMany returns conversations)
     expect(mockFindMany).toHaveBeenCalledTimes(2);

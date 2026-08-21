@@ -50,7 +50,7 @@ const { getEligiblePushRecipients } = await import('../services/pushFilter.js');
 beforeEach(() => {
   vi.clearAllMocks();
   mockIsOnline.mockResolvedValue(false);
-  mockIsDeviceConnected.mockReturnValue(false);
+  mockIsDeviceConnected.mockResolvedValue(false);
 });
 
 describe('Push Filter Parity', () => {
@@ -147,9 +147,9 @@ describe('Push Filter Parity', () => {
       { id: 'device-offline', userId: 'recipient-1' },
     ]);
 
-    mockIsDeviceConnected.mockImplementation((deviceId: string) => {
-      return deviceId === 'device-connected';
-    });
+    mockIsDeviceConnected.mockImplementation(
+      async (_redis: unknown, deviceId: string) => deviceId === 'device-connected',
+    );
 
     const result = await getEligiblePushRecipients({
       conversationId: 'conv-1',
@@ -197,9 +197,10 @@ describe('Push Filter Parity', () => {
       { id: 'eligible-device-2', userId: 'eligible-user' },
     ]);
 
-    mockIsDeviceConnected.mockImplementation((deviceId: string) => {
-      return deviceId === 'eligible-device-2'; // One device is connected
-    });
+    mockIsDeviceConnected.mockImplementation(
+      // One device is connected.
+      async (_redis: unknown, deviceId: string) => deviceId === 'eligible-device-2',
+    );
 
     const result = await getEligiblePushRecipients({
       conversationId: 'conv-1',

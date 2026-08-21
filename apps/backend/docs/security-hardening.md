@@ -34,6 +34,7 @@ const sharedBits = await window.crypto.subtle.deriveBits(
 ```
 
 This is **cryptographically invalid**. WebCrypto's `deriveBits` requires:
+
 - **Algorithm parameter**: `{ name: 'ECDH', public: peerPublicKey }`
 - **Base key**: Caller's **private key** (not public)
 
@@ -60,7 +61,7 @@ async deriveSharedSecret(
     callerPrivateKey, // Correct: private key as base
     256
   );
-  
+
   // ... import as AES-GCM key
 }
 ```
@@ -75,13 +76,13 @@ async establishSession(
   myPrivateKey: CryptoKey  // Now requires private key
 ): Promise<SessionData> {
   // ... fetch bundle, verify signature
-  
+
   // FIXED: Pass our private key and peer's public key
   const sharedSecret = await this.protocol.deriveSharedSecret(
     myPrivateKey,
     selectedPrekeyPublicKey
   );
-  
+
   // ... cache session
 }
 ```
@@ -105,8 +106,8 @@ The identity keypair was generated as **non-extractable**, only the public JWK w
 // WRONG: extractable=false means private key can't be stored
 const keyPair = await window.crypto.subtle.generateKey(
   { name: 'ECDH', namedCurve: 'P-256' },
-  false,  // BUG: non-extractable
-  ['deriveKey', 'deriveBits']
+  false, // BUG: non-extractable
+  ['deriveKey', 'deriveBits'],
 );
 
 // Only public key stored
@@ -139,7 +140,7 @@ async storeIdentityKeyPair(keyPair: CryptoKeyPair): Promise<void> {
     keyPair,  // IndexedDB serializes CryptoKey objects directly
     createdAt: Date.now()
   }, 'current');
-  
+
   // Also maintain legacy public key storage
   const publicKeyJwk = await window.crypto.subtle.exportKey('jwk', keyPair.publicKey);
   await this.dbPut('keys', { publicKey: publicKeyJwk }, 'identity_keypair');
@@ -154,11 +155,11 @@ async getIdentityPrivateKey(): Promise<CryptoKey | null> {
     'identityKeyPair',
     'current'
   );
-  
+
   if (stored?.keyPair?.privateKey) {
     return stored.keyPair.privateKey;  // Same key across reloads
   }
-  
+
   return null;  // No regeneration
 }
 ```
@@ -200,12 +201,12 @@ export async function getEligiblePushRecipients(
 ): Promise<string[]> {
   // 1. Get conversation members with mute status
   const allMembers = await db.query.conversationMembers.findMany(...);
-  
+
   // 2. Filter out sender and muted members
   const eligibleMembers = allMembers.filter(
     m => m.userId !== senderId && !m.isMuted
   );
-  
+
   // 3. Filter out online users (via Redis)
   const offlineUserIds = [];
   for (const userId of eligibleUserIds) {
@@ -213,7 +214,7 @@ export async function getEligiblePushRecipients(
       offlineUserIds.push(userId);
     }
   }
-  
+
   // 4. Get active, push-enabled devices
   const devices = await db.query.devices.findMany({
     where: and(
@@ -222,12 +223,12 @@ export async function getEligiblePushRecipients(
       // ... filter by offline users
     )
   });
-  
+
   // 5. Filter out connected devices
   const offlineDeviceIds = devices
     .filter(d => !isDeviceConnected(d.id))
     .map(d => d.id);
-  
+
   return offlineDeviceIds;
 }
 ```
@@ -243,7 +244,7 @@ export async function dispatchOfflinePush(..., senderId?: string) {
     recipientDeviceIds,
     redis
   });
-  
+
   for (const deviceId of eligibleDeviceIds) {
     queueCoalescedPush(deviceId, conversationId, messageId);
   }
@@ -256,7 +257,7 @@ export async function sendPushForMessage(ctx: PushContext) {
     senderId: ctx.senderId,
     redis
   });
-  
+
   for (const deviceId of eligibleDeviceIds) {
     queueCoalescedPush(deviceId, ctx.conversationId, ctx.messageId);
   }
@@ -266,6 +267,7 @@ export async function sendPushForMessage(ctx: PushContext) {
 ### Filtering Logic
 
 Both paths now consistently filter out:
+
 - ✓ The sender themselves
 - ✓ Members who muted the conversation
 - ✓ Users currently online (active WebSocket)
@@ -287,6 +289,7 @@ Both paths now consistently filter out:
 ### Problem
 
 Upload confirmation (`POST /uploads/:fileId/confirm`) only checked:
+
 - File existence
 - File size
 
@@ -299,23 +302,23 @@ But **never verified SHA-256 integrity**. Corrupted or tampered files could be m
 ```typescript
 export async function verifyFileIntegrity(
   storageKey: string,
-  expectedSha256: string
+  expectedSha256: string,
 ): Promise<IntegrityCheckResult> {
   const store = getObjectStore();
   const response = await store.getObject(storageKey);
-  
+
   // Stream hash computation (avoids loading large files into memory)
   const stream = response.Body as Readable;
   const computedHash = await computeSha256FromStream(stream);
-  
+
   // Case-insensitive comparison
   const valid = computedHash.toLowerCase() === expectedSha256.toLowerCase();
-  
+
   return {
     valid,
     computedHash,
     expectedHash: expectedSha256,
-    ...(valid ? {} : { error: 'Hash mismatch' })
+    ...(valid ? {} : { error: 'Hash mismatch' }),
   };
 }
 ```
@@ -325,30 +328,30 @@ export async function verifyFileIntegrity(
 ```typescript
 uploadsRouter.post('/:fileId/confirm', async (req, res) => {
   // ... auth checks, file lookup
-  
+
   // SECURITY FIX: Verify SHA-256 integrity
-  const integrityCheck = await verifyFileIntegrity(
-    file.storageKey,
-    file.sha256
-  );
-  
+  const integrityCheck = await verifyFileIntegrity(file.storageKey, file.sha256);
+
   if (!integrityCheck.valid) {
     // Mark file as corrupted — never becomes ready
-    await db.update(files).set({
-      status: 'deleted',
-      deletedAt: new Date()
-    }).where(eq(files.id, fileId));
-    
+    await db
+      .update(files)
+      .set({
+        status: 'deleted',
+        deletedAt: new Date(),
+      })
+      .where(eq(files.id, fileId));
+
     return res.status(422).json({
       error: 'File integrity verification failed',
       details: {
         reason: integrityCheck.error,
         expectedHash: integrityCheck.expectedHash,
-        computedHash: integrityCheck.computedHash
-      }
+        computedHash: integrityCheck.computedHash,
+      },
     });
   }
-  
+
   // Integrity verified — mark as ready
   await db.update(files).set({ status: 'ready' }).where(eq(files.id, fileId));
   res.status(200).json({ fileId, status: 'ready' });
@@ -409,6 +412,7 @@ uploadsRouter.post('/:fileId/confirm', async (req, res) => {
 ### Regression Tests
 
 All existing tests continue to pass:
+
 - Encrypted messaging flows
 - File upload/download
 - Push notification delivery

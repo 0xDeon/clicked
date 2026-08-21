@@ -45,10 +45,14 @@ function asBytes(value: unknown, name: string): MlsBytes {
   throw new Error(`OpenMLS returned an invalid ${name}`);
 }
 
-function requiredMethod(instance: OpenMlsInstance, names: string[]): (...args: unknown[]) => unknown {
+function requiredMethod(
+  instance: OpenMlsInstance,
+  names: string[],
+): (...args: unknown[]) => unknown {
   for (const name of names) {
     const method = instance[name];
-    if (typeof method === 'function') return method.bind(instance) as (...args: unknown[]) => unknown;
+    if (typeof method === 'function')
+      return method.bind(instance) as (...args: unknown[]) => unknown;
   }
   throw new Error(`OpenMLS WASM binding does not expose ${names.join(' or ')}`);
 }
@@ -58,14 +62,14 @@ async function loadBinding(): Promise<OpenMlsModule> {
     throw new Error('MLS is only available in a browser context');
   }
 
-  const module = (await import(MODULE_NAME)) as OpenMlsModule;
-  const initializer = module.default ?? module.init;
+  const binding = (await import(MODULE_NAME)) as OpenMlsModule;
+  const initializer = binding.default ?? binding.init;
   if (initializer) await initializer();
-  return module;
+  return binding;
 }
 
-function createBinding(module: OpenMlsModule, options: MlsClientOptions): OpenMlsInstance {
-  const Constructor = module.MlsClient ?? module.WasmClient ?? module.Client;
+function createBinding(binding: OpenMlsModule, options: MlsClientOptions): OpenMlsInstance {
+  const Constructor = binding.MlsClient ?? binding.WasmClient ?? binding.Client;
   if (!Constructor) throw new Error('OpenMLS WASM client constructor is unavailable');
 
   return new Constructor(options.credential, MLS_CIPHERSUITE, options.state ?? null);
@@ -79,10 +83,11 @@ export class MlsClient {
 
   static async create(groupId: string, options: MlsClientOptions): Promise<MlsClient> {
     if (!groupId) throw new Error('groupId is required');
-    if (!(options.credential instanceof Uint8Array)) throw new Error('credential must be Uint8Array');
+    if (!(options.credential instanceof Uint8Array))
+      throw new Error('credential must be Uint8Array');
 
-    const module = await loadBinding();
-    return new MlsClient(createBinding(module, options), groupId);
+    const loaded = await loadBinding();
+    return new MlsClient(createBinding(loaded, options), groupId);
   }
 
   async createGroup(): Promise<MlsTransportMessage[]> {
@@ -101,12 +106,18 @@ export class MlsClient {
     return normalizeMessages(await add(externalCredential), this.groupId);
   }
 
-  async encrypt(plaintext: MlsBytes, authenticatedData: MlsBytes = new Uint8Array()): Promise<MlsBytes> {
+  async encrypt(
+    plaintext: MlsBytes,
+    authenticatedData: MlsBytes = new Uint8Array(),
+  ): Promise<MlsBytes> {
     const encrypt = requiredMethod(this.binding, ['encryptMessage', 'encrypt_message', 'encrypt']);
     return asBytes(await encrypt(plaintext, authenticatedData), 'ciphertext');
   }
 
-  async decrypt(ciphertext: MlsBytes, authenticatedData: MlsBytes = new Uint8Array()): Promise<MlsBytes> {
+  async decrypt(
+    ciphertext: MlsBytes,
+    authenticatedData: MlsBytes = new Uint8Array(),
+  ): Promise<MlsBytes> {
     const decrypt = requiredMethod(this.binding, ['decryptMessage', 'decrypt_message', 'decrypt']);
     return asBytes(await decrypt(ciphertext, authenticatedData), 'plaintext');
   }
@@ -118,7 +129,12 @@ export class MlsClient {
   }
 
   async applyCommit(commit: MlsBytes): Promise<void> {
-    const apply = requiredMethod(this.binding, ['applyCommit', 'apply_commit', 'processCommit', 'process_commit']);
+    const apply = requiredMethod(this.binding, [
+      'applyCommit',
+      'apply_commit',
+      'processCommit',
+      'process_commit',
+    ]);
     await apply(commit);
   }
 

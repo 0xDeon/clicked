@@ -77,8 +77,8 @@ vi.mock('../middleware/auth.js', () => ({
   },
 }));
 
-const { devicesRouter, deviceLinkChallengeLimiter, deviceLinkVerifyLimiter } =
-  await import('../routes/devices.js');
+const { devicesRouter } = await import('../routes/devices.js');
+const { clearLocalRateLimitCounters } = await import('../services/rateLimiter.js');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -114,11 +114,11 @@ function signFreighter(message: string) {
   return walletKeypair.sign(digest).toString('base64');
 }
 
+// The link limiters are buckets in the shared limiter (#375) rather than
+// standalone express-rate-limit instances, so a test resets the counters the
+// buckets are charged against instead of individual keys.
 function resetLimiters() {
-  for (const key of ['127.0.0.1', '::ffff:127.0.0.1', '::1']) {
-    deviceLinkChallengeLimiter.resetKey(key);
-    deviceLinkVerifyLimiter.resetKey(key);
-  }
+  clearLocalRateLimitCounters();
 }
 
 function setupInsertChain(id = 'new-device-id', createdAt = new Date('2026-07-01T00:00:00.000Z')) {

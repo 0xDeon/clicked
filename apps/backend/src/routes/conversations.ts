@@ -23,6 +23,7 @@ import {
   messageEnvelopes,
   devices,
   users,
+  type Conversation,
 } from '../db/schema.js';
 import { requireAuth, type AuthRequest } from '../middleware/auth.js';
 import { redis, CONV_CACHE_TTL, convCacheKey } from '../lib/redis.js';
@@ -34,6 +35,17 @@ import { applyMlsVisibility } from '../lib/mlsVisibility.js';
 import { getConversationEpochWindow } from '../services/mlsGroups.js';
 import { checkGroupInviteLimit } from '../services/rateLimit.js';
 import { actorFromRequest, recordAuditEvent } from '../services/auditLog.js';
+import {
+  appendGroupControlEvent,
+  broadcastGroupControlEvent,
+  getGroupState,
+  readGroupControlEvents,
+  serializeGroupControlEvent,
+  DEFAULT_GROUP_CONTROL_PAGE_SIZE,
+  MAX_GROUP_CONTROL_PAGE_SIZE,
+  MAX_GROUP_CONTROL_PAYLOAD_BYTES,
+} from '../services/groupControl.js';
+import { normalizeCapabilities, selectProtocol } from '../lib/capabilities.js';
 
 export const conversationsRouter: IRouter = Router();
 
@@ -640,7 +652,10 @@ conversationsRouter.get('/:id/messages', async (req: AuthRequest, res) => {
 
   const visible = hasGroup ? page.map((message) => applyMlsVisibility(message, window)) : page;
 
-  res.json({ messages: visible, nextCursor });
+  // #336 — run every row through the same serializer `GET /:id` uses, so the
+  // shape matches across endpoints and a message this device holds no envelope
+  // for is explicitly marked `unavailable` instead of arriving as a silent null.
+  res.json({ messages: visible.map((message) => serializeMessage(message)), nextCursor });
 });
 
 conversationsRouter.get('/:id/search', async (req: AuthRequest, res) => {

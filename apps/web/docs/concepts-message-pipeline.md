@@ -79,10 +79,10 @@ Reconciliation against the `message_ack`:
 
 A recipient device receives messages through exactly one of two paths, but the **processing code is the same for both**. That shared code is `useInboundPipeline` and `processInboundEnvelope`.
 
-| Channel | When used | Source |
-|---|---|---|
-| Live `message_envelope` socket event | Device is connected when message is sent | `deliverMessage` in the backend |
-| `/sync` HTTP backfill | Device reconnects after an offline period | `GET /sync` route |
+| Channel                              | When used                                 | Source                          |
+| ------------------------------------ | ----------------------------------------- | ------------------------------- |
+| Live `message_envelope` socket event | Device is connected when message is sent  | `deliverMessage` in the backend |
+| `/sync` HTTP backfill                | Device reconnects after an offline period | `GET /sync` route               |
 
 ### 2.2 Live socket delivery
 
@@ -167,6 +167,7 @@ The `useMessageHistory` hook (used by `MessageThread`) applies its own guard: `i
 **Detection:** `getSessionKey(senderDeviceId)` returns `null` inside `decryptAndVerifyEnvelope`, throwing `PreLinkError`.
 
 **`processInboundEnvelope` returns:**
+
 ```ts
 { status: 'unavailable', unavailableReason: 'pre-link' }
 ```
@@ -174,7 +175,8 @@ The `useMessageHistory` hook (used by `MessageThread`) applies its own guard: `i
 The `/sync` backfill also propagates this: if the server-side envelope's `unavailable: true` flag is set, `ingestMeta` in `useInboundPipeline` sets the message directly to `unavailable/pre-link` without waiting for ciphertext.
 
 **UI (`UnavailableMessagePlaceholder`):**
-> 🔒 *Waiting for secure session — message from before this device was linked.*
+
+> 🔒 _Waiting for secure session — message from before this device was linked._
 
 ### 3.2 Signature verification failure
 
@@ -183,12 +185,14 @@ The `/sync` backfill also propagates this: if the server-side envelope's `unavai
 **Detection:** `crypto.subtle.verify` returns `false` in `verifyEnvelopeSignature`, throwing `VerificationFailedError`.
 
 **`processInboundEnvelope` returns:**
+
 ```ts
 { status: 'unavailable', unavailableReason: 'verification-failed' }
 ```
 
 **UI (`UnavailableMessagePlaceholder`):**
-> 🔒 *Message could not be verified.*
+
+> 🔒 _Message could not be verified._
 
 ### 3.3 AES-GCM decryption failure
 
@@ -197,12 +201,14 @@ The `/sync` backfill also propagates this: if the server-side envelope's `unavai
 **Detection:** `crypto.subtle.decrypt` throws, caught and re-thrown as `DecryptError`.
 
 **`processInboundEnvelope` returns:**
+
 ```ts
 { status: 'unavailable', unavailableReason: 'undecryptable' }
 ```
 
 **UI (`UnavailableMessagePlaceholder`):**
-> 🔒 *Unable to decrypt this message.*
+
+> 🔒 _Unable to decrypt this message._
 
 ### 3.4 Missing `senderDeviceId`
 
@@ -211,6 +217,7 @@ The `/sync` backfill also propagates this: if the server-side envelope's `unavai
 **Detection:** `processInboundEnvelope` checks `!envelope.senderDeviceId` before attempting any crypto.
 
 **`processInboundEnvelope` returns:**
+
 ```ts
 { status: 'unavailable', unavailableReason: 'pre-link' }
 ```
@@ -233,7 +240,7 @@ The `/sync` backfill also propagates this: if the server-side envelope's `unavai
 
 - `useSocket` has `reconnection: true` with Socket.IO's default exponential back-off. No explicit "disconnected" banner is rendered by the pipeline itself; the conversation header in `apps/web/src/app/chat/page.tsx` shows `Disconnected` next to the room name when `socket?.connected` is false.
 - In the conversations page (`/app/conversations/[id]`), initial data is fetched over HTTP (`GET /conversations/:id/messages`) independently of the socket. If the HTTP fetch fails, the full page replaces with an `EmptyState`:
-  > **Conversation unavailable** — *[server error message]*
+  > **Conversation unavailable** — _[server error message]_
 - `useInboundPipeline` sets `syncing: true` while the `/sync` loop is in flight. This flag is exposed to the parent page to optionally show a sync indicator.
 - Messages that arrived while offline are recovered on reconnect through the `runSync` / `runSocketSync` cycle (§2.3). The cursor stored in `localStorage` ensures the sync picks up exactly from the last known position.
 
@@ -249,12 +256,12 @@ The `/sync` backfill also propagates this: if the server-side envelope's `unavai
 
 The server can reject a message in several ways, each returning a named error event:
 
-| Server error | `event` field | Meaning |
-|---|---|---|
-| Missing `messageId` | `send_message` | Client bug |
-| Not a conversation member | `send_message` | Auth/membership issue |
+| Server error                      | `event` field         | Meaning                                          |
+| --------------------------------- | --------------------- | ------------------------------------------------ |
+| Missing `messageId`               | `send_message`        | Client bug                                       |
+| Not a conversation member         | `send_message`        | Auth/membership issue                            |
 | Sibling devices missing envelopes | `device_set_mismatch` | Client must re-encrypt for the listed device IDs |
-| DB write failure | `send_message` | Transient; retry advised |
+| DB write failure                  | `send_message`        | Transient; retry advised                         |
 
 The `MessageInput` component emits `send_message` and the `ChatPage` listens on `socket.on('error', ...)`, displaying the error message in a red bar above the input. No retry logic is currently implemented client-side for `device_set_mismatch`.
 
@@ -316,20 +323,20 @@ useSocket          GET /sync         useInboundPipeline
 
 ## Key source locations
 
-| Concern | File |
-|---|---|
-| Socket init and resume | `src/hooks/useSocket.ts`, `src/lib/socket.ts`, `src/lib/realtime.ts` |
-| Inbound pipeline hook | `src/hooks/useInboundPipeline.ts` |
-| Envelope decrypt/verify | `src/lib/crypto/processEnvelope.ts`, `src/lib/crypto/decrypt.ts` |
-| Crypto types and errors | `src/lib/crypto/types.ts` |
-| Session key store | `src/lib/crypto/sessionStore.ts` |
-| Device key cache | `src/lib/crypto/deviceKeys.ts` |
-| Plaintext cache | `src/lib/crypto/plaintextCache.ts` |
-| X3DH key exchange | `src/lib/x3dh.ts` |
-| Message thread UI | `src/components/messaging/MessageThread.tsx` |
-| Unavailable placeholder | `src/components/messaging/UnavailableMessagePlaceholder.tsx` |
-| Pagination (load older) | `src/hooks/useMessageHistory.ts` |
-| Backend send handler | `apps/backend/src/socket/messaging.ts` |
-| Backend fan-out | `apps/backend/src/services/deliveryPipeline.ts` |
-| Backend `/sync` route | `apps/backend/src/routes/sync.ts` |
-| Ephemeral event replay | `apps/backend/src/services/resumeStream.ts` |
+| Concern                 | File                                                                 |
+| ----------------------- | -------------------------------------------------------------------- |
+| Socket init and resume  | `src/hooks/useSocket.ts`, `src/lib/socket.ts`, `src/lib/realtime.ts` |
+| Inbound pipeline hook   | `src/hooks/useInboundPipeline.ts`                                    |
+| Envelope decrypt/verify | `src/lib/crypto/processEnvelope.ts`, `src/lib/crypto/decrypt.ts`     |
+| Crypto types and errors | `src/lib/crypto/types.ts`                                            |
+| Session key store       | `src/lib/crypto/sessionStore.ts`                                     |
+| Device key cache        | `src/lib/crypto/deviceKeys.ts`                                       |
+| Plaintext cache         | `src/lib/crypto/plaintextCache.ts`                                   |
+| X3DH key exchange       | `src/lib/x3dh.ts`                                                    |
+| Message thread UI       | `src/components/messaging/MessageThread.tsx`                         |
+| Unavailable placeholder | `src/components/messaging/UnavailableMessagePlaceholder.tsx`         |
+| Pagination (load older) | `src/hooks/useMessageHistory.ts`                                     |
+| Backend send handler    | `apps/backend/src/socket/messaging.ts`                               |
+| Backend fan-out         | `apps/backend/src/services/deliveryPipeline.ts`                      |
+| Backend `/sync` route   | `apps/backend/src/routes/sync.ts`                                    |
+| Ephemeral event replay  | `apps/backend/src/services/resumeStream.ts`                          |

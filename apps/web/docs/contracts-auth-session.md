@@ -39,12 +39,12 @@ Note that two other implementations use overlapping-but-different key sets — s
 Source: [src/lib/jwt.ts](../src/lib/jwt.ts). The client decodes the JWT payload
 only — it never verifies the signature and never checks `exp`/expiry.
 
-| Export | Purpose | Input | Output |
-| --- | --- | --- | --- |
-| `JwtPayload` (interface) | Shape of the decoded payload the client relies on | — | `{ userId: string; walletAddress: string; deviceId: string }` |
-| `parseJwtPayload` | Decode the base64url payload segment and JSON-parse it; returns `null` if the token has no payload, if decoding throws, or if `userId`/`deviceId` are absent. No signature or expiry check. | `token: string` | `JwtPayload \| null` |
-| `getE2EDeviceId` | Return the E2E device id — prefers the value stored under the `clicked.e2eDeviceId` localStorage key, otherwise falls back to `deviceId` from the decoded token. Documented as `userDevices.id` for envelope sync, which "may differ from JWT devices.id". | `token: string` | `string \| null` |
-| `setE2EDeviceId` | Persist the E2E device id under the `clicked.e2eDeviceId` localStorage key (no-op when `window` is undefined, e.g. SSR). | `deviceId: string` | `void` |
+| Export                   | Purpose                                                                                                                                                                                                                                                    | Input              | Output                                                        |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ------------------------------------------------------------- |
+| `JwtPayload` (interface) | Shape of the decoded payload the client relies on                                                                                                                                                                                                          | —                  | `{ userId: string; walletAddress: string; deviceId: string }` |
+| `parseJwtPayload`        | Decode the base64url payload segment and JSON-parse it; returns `null` if the token has no payload, if decoding throws, or if `userId`/`deviceId` are absent. No signature or expiry check.                                                                | `token: string`    | `JwtPayload \| null`                                          |
+| `getE2EDeviceId`         | Return the E2E device id — prefers the value stored under the `clicked.e2eDeviceId` localStorage key, otherwise falls back to `deviceId` from the decoded token. Documented as `userDevices.id` for envelope sync, which "may differ from JWT devices.id". | `token: string`    | `string \| null`                                              |
+| `setE2EDeviceId`         | Persist the E2E device id under the `clicked.e2eDeviceId` localStorage key (no-op when `window` is undefined, e.g. SSR).                                                                                                                                   | `deviceId: string` | `void`                                                        |
 
 ## 4. Session Initialization Sequence
 
@@ -54,6 +54,7 @@ Driven by `AuthProvider` in
 **Token present (returning session):** on mount, a `useEffect`
 ([src/contexts/AuthContext.tsx:53-59](../src/contexts/AuthContext.tsx#L53-L59))
 runs:
+
 1. `readToken()` returns the first non-empty value among the three storage keys.
 2. If found, `setToken(savedToken)`.
 3. `setUser(parseJwtUser(savedToken))` — `parseJwtUser` calls `parseJwtClaims`
@@ -69,6 +70,7 @@ stay `null` and the app is unauthenticated. There is no automatic recovery. A
 session is established only when `signIn()`
 ([src/contexts/AuthContext.tsx:61-101](../src/contexts/AuthContext.tsx#L61-L101))
 is invoked:
+
 1. Resolve `walletAddress` from the wallet context (`publicKey ?? await connect()`).
 2. `getOrCreateDeviceIdentity()` — loads or generates the Ed25519 device identity.
 3. `POST /auth/challenge` with `{ walletAddress }` → `{ message, nonce }`.
@@ -92,12 +94,14 @@ nothing clears or refreshes it automatically.
 `signOut()`
 ([src/contexts/AuthContext.tsx:103-107](../src/contexts/AuthContext.tsx#L103-L107))
 clears exactly:
+
 - The three token keys via `removeToken()` — `clicked.jwt`, `clicked_token`,
   `auth_token`.
 - React state: `setToken(null)` and `setUser(null)`.
 
 **Device-side crypto state is NOT cleared.** `signOut` does not touch any of the
 following, all of which survive logout:
+
 - The Ed25519 device identity in `localStorage`:
   `clicked.e2eeDeviceId` and `clicked.deviceIdentityPublicKey`
   ([src/lib/deviceIdentity.ts:3-4](../src/lib/deviceIdentity.ts#L3-L4)),

@@ -53,8 +53,7 @@ export interface ProtocolViolation {
 }
 
 export type EnvelopeProtocolCheck =
-  | { ok: true }
-  | { ok: false; code: 400 | 409; error: string; violations: ProtocolViolation[] };
+  { ok: true } | { ok: false; code: 400 | 409; error: string; violations: ProtocolViolation[] };
 
 /**
  * Validates the protocol each outgoing envelope claims against what the sender

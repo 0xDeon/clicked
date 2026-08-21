@@ -3,23 +3,23 @@
 Scope: the `apps/backend` gateway/API and its data stores (Postgres, Redis,
 S3-compatible object storage). Client-side crypto correctness is covered by
 [`signal-integration.md`](./signal-integration.md); this doc is about what
-the *server* can see and do, not whether the ratchet math is sound.
+the _server_ can see and do, not whether the ratchet math is sound.
 
 ## What the server can see
 
-| Data | Server visibility | Why |
-|---|---|---|
-| Message ciphertext | Opaque bytes only | `validateMessagePayload` (`apps/backend/src/lib/validateMessagePayload.ts`) requires ciphertext to travel inside per-device `envelopes`; the server stores and relays it without decrypting |
-| Per-recipient envelopes | Opaque bytes only | Same as above — one envelope per recipient device, keyed by `recipientDeviceId` |
-| Sender/recipient identity | Plaintext | `senderId`, `senderDeviceId`, `conversationId`, `recipientDeviceId` are unencrypted — the server must know routing to deliver |
-| Conversation membership | Plaintext | `conversation_members` table — the server knows who is in which conversation |
-| Message timing | Plaintext | `createdAt`, delivery timestamps, presence timestamps are all server-visible |
-| Message size | Plaintext (approx.) | Ciphertext length is visible even though content isn't; file sizes are visible via `files`/object storage |
-| Content type | Plaintext | `contentType` (`text`/`file`/`image`/`video`/`audio`) is an unencrypted enum field, not covered by the ciphertext guard |
-| Presence (online/offline) | Plaintext | Redis presence hashes; gated by `presenceVisible` user setting but visible to the server regardless |
-| Push subscription endpoints | Plaintext | Web Push endpoints stored in `push_subscriptions`; the push provider (browser vendor) also sees delivery metadata |
-| Device identity public keys, signed prekeys, one-time prekeys | Plaintext (public keys) | Public by design — this is how X3DH/session bootstrap works. Private keys never leave the client (see below) |
-| Wallet address | Plaintext | Used for Stellar-based auth; stored on `wallets` |
+| Data                                                          | Server visibility       | Why                                                                                                                                                                                         |
+| ------------------------------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Message ciphertext                                            | Opaque bytes only       | `validateMessagePayload` (`apps/backend/src/lib/validateMessagePayload.ts`) requires ciphertext to travel inside per-device `envelopes`; the server stores and relays it without decrypting |
+| Per-recipient envelopes                                       | Opaque bytes only       | Same as above — one envelope per recipient device, keyed by `recipientDeviceId`                                                                                                             |
+| Sender/recipient identity                                     | Plaintext               | `senderId`, `senderDeviceId`, `conversationId`, `recipientDeviceId` are unencrypted — the server must know routing to deliver                                                               |
+| Conversation membership                                       | Plaintext               | `conversation_members` table — the server knows who is in which conversation                                                                                                                |
+| Message timing                                                | Plaintext               | `createdAt`, delivery timestamps, presence timestamps are all server-visible                                                                                                                |
+| Message size                                                  | Plaintext (approx.)     | Ciphertext length is visible even though content isn't; file sizes are visible via `files`/object storage                                                                                   |
+| Content type                                                  | Plaintext               | `contentType` (`text`/`file`/`image`/`video`/`audio`) is an unencrypted enum field, not covered by the ciphertext guard                                                                     |
+| Presence (online/offline)                                     | Plaintext               | Redis presence hashes; gated by `presenceVisible` user setting but visible to the server regardless                                                                                         |
+| Push subscription endpoints                                   | Plaintext               | Web Push endpoints stored in `push_subscriptions`; the push provider (browser vendor) also sees delivery metadata                                                                           |
+| Device identity public keys, signed prekeys, one-time prekeys | Plaintext (public keys) | Public by design — this is how X3DH/session bootstrap works. Private keys never leave the client (see below)                                                                                |
+| Wallet address                                                | Plaintext               | Used for Stellar-based auth; stored on `wallets`                                                                                                                                            |
 
 ## What the server cannot see
 

@@ -16,17 +16,17 @@ treasury via the `TreasuryInterface` (`is_member`, `balance`, `withdraw`).
 
 ## Proposal Status State Machine
 
-Every proposal transitions through the finite state machine below.  The six
+Every proposal transitions through the finite state machine below. The six
 `ProposalStatus` variants are defined in `storage.rs`:
 
-| Status     | Meaning |
-|------------|---------|
-| `Active`   | Voting is open. |
-| `Passed`   | Voting has closed and yes-votes outnumbered no-votes. The proposal is ready for execution. |
-| `Rejected` | Voting has closed and yes-votes did **not** outnumber no-votes (tie counts as rejection). |
+| Status     | Meaning                                                                                                                                |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `Active`   | Voting is open.                                                                                                                        |
+| `Passed`   | Voting has closed and yes-votes outnumbered no-votes. The proposal is ready for execution.                                             |
+| `Rejected` | Voting has closed and yes-votes did **not** outnumber no-votes (tie counts as rejection).                                              |
 | `Expired`  | Voting has closed and `finalize_expired_proposal` was called instead of `finalize_proposal`. No execution path exists from this state. |
-| `Executed` | Funds have been withdrawn (or the MVP execution marker has been set). |
-| `Approved` | Defined but **unused** in the current contract. Reserved for future use. |
+| `Executed` | Funds have been withdrawn (or the MVP execution marker has been set).                                                                  |
+| `Approved` | Defined but **unused** in the current contract. Reserved for future use.                                                               |
 
 ```mermaid
 stateDiagram-v2
@@ -46,13 +46,13 @@ stateDiagram-v2
 
 ### Function calls that cause each transition
 
-| Transition | Caller | Condition |
-|---|---|---|
-| `None → Active` | Anyone | `create_proposal` with `expires_at > now` and `amount > 0` |
-| `Active → Passed` | Anyone | `finalize_proposal` called **after** `expires_at`, `yes_votes > no_votes` |
-| `Active → Rejected` | Anyone | `finalize_proposal` called **after** `expires_at`, `yes_votes ≤ no_votes` |
-| `Active → Expired` | Anyone | `finalize_expired_proposal` called **after** `expires_at` |
-| `Passed → Executed` | Anyone (MVP) / Treasury member (real) | `execute_proposal` / `execute_withdraw` |
+| Transition          | Caller                                | Condition                                                                 |
+| ------------------- | ------------------------------------- | ------------------------------------------------------------------------- |
+| `None → Active`     | Anyone                                | `create_proposal` with `expires_at > now` and `amount > 0`                |
+| `Active → Passed`   | Anyone                                | `finalize_proposal` called **after** `expires_at`, `yes_votes > no_votes` |
+| `Active → Rejected` | Anyone                                | `finalize_proposal` called **after** `expires_at`, `yes_votes ≤ no_votes` |
+| `Active → Expired`  | Anyone                                | `finalize_expired_proposal` called **after** `expires_at`                 |
+| `Passed → Executed` | Anyone (MVP) / Treasury member (real) | `execute_proposal` / `execute_withdraw`                                   |
 
 ---
 
@@ -60,15 +60,15 @@ stateDiagram-v2
 
 Anyone can call `create_proposal` with the following parameters:
 
-| Parameter     | Type      | Description |
-|---------------|-----------|-------------|
-| `proposer`    | `Address` | The creator (must authenticate). |
-| `description` | `String`  | A human-readable description of the proposal. |
+| Parameter     | Type      | Description                                                                  |
+| ------------- | --------- | ---------------------------------------------------------------------------- |
+| `proposer`    | `Address` | The creator (must authenticate).                                             |
+| `description` | `String`  | A human-readable description of the proposal.                                |
 | `expires_at`  | `u64`     | Unix timestamp (seconds) when voting closes. Must be strictly in the future. |
-| `treasury`    | `Address` | The group treasury contract that holds the funds. |
-| `token`       | `Address` | The token contract to withdraw. |
-| `to`          | `Address` | The recipient of the funds. |
-| `amount`      | `i128`    | The amount to withdraw. Must be positive. |
+| `treasury`    | `Address` | The group treasury contract that holds the funds.                            |
+| `token`       | `Address` | The token contract to withdraw.                                              |
+| `to`          | `Address` | The recipient of the funds.                                                  |
+| `amount`      | `i128`    | The amount to withdraw. Must be positive.                                    |
 
 On success the contract:
 
@@ -77,6 +77,7 @@ On success the contract:
 3. Publishes a `proposal_created` event.
 
 **Guards:**
+
 - `expires_at <= now` → panic ("expires_at must be in the future").
 - `amount <= 0` → panic ("amount must be positive").
 
@@ -92,13 +93,13 @@ proposal** — re-voting panics.
 
 #### Voting Rules (what the code actually enforces)
 
-| Rule | Enforcement |
-|---|---|
-| **One address, one vote** | Stored as `DataKey::Vote(proposal_id, voter) → bool`. If the key exists, `vote` panics. |
-| **No weighted voting** | Each address contributes exactly 1 to `yes_votes` or `no_votes`. There is no token-weighting, quadratic voting, or reputation multiplier. |
-| **No quorum** | A proposal can pass with a single yes-vote and zero no-votes. There is no minimum participation floor. |
-| **Voting window** | Voting is only permitted while `now < expires_at`. Attempting to vote at or after expiry panics. |
-| **Status check** | Voting is only permitted while `status == Active`. A finalized or expired proposal cannot receive votes. |
+| Rule                      | Enforcement                                                                                                                               |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| **One address, one vote** | Stored as `DataKey::Vote(proposal_id, voter) → bool`. If the key exists, `vote` panics.                                                   |
+| **No weighted voting**    | Each address contributes exactly 1 to `yes_votes` or `no_votes`. There is no token-weighting, quadratic voting, or reputation multiplier. |
+| **No quorum**             | A proposal can pass with a single yes-vote and zero no-votes. There is no minimum participation floor.                                    |
+| **Voting window**         | Voting is only permitted while `now < expires_at`. Attempting to vote at or after expiry panics.                                          |
+| **Status check**          | Voting is only permitted while `status == Active`. A finalized or expired proposal cannot receive votes.                                  |
 
 ### Vote storage
 
@@ -129,12 +130,12 @@ else                   → Rejected
 
 Key implications:
 
-| Scenario | Votes | Outcome |
-|---|---|---|
-| More yes than no | yes=3, no=1 | **Passed** |
-| Tie | yes=2, no=2 | **Rejected** |
+| Scenario          | Votes       | Outcome      |
+| ----------------- | ----------- | ------------ |
+| More yes than no  | yes=3, no=1 | **Passed**   |
+| Tie               | yes=2, no=2 | **Rejected** |
 | All no / no votes | yes=0, no=1 | **Rejected** |
-| Zero votes total | yes=0, no=0 | **Rejected** |
+| Zero votes total  | yes=0, no=0 | **Rejected** |
 
 > There is **no quorum**. A single yes-vote with zero no-votes is enough to
 > pass. The threshold is a simple majority of cast votes, not a majority of
@@ -218,7 +219,7 @@ pub fn execute_withdraw(env: Env, caller: Address, proposal_id: u64)
 4. **Check balance.** Calls `treasury.balance(proposal.token)`. Panics if
    the treasury's balance for the token is less than `proposal.amount`.
 5. **Withdraw.** Calls `treasury.withdraw(proposal.to, proposal.token,
-   proposal.amount)`, which transfers tokens from the treasury to the
+proposal.amount)`, which transfers tokens from the treasury to the
    proposal's designated recipient.
 6. **Mark executed.** Flips `proposal.status = Executed`.
 7. **Emit events.** Publishes both the treasury `WithdrawEvent` (via the
@@ -226,6 +227,7 @@ pub fn execute_withdraw(env: Env, caller: Address, proposal_id: u64)
    contract.
 
 **Guards:**
+
 - `status != Passed` → panic ("proposal not approved").
 - `status == Executed` → panic ("proposal already executed").
 - Caller is not a treasury member → panic ("caller is not a treasury member").
@@ -237,14 +239,14 @@ pub fn execute_withdraw(env: Env, caller: Address, proposal_id: u64)
 
 Every state-changing function publishes a Soroban event:
 
-| Function | Event Key | Payload |
-|---|---|---|
-| `create_proposal` | `proposal_created` | `ProposalCreatedEvent` |
-| `vote` | `vote_cast` | `VoteCastEvent` |
-| `finalize_proposal` | `proposal_finalized` | `ProposalFinalizedEvent` |
-| `finalize_expired_proposal` | `proposal_expired` | `ProposalExpiredEvent` |
-| `execute_proposal` | `executed` | `ProposalExecutedEvent` |
-| `execute_withdraw` | `execut` | `ProposalExecutedEvent` |
+| Function                    | Event Key            | Payload                  |
+| --------------------------- | -------------------- | ------------------------ |
+| `create_proposal`           | `proposal_created`   | `ProposalCreatedEvent`   |
+| `vote`                      | `vote_cast`          | `VoteCastEvent`          |
+| `finalize_proposal`         | `proposal_finalized` | `ProposalFinalizedEvent` |
+| `finalize_expired_proposal` | `proposal_expired`   | `ProposalExpiredEvent`   |
+| `execute_proposal`          | `executed`           | `ProposalExecutedEvent`  |
+| `execute_withdraw`          | `execut`             | `ProposalExecutedEvent`  |
 
 ---
 

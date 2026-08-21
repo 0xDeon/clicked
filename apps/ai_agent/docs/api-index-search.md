@@ -17,7 +17,7 @@ OpenAI (`text-embedding-3-small`) and stores it alongside the message metadata.
 ### Request
 
 | Field            | Type     | Required | Description                                   |
-|------------------|----------|----------|-----------------------------------------------|
+| ---------------- | -------- | -------- | --------------------------------------------- |
 | `messageId`      | `string` | Yes      | Unique identifier for the message             |
 | `conversationId` | `string` | Yes      | ID of the conversation the message belongs to |
 | `senderId`       | `string` | Yes      | ID of the message sender                      |
@@ -41,7 +41,7 @@ OpenAI (`text-embedding-3-small`) and stores it alongside the message metadata.
 The endpoint uses an **upsert** pattern based on the `messageId`:
 
 | Scenario                                   | Behavior                                                                |
-|--------------------------------------------|-------------------------------------------------------------------------|
+| ------------------------------------------ | ----------------------------------------------------------------------- |
 | `messageId` **does not exist** in Weaviate | **Insert** a new record with the provided metadata and embedding vector |
 | `messageId` **already exists** in Weaviate | **Replace** the existing record with new metadata and embedding vector  |
 
@@ -55,6 +55,7 @@ else:
 ```
 
 **Why this matters:**
+
 - Insert: Creates a new searchable entry for a new message
 - Replace: Updates the embedding and content for edited messages
 - Both actions keep the same messageId for consistent lookups
@@ -68,7 +69,7 @@ else:
 ### Status Codes
 
 | Status Code                 | Description                  | Response Example                                   |
-|-----------------------------|------------------------------|----------------------------------------------------|
+| --------------------------- | ---------------------------- | -------------------------------------------------- |
 | `200 OK`                    | Message indexed successfully | `{ "status": "ok" }`                               |
 | `503 Service Unavailable`   | Weaviate connection failed   | `{ "detail": "Weaviate connection failed" }`       |
 | `500 Internal Server Error` | OpenAI API key missing       | `{ "detail": "OPENAI_API_KEY is not configured" }` |
@@ -101,7 +102,7 @@ relevant messages based on the query text, filtered by conversation.
 ### Query Parameters
 
 | Parameter        | Type     | Required | Description                               |
-|------------------|----------|----------|-------------------------------------------|
+| ---------------- | -------- | -------- | ----------------------------------------- |
 | `q`              | `string` | Yes      | Search query text                         |
 | `conversationId` | `string` | Yes      | Filter results to a specific conversation |
 
@@ -171,11 +172,10 @@ Success Response
       "content": "You can send XLM by clicking the send button in the chat."
     }
   ]
-} 
+}
 ```
+
 # auiqe empeza otra vez sss-----------------------------------------
-
-
 
 # Index & Search API Documentation
 
@@ -196,12 +196,12 @@ The `/index/message` endpoint indexes a message into Weaviate for semantic searc
 
 ### 1.2 Request
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `messageId` | `string` | Yes | Unique identifier for the message |
-| `conversationId` | `string` | Yes | ID of the conversation the message belongs to |
-| `senderId` | `string` | Yes | ID of the message sender |
-| `content` | `string` | Yes | The message content to be indexed |
+| Field            | Type     | Required | Description                                   |
+| ---------------- | -------- | -------- | --------------------------------------------- |
+| `messageId`      | `string` | Yes      | Unique identifier for the message             |
+| `conversationId` | `string` | Yes      | ID of the conversation the message belongs to |
+| `senderId`       | `string` | Yes      | ID of the message sender                      |
+| `content`        | `string` | Yes      | The message content to be indexed             |
 
 ---
 
@@ -222,10 +222,10 @@ The `/index/message` endpoint indexes a message into Weaviate for semantic searc
 
 The endpoint uses an **upsert** pattern based on the `messageId`:
 
-| Scenario | Behavior |
-|----------|----------|
+| Scenario                                   | Behavior                                                                |
+| ------------------------------------------ | ----------------------------------------------------------------------- |
 | `messageId` **does not exist** in Weaviate | **Insert** a new record with the provided metadata and embedding vector |
-| `messageId` **already exists** in Weaviate | **Replace** the existing record with new metadata and embedding vector |
+| `messageId` **already exists** in Weaviate | **Replace** the existing record with new metadata and embedding vector  |
 
 **Decision Logic:**
 
@@ -246,11 +246,11 @@ The endpoint uses an **upsert** pattern based on the `messageId`:
 
 ### 1.5 Status Codes
 
-| Status Code | Description | Response Example |
-|-------------|-------------|------------------|
-| `200 OK` | Message indexed successfully | `{ "status": "ok" }` |
-| `503 Service Unavailable` | Weaviate connection failed | `{ "detail": "Weaviate connection failed" }` |
-| `500 Internal Server Error` | OpenAI API key missing | `{ "detail": "OPENAI_API_KEY is not configured" }` |
+| Status Code                 | Description                  | Response Example                                   |
+| --------------------------- | ---------------------------- | -------------------------------------------------- |
+| `200 OK`                    | Message indexed successfully | `{ "status": "ok" }`                               |
+| `503 Service Unavailable`   | Weaviate connection failed   | `{ "detail": "Weaviate connection failed" }`       |
+| `500 Internal Server Error` | OpenAI API key missing       | `{ "detail": "OPENAI_API_KEY is not configured" }` |
 
 **Error Response Example (503):**
 
@@ -280,10 +280,10 @@ The `/search` endpoint performs semantic search across indexed messages using ve
 
 ### 2.2 Query Parameters
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `q` | `string` | Yes | Search query text |
-| `conversationId` | `string` | Yes | Filter results to a specific conversation |
+| Parameter        | Type     | Required | Description                               |
+| ---------------- | -------- | -------- | ----------------------------------------- |
+| `q`              | `string` | Yes      | Search query text                         |
+| `conversationId` | `string` | Yes      | Filter results to a specific conversation |
 
 ---
 
@@ -330,11 +330,11 @@ If the `Message` collection does not exist in Weaviate, the endpoint returns an 
 
 ### 2.6 Status Codes
 
-| Status Code | Description | Response Example |
-|-------------|-------------|------------------|
-| `200 OK` | Search completed successfully | `{ "results": [...] }` |
-| `503 Service Unavailable` | Weaviate connection failed | `{ "detail": "Weaviate connection failed" }` |
-| `500 Internal Server Error` | OpenAI API key missing | `{ "detail": "OPENAI_API_KEY is not configured" }` |
+| Status Code                 | Description                   | Response Example                                   |
+| --------------------------- | ----------------------------- | -------------------------------------------------- |
+| `200 OK`                    | Search completed successfully | `{ "results": [...] }`                             |
+| `503 Service Unavailable`   | Weaviate connection failed    | `{ "detail": "Weaviate connection failed" }`       |
+| `500 Internal Server Error` | OpenAI API key missing        | `{ "detail": "OPENAI_API_KEY is not configured" }` |
 
 ---
 
@@ -396,4 +396,3 @@ This error occurs when the OpenAI API key is not configured.
 >   "detail": "OPENAI_API_KEY is not configured"
 > }
 > ```
-

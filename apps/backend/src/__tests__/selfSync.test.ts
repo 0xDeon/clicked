@@ -80,6 +80,12 @@ vi.mock('../lib/conversationCache.js', () => ({
 
 vi.mock('../lib/redis.js', () => ({ redis: null }));
 
+// Protocol negotiation has its own suite (e2eeProtocol.test.ts); stubbed here
+// so these tests stay about sibling-device envelope coverage.
+vi.mock('../services/e2eeProtocol.js', () => ({
+  checkEnvelopeProtocols: vi.fn().mockResolvedValue({ ok: true }),
+}));
+
 vi.mock('../services/pushNotification.js', () => ({
   dispatchOfflinePush: vi.fn().mockResolvedValue(undefined),
   FILE_CONTENT_TYPES: new Set<string>(),

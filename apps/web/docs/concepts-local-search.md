@@ -1,6 +1,6 @@
 # Client-Side Local Encrypted Search
 
-To support End-to-End Encryption (E2EE), the server only stores ciphertext. This imposes a strict security constraint: **the server cannot perform full-text search on message content**. 
+To support End-to-End Encryption (E2EE), the server only stores ciphertext. This imposes a strict security constraint: **the server cannot perform full-text search on message content**.
 
 To provide users with a fast, comprehensive search experience without compromising privacy, we implemented a 100% local, client-side search architecture powered by IndexedDB and Web Workers, using a BM25 ranking algorithm.
 
@@ -19,17 +19,19 @@ Keeping the index up-to-date with a stream of incoming E2EE messages involves a 
 To ensure the UI remains smooth (60fps) even when indexing thousands of messages or performing complex queries, work is split across the Main Thread and a Web Worker.
 
 ### Main Thread
+
 - **`hooks/useMessageSearchIndex.ts`**: Handles the decryption of incoming messages and initiates the indexing flow.
 - **`lib/search/db.ts`**: Manages the IndexedDB lifecycle for persisting decrypted messages locally.
 - **`hooks/useLocalSearch.ts`**: Manages the React state for search inputs, debounces user typing (e.g., 180ms), and coordinates query requests to the worker.
 
 ### Web Worker (`searchWorker.ts`)
+
 - **Inverted Index**: Maintains a `Map` of tokens to Set of document IDs.
 - **Tokenization**: Breaks plaintext down into searchable tokens.
 - **BM25 Scoring**: Performs the mathematical heavy lifting of ranking documents based on Term Frequency (TF), Document Frequency (DF), and average document length.
 - **Snippet Generation**: Extracts the surrounding context of the matched text to display in the UI.
 
-**Why the boundary?** 
+**Why the boundary?**
 String manipulation, tokenization, large Set intersections, and floating-point scoring loops are CPU-bound. If run on the main thread, they would block React renders and cause jank during typing.
 
 ## 3. The BM25 Inverted-Index Approach

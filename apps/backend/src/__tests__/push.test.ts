@@ -2,46 +2,36 @@
  * Tests for the file-message push path (services/push.ts, #176).
  *
  * This used to send one uncoalesced webpush.sendNotification directly, with
- * no rate limiting and no dead-subscription pruning. It now delegates to
- * pushNotification.ts's shared queueCoalescedPush so file-message pushes get
- * the same coalescing/rate-limit/hygiene behavior as text-message pushes —
- * this test verifies the delegation and the recipient-filtering logic that
- * stays local to this call site (mute, pushEnabled, online-skip).
+ * no rate limiting and no dead-subscription pruning, and it resolved
+ * recipients with its own bespoke query. It now does neither: recipient
+ * resolution goes through the shared `getEligiblePushRecipients` filter (the
+ * same one `dispatchOfflinePush` uses, so mute/pushEnabled/online rules cannot
+ * drift between the two paths), and delivery goes through the shared
+ * `queueCoalescedPush` so file messages get the same coalescing window,
+ * per-device rate limit and pruning hygiene as text messages.
+ *
+ * The filtering rules themselves are covered by pushFilter.test.ts; this file
+ * covers the wiring — that push.ts delegates to both, passes the right
+ * arguments, and never throws.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const mockMembersFindMany = vi.fn();
-const mockDevicesFindMany = vi.fn();
-
-vi.mock('../db/index.js', () => ({
-  db: {
-    query: {
-      conversationMembers: { findMany: mockMembersFindMany },
-      devices: { findMany: mockDevicesFindMany },
-    },
-  },
+const mockGetEligiblePushRecipients = vi.fn();
+vi.mock('../services/pushFilter.js', () => ({
+  getEligiblePushRecipients: mockGetEligiblePushRecipients,
 }));
-
-vi.mock('../db/schema.js', () => ({
-  conversationMembers: { conversationId: 'conversation_id', userId: 'user_id' },
-  devices: { userId: 'user_id', pushEnabled: 'push_enabled', revokedAt: 'revoked_at' },
-}));
-
-vi.mock('drizzle-orm', () => ({
-  and: vi.fn((...args: unknown[]) => args),
-  eq: vi.fn((col: unknown, val: unknown) => ({ col, val })),
-  isNull: vi.fn((col: unknown) => ({ col, isNull: true })),
-}));
-
-const mockIsOnline = vi.fn();
-vi.mock('../services/presence.js', () => ({ isOnline: mockIsOnline }));
 
 const mockQueueCoalescedPush = vi.fn();
 vi.mock('../services/pushNotification.js', () => ({
   queueCoalescedPush: mockQueueCoalescedPush,
 }));
 
-vi.mock('../lib/redis.js', () => ({ redis: { fake: true } }));
+const fakeRedis = { fake: true };
+vi.mock('../lib/redis.js', () => ({
+  get redis() {
+    return fakeRedis;
+  },
+}));
 
 const { sendPushForMessage } = await import('../services/push.js');
 
@@ -49,13 +39,12 @@ const CTX = { conversationId: 'conv-1', messageId: 'msg-1', senderId: 'sender-1'
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockIsOnline.mockResolvedValue(false);
+  mockGetEligiblePushRecipients.mockResolvedValue([]);
 });
 
 describe('sendPushForMessage (#176)', () => {
-  it('queues a coalesced push for each active, push-enabled device of an offline, unmuted member', async () => {
-    mockMembersFindMany.mockResolvedValue([{ userId: 'recipient-1', isMuted: false }]);
-    mockDevicesFindMany.mockResolvedValue([{ id: 'device-a' }, { id: 'device-b' }]);
+  it('queues a coalesced push for every eligible recipient device', async () => {
+    mockGetEligiblePushRecipients.mockResolvedValue(['device-a', 'device-b']);
 
     await sendPushForMessage(CTX);
 
@@ -64,47 +53,36 @@ describe('sendPushForMessage (#176)', () => {
     expect(mockQueueCoalescedPush).toHaveBeenCalledWith('device-b', 'conv-1', 'msg-1');
   });
 
-  it('skips the sender', async () => {
-    mockMembersFindMany.mockResolvedValue([{ userId: CTX.senderId, isMuted: false }]);
-
+  it('resolves recipients through the shared filter, not a bespoke query', async () => {
     await sendPushForMessage(CTX);
 
-    expect(mockDevicesFindMany).not.toHaveBeenCalled();
-    expect(mockQueueCoalescedPush).not.toHaveBeenCalled();
+    expect(mockGetEligiblePushRecipients).toHaveBeenCalledWith({
+      conversationId: CTX.conversationId,
+      senderId: CTX.senderId,
+      redis: fakeRedis,
+    });
   });
 
-  it('skips members who muted the conversation', async () => {
-    mockMembersFindMany.mockResolvedValue([{ userId: 'recipient-1', isMuted: true }]);
+  it('sends nothing when the filter returns no eligible devices', async () => {
+    mockGetEligiblePushRecipients.mockResolvedValue([]);
 
     await sendPushForMessage(CTX);
 
-    expect(mockQueueCoalescedPush).not.toHaveBeenCalled();
-  });
-
-  it('skips members who are currently online', async () => {
-    mockMembersFindMany.mockResolvedValue([{ userId: 'recipient-1', isMuted: false }]);
-    mockIsOnline.mockResolvedValue(true);
-
-    await sendPushForMessage(CTX);
-
-    expect(mockDevicesFindMany).not.toHaveBeenCalled();
-    expect(mockQueueCoalescedPush).not.toHaveBeenCalled();
-  });
-
-  it('only resolves active, push-enabled devices (query scoped correctly)', async () => {
-    mockMembersFindMany.mockResolvedValue([{ userId: 'recipient-1', isMuted: false }]);
-    mockDevicesFindMany.mockResolvedValue([]);
-
-    await sendPushForMessage(CTX);
-
-    expect(mockDevicesFindMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.anything() }),
-    );
     expect(mockQueueCoalescedPush).not.toHaveBeenCalled();
   });
 
   it('never throws — push is best-effort', async () => {
-    mockMembersFindMany.mockRejectedValue(new Error('db down'));
+    mockGetEligiblePushRecipients.mockRejectedValue(new Error('db down'));
+
+    await expect(sendPushForMessage(CTX)).resolves.toBeUndefined();
+    expect(mockQueueCoalescedPush).not.toHaveBeenCalled();
+  });
+
+  it('does not let one failing queue call abort the rest', async () => {
+    mockGetEligiblePushRecipients.mockResolvedValue(['device-a', 'device-b']);
+    mockQueueCoalescedPush.mockImplementationOnce(() => {
+      throw new Error('queue exploded');
+    });
 
     await expect(sendPushForMessage(CTX)).resolves.toBeUndefined();
   });

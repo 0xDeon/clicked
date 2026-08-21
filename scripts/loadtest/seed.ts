@@ -10,7 +10,12 @@
  */
 import { randomBytes } from 'node:crypto';
 import { db } from '../../apps/backend/src/db/index.js';
-import { users, devices, conversations, conversationMembers } from '../../apps/backend/src/db/schema.js';
+import {
+  users,
+  devices,
+  conversations,
+  conversationMembers,
+} from '../../apps/backend/src/db/schema.js';
 import { signToken } from '../../apps/backend/src/lib/jwt.js';
 
 interface Fixture {

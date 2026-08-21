@@ -23,6 +23,7 @@ const mockFileFindFirst = vi.fn();
 const mockInsert = vi.fn();
 const mockUpdate = vi.fn();
 const mockVerifyFileIntegrity = vi.fn();
+const mockHeadObject = vi.fn();
 
 vi.mock('../db/index.js', () => ({
   db: {
@@ -63,6 +64,12 @@ vi.mock('../services/mlsGroups.js', () => ({
 
 vi.mock('../lib/fileIntegrity.js', () => ({
   verifyFileIntegrity: mockVerifyFileIntegrity,
+}));
+
+// Confirm verifies the object is actually present at the expected size before
+// flipping status to 'ready' (#356), so the store is stubbed rather than hit.
+vi.mock('../lib/objectStore.js', () => ({
+  getObjectStore: () => ({ headObject: mockHeadObject }),
 }));
 
 vi.mock('../middleware/auth.js', () => ({
@@ -114,6 +121,7 @@ function mockSuccessfulIntegrityCheck() {
     expectedHash: 'abc123',
     computedHash: 'abc123',
   });
+  mockHeadObject.mockResolvedValue({ exists: true, size: 1024 });
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -190,7 +198,7 @@ describe('POST /uploads — issue #226', () => {
 
     await request(app).post('/uploads').send(VALID_BODY);
 
-    const insertedValues = valuesSpy.mock.calls[0][0] as Record<string, unknown>;
+    const insertedValues = valuesSpy.mock.calls[0]![0] as Record<string, unknown>;
     expect(insertedValues.status).toBe('pending');
   });
 
@@ -227,7 +235,9 @@ describe('POST /uploads/:fileId/confirm', () => {
       id: 'file-001',
       uploaderId: 'user-abc',
       status: 'pending',
+      size: 1024,
       sha256: 'abc123',
+      storageKey: 'uploads/conv-123/abc123def456',
     });
     mockHeadObject.mockResolvedValueOnce({ exists: true, size: 1024 });
     mockUpdate.mockReturnValueOnce({
@@ -252,7 +262,9 @@ describe('POST /uploads/:fileId/confirm', () => {
       id: 'file-001',
       uploaderId: 'someone-else',
       status: 'pending',
+      size: 1024,
       sha256: 'abc123',
+      storageKey: 'uploads/conv-123/abc123def456',
     });
     const res = await request(app).post('/uploads/file-001/confirm').send({ sha256: 'abc123' });
     expect(res.status).toBe(403);
@@ -263,7 +275,9 @@ describe('POST /uploads/:fileId/confirm', () => {
       id: 'file-001',
       uploaderId: 'user-abc',
       status: 'ready',
+      size: 1024,
       sha256: 'abc123',
+      storageKey: 'uploads/conv-123/abc123def456',
     });
     const res = await request(app).post('/uploads/file-001/confirm').send({ sha256: 'abc123' });
     expect(res.status).toBe(409);
@@ -274,7 +288,9 @@ describe('POST /uploads/:fileId/confirm', () => {
       id: 'file-001',
       uploaderId: 'user-abc',
       status: 'deleted',
+      size: 1024,
       sha256: 'abc123',
+      storageKey: 'uploads/conv-123/abc123def456',
     });
     const res = await request(app).post('/uploads/file-001/confirm').send({ sha256: 'abc123' });
     expect(res.status).toBe(409);
@@ -285,7 +301,9 @@ describe('POST /uploads/:fileId/confirm', () => {
       id: 'file-001',
       uploaderId: 'user-abc',
       status: 'pending',
+      size: 1024,
       sha256: 'abc123',
+      storageKey: 'uploads/conv-123/abc123def456',
     });
 
     const res = await request(app).post('/uploads/file-001/confirm').send({});
@@ -298,7 +316,9 @@ describe('POST /uploads/:fileId/confirm', () => {
       id: 'file-001',
       uploaderId: 'user-abc',
       status: 'pending',
+      size: 1024,
       sha256: 'abc123',
+      storageKey: 'uploads/conv-123/abc123def456',
     });
 
     const res = await request(app).post('/uploads/file-001/confirm').send({ sha256: 'mismatch' });
@@ -314,6 +334,7 @@ describe('POST /uploads/:fileId/confirm', () => {
       id: 'file-001',
       uploaderId: 'user-abc',
       status: 'pending',
+      size: 1024,
       sha256: 'abc123',
       storageKey: 'uploads/conv-123/abc123def456',
     });
@@ -360,7 +381,7 @@ describe('Thumbnail handling — issue #230', () => {
       .post('/uploads')
       .send({ ...VALID_BODY, mimeType: 'image/jpeg', isThumbnail: true });
     expect(res.status).toBe(201);
-    const inserted = valuesSpy.mock.calls[0][0] as Record<string, unknown>;
+    const inserted = valuesSpy.mock.calls[0]![0] as Record<string, unknown>;
     expect(inserted.isThumbnail).toBe(true);
   });
 
@@ -373,7 +394,7 @@ describe('Thumbnail handling — issue #230', () => {
     });
 
     await request(app).post('/uploads').send(VALID_BODY);
-    const inserted = valuesSpy.mock.calls[0][0] as Record<string, unknown>;
+    const inserted = valuesSpy.mock.calls[0]![0] as Record<string, unknown>;
     expect(inserted.isThumbnail).toBe(false);
   });
 

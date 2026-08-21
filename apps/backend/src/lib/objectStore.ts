@@ -23,6 +23,8 @@ export interface ObjectStoreLike {
   // nothing in this codebase consumes `getObject()` polymorphically today.
   getObject(key: string): Promise<unknown>;
   deleteObject(key: string): Promise<void>;
+  /** Existence + size check used by upload-confirm verification (#356). */
+  headObject(key: string): Promise<{ exists: boolean; size?: number }>;
   getPresignedPutUrl(
     key: string,
     contentType: string | undefined,

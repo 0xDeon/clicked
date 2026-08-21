@@ -15,12 +15,12 @@
  * docs/signal-integration.md (created in this commit).
  */
 
-import type { DeviceRecord, MessageEnvelope } from './crypto.js';
+import type { DeviceRecord, MessageEnvelope } from './crypto';
 import {
   assertDevicesTrusted,
   buildEnvelopes as phase1BuildEnvelopes,
   sealedBoxEncrypt,
-} from './crypto.js';
+} from './crypto';
 
 // ─── Interface ────────────────────────────────────────────────────────────────
 

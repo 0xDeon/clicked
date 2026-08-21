@@ -62,16 +62,16 @@ Authorization: Bearer <jwt-from-auth-verify>
 }
 ```
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `conversationId` | UUID | Yes | The conversation to post into |
-| `messageId` | UUID | Yes | Client-generated; used for idempotency |
-| `contentType` | string | No | Defaults to `"text"`. Trimmed and lowercased. |
-| `ciphertext` | string | No | The encrypted message body |
-| `envelopes` | array | No | Per-recipient-device encrypted payloads |
-| `envelopes[].recipientDeviceId` | UUID | Yes (within envelope) | Must be a valid `devices.id` row |
-| `envelopes[].ciphertext` | string | Yes (within envelope) | Must be at least 1 character |
-| `fileId` | UUID | No | Required when `contentType` is `file`, `image`, `video`, or `audio` |
+| Field                           | Type   | Required              | Notes                                                               |
+| ------------------------------- | ------ | --------------------- | ------------------------------------------------------------------- |
+| `conversationId`                | UUID   | Yes                   | The conversation to post into                                       |
+| `messageId`                     | UUID   | Yes                   | Client-generated; used for idempotency                              |
+| `contentType`                   | string | No                    | Defaults to `"text"`. Trimmed and lowercased.                       |
+| `ciphertext`                    | string | No                    | The encrypted message body                                          |
+| `envelopes`                     | array  | No                    | Per-recipient-device encrypted payloads                             |
+| `envelopes[].recipientDeviceId` | UUID   | Yes (within envelope) | Must be a valid `devices.id` row                                    |
+| `envelopes[].ciphertext`        | string | Yes (within envelope) | Must be at least 1 character                                        |
+| `fileId`                        | UUID   | No                    | Required when `contentType` is `file`, `image`, `video`, or `audio` |
 
 ### Content-type validation
 
@@ -115,12 +115,12 @@ existing record without inserting duplicates:
 
 ### Error responses
 
-| Status | Body | Condition |
-|---|---|---|
-| 400 | `{"error":"…"}` | Zod validation failure (missing required field, bad UUID format) |
-| 400/422 | `{"error":"…"}` | Content-type rule violation (e.g. file type without `fileId`) |
-| 403 | `{"error":"Not a member of this conversation"}` | Authenticated user is not in the conversation |
-| 500 | `{"error":"Failed to persist message"}` | Database transaction failure |
+| Status  | Body                                            | Condition                                                        |
+| ------- | ----------------------------------------------- | ---------------------------------------------------------------- |
+| 400     | `{"error":"…"}`                                 | Zod validation failure (missing required field, bad UUID format) |
+| 400/422 | `{"error":"…"}`                                 | Content-type rule violation (e.g. file type without `fileId`)    |
+| 403     | `{"error":"Not a member of this conversation"}` | Authenticated user is not in the conversation                    |
+| 500     | `{"error":"Failed to persist message"}`         | Database transaction failure                                     |
 
 ### Side effects
 
@@ -150,9 +150,9 @@ Authorization: Bearer <jwt-from-auth-verify>
 
 ### Path parameter
 
-| Parameter | Type | Required | Notes |
-|---|---|---|---|
-| `:id` | UUID | Yes | The `messageId` to delete |
+| Parameter | Type | Required | Notes                     |
+| --------- | ---- | -------- | ------------------------- |
+| `:id`     | UUID | Yes      | The `messageId` to delete |
 
 ### Success response
 
@@ -164,11 +164,11 @@ Body is empty.
 
 ### Error responses
 
-| Status | Body | Condition |
-|---|---|---|
-| 400 | `{"error":"Message id is required"}` | Missing path parameter |
-| 403 | `{"error":"You can only delete your own messages"}` | Authenticated user is not the sender |
-| 404 | `{"error":"Message not found"}` | No message with that id exists |
+| Status | Body                                                | Condition                            |
+| ------ | --------------------------------------------------- | ------------------------------------ |
+| 400    | `{"error":"Message id is required"}`                | Missing path parameter               |
+| 403    | `{"error":"You can only delete your own messages"}` | Authenticated user is not the sender |
+| 404    | `{"error":"Message not found"}`                     | No message with that id exists       |
 
 ### Side effects
 
@@ -205,11 +205,11 @@ Authorization: Bearer <jwt-from-auth-verify>
 
 ### Query parameters
 
-| Parameter | Type | Required | Default | Notes |
-|---|---|---|---|---|
-| `deviceId` | UUID | **Yes** | — | The E2E device id (from JWT or `/devices`) |
-| `cursor` | string | No | — | Opaque cursor from a previous response's `nextCursor`; omit to start from the beginning of the retention window |
-| `limit` | integer | No | `50` | Page size; capped at `SYNC_PAGE_SIZE` (configurable via env, default 50) |
+| Parameter  | Type    | Required | Default | Notes                                                                                                           |
+| ---------- | ------- | -------- | ------- | --------------------------------------------------------------------------------------------------------------- |
+| `deviceId` | UUID    | **Yes**  | —       | The E2E device id (from JWT or `/devices`)                                                                      |
+| `cursor`   | string  | No       | —       | Opaque cursor from a previous response's `nextCursor`; omit to start from the beginning of the retention window |
+| `limit`    | integer | No       | `50`    | Page size; capped at `SYNC_PAGE_SIZE` (configurable via env, default 50)                                        |
 
 ### Request example
 
@@ -235,12 +235,13 @@ For example:
 
 **Why this format?** The cursor uses the envelope's own creation timestamp and
 id (not the message's per-conversation sequence number), because offline-catchup
-sync needs to order envelopes across *different* conversations for a single
+sync needs to order envelopes across _different_ conversations for a single
 device. The envelope's `(createdAt, id)` pair is comparable across every
 conversation the device has envelopes in. The `id` serves as a tie-breaker for
 envelopes created in the same millisecond.
 
 Clients must:
+
 - Store the `nextCursor` value from the most recent successful response
 - Send it as the `cursor` parameter on the next sync request
 - Treat the cursor as an opaque token — do not parse or interpret its
@@ -269,21 +270,21 @@ Clients must:
 }
 ```
 
-| Field | Type | Notes |
-|---|---|---|
-| `envelopes` | array | Ordered by `(createdAt ASC, id ASC)` across all conversations |
-| `envelopes[].id` | UUID | The `messageEnvelopes.id` — this is what the cursor encodes |
-| `envelopes[].messageId` | UUID | The parent message |
-| `envelopes[].conversationId` | UUID | Which conversation this belongs to |
-| `envelopes[].senderId` | UUID | The user who sent the message |
-| `envelopes[].senderDeviceId` | UUID \| null | The sending device |
-| `envelopes[].contentType` | string | Message content type |
-| `envelopes[].ciphertext` | string | Encrypted payload for this specific recipient device |
-| `envelopes[].deliveredAt` | ISO 8601 \| null | When this envelope was first delivered via `/sync` |
-| `envelopes[].createdAt` | ISO 8601 | Envelope creation time (drives ordering) |
-| `envelopes[].messageCreatedAt` | ISO 8601 | When the parent message was sent |
-| `nextCursor` | string \| null | Cursor for the next page; `null` when no more pages or same as input when page is empty |
-| `hasMore` | boolean | `true` if more pages exist beyond the current one |
+| Field                          | Type             | Notes                                                                                   |
+| ------------------------------ | ---------------- | --------------------------------------------------------------------------------------- |
+| `envelopes`                    | array            | Ordered by `(createdAt ASC, id ASC)` across all conversations                           |
+| `envelopes[].id`               | UUID             | The `messageEnvelopes.id` — this is what the cursor encodes                             |
+| `envelopes[].messageId`        | UUID             | The parent message                                                                      |
+| `envelopes[].conversationId`   | UUID             | Which conversation this belongs to                                                      |
+| `envelopes[].senderId`         | UUID             | The user who sent the message                                                           |
+| `envelopes[].senderDeviceId`   | UUID \| null     | The sending device                                                                      |
+| `envelopes[].contentType`      | string           | Message content type                                                                    |
+| `envelopes[].ciphertext`       | string           | Encrypted payload for this specific recipient device                                    |
+| `envelopes[].deliveredAt`      | ISO 8601 \| null | When this envelope was first delivered via `/sync`                                      |
+| `envelopes[].createdAt`        | ISO 8601         | Envelope creation time (drives ordering)                                                |
+| `envelopes[].messageCreatedAt` | ISO 8601         | When the parent message was sent                                                        |
+| `nextCursor`                   | string \| null   | Cursor for the next page; `null` when no more pages or same as input when page is empty |
+| `hasMore`                      | boolean          | `true` if more pages exist beyond the current one                                       |
 
 ### How a client should persist/resume the cursor
 
@@ -329,25 +330,25 @@ while (hasMore) {
 returns all undelivered envelopes still within the TTL retention window.
 
 **On subsequent reconnects**: send the last persisted `nextCursor`. The server
-returns only envelopes created *after* that cursor. Because the pagination uses
+returns only envelopes created _after_ that cursor. Because the pagination uses
 an exclusive lower bound (`>` not `>=`), re-issuing the same cursor never
 re-delivers an envelope the client already processed.
 
 ### Error responses
 
-| Status | Body | Condition |
-|---|---|---|
-| 400 | `{"error":"deviceId is required"}` | Missing required `deviceId` query parameter |
-| 400 | `{"error":"Invalid cursor"}` | Malformed cursor string |
-| 403 | `{"error":"Device not found or not owned by this user"}` | Device does not exist or belongs to a different user |
+| Status | Body                                                     | Condition                                            |
+| ------ | -------------------------------------------------------- | ---------------------------------------------------- |
+| 400    | `{"error":"deviceId is required"}`                       | Missing required `deviceId` query parameter          |
+| 400    | `{"error":"Invalid cursor"}`                             | Malformed cursor string                              |
+| 403    | `{"error":"Device not found or not owned by this user"}` | Device does not exist or belongs to a different user |
 
 ### Retention window / TTL for undelivered envelopes
 
 The server retains undelivered envelopes for a configurable duration controlled
 by the environment variable `ENVELOPE_TTL_SECONDS`:
 
-| Env variable | Default | Description |
-|---|---|---|
+| Env variable           | Default           | Description                                                             |
+| ---------------------- | ----------------- | ----------------------------------------------------------------------- |
 | `ENVELOPE_TTL_SECONDS` | `604800` (7 days) | Maximum age of undelivered envelopes before they are excluded from sync |
 
 #### What happens when a device is offline longer than the TTL window
@@ -377,10 +378,10 @@ practice the cursor has already advanced.
 
 ### Configuration summary
 
-| Env variable | Default | Description |
-|---|---|---|
+| Env variable           | Default  | Description                                          |
+| ---------------------- | -------- | ---------------------------------------------------- |
 | `ENVELOPE_TTL_SECONDS` | `604800` | Retention window for undelivered envelopes (seconds) |
-| `SYNC_PAGE_SIZE` | `50` | Maximum number of envelopes per page |
+| `SYNC_PAGE_SIZE`       | `50`     | Maximum number of envelopes per page                 |
 
 ---
 

@@ -1,6 +1,6 @@
 /**
  * Tests for identity key persistence fix.
- * 
+ *
  * Verifies that:
  * - Identity private key is persisted via IndexedDB structured clone
  * - Same key is retrieved across page reloads (simulated)
@@ -47,7 +47,7 @@ describe('Identity Key Persistence (Fixed)', () => {
     // First "session": generate and store
     const publicKey1 = await cryptoStore.initializeIdentityKey();
     const privateKey1 = await cryptoStore.getIdentityPrivateKey();
-    
+
     expect(privateKey1).toBeDefined();
 
     // Export private key bits for comparison (simulate what we'd use for ECDH)
@@ -100,7 +100,7 @@ describe('Identity Key Persistence (Fixed)', () => {
     const privateKey = await cryptoStore.getIdentityPrivateKey();
 
     expect(privateKey).toBeDefined();
-    
+
     // Verify the key has correct algorithm
     expect(privateKey!.algorithm.name).toBe('ECDH');
     expect((privateKey!.algorithm as EcKeyAlgorithm).namedCurve).toBe('P-256');

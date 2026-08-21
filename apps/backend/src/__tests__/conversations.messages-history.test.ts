@@ -20,7 +20,13 @@ let fixtureMessages: Array<Record<string, unknown>> = [];
 const mockFindMember = vi.fn();
 
 vi.mock('../lib/socket.js', () => ({ getSocketServer: () => undefined }));
-vi.mock('../lib/redis.js', () => ({ get redis() { return null; }, CONV_CACHE_TTL: 30, convCacheKey: () => '' }));
+vi.mock('../lib/redis.js', () => ({
+  get redis() {
+    return null;
+  },
+  CONV_CACHE_TTL: 30,
+  convCacheKey: () => '',
+}));
 vi.mock('../lib/conversationCache.js', () => ({ invalidateConversationCaches: vi.fn() }));
 vi.mock('../lib/messages.js', () => ({ serializeMessage: (m: unknown) => m }));
 
@@ -88,17 +94,19 @@ vi.mock('../db/index.js', () => ({
         findFirst: vi.fn(async ({ where }: { where: Cond }) =>
           fixtureMessages.find((row) => evalCond(row, where)),
         ),
-        findMany: vi.fn(async ({ where, orderBy, limit }: { where: Cond; orderBy: unknown; limit: number }) => {
-          let rows = fixtureMessages.filter((row) => evalCond(row, where));
-          // orderBy is always [desc(createdAt), desc(id)] in this route.
-          rows = [...rows].sort((a, b) => {
-            const byCreatedAt = String(b['createdAt']).localeCompare(String(a['createdAt']));
-            if (byCreatedAt !== 0) return byCreatedAt;
-            return String(b['id']).localeCompare(String(a['id']));
-          });
-          void orderBy;
-          return rows.slice(0, limit);
-        }),
+        findMany: vi.fn(
+          async ({ where, orderBy, limit }: { where: Cond; orderBy: unknown; limit: number }) => {
+            let rows = fixtureMessages.filter((row) => evalCond(row, where));
+            // orderBy is always [desc(createdAt), desc(id)] in this route.
+            rows = [...rows].sort((a, b) => {
+              const byCreatedAt = String(b['createdAt']).localeCompare(String(a['createdAt']));
+              if (byCreatedAt !== 0) return byCreatedAt;
+              return String(b['id']).localeCompare(String(a['id']));
+            });
+            void orderBy;
+            return rows.slice(0, limit);
+          },
+        ),
       },
     },
     select: (projection: { id: string }) => ({
@@ -112,6 +120,33 @@ vi.mock('../db/index.js', () => ({
       }),
     }),
   },
+}));
+
+// Non-MLS conversation: the epoch-window lookup finds no group, so rows stay
+// visible and the MLS placeholder path is not exercised here.
+vi.mock('../services/mlsGroups.js', () => ({
+  getConversationEpochWindow: vi.fn().mockResolvedValue({ hasGroup: false, window: null }),
+}));
+
+vi.mock('../services/groupControl.js', () => ({
+  appendGroupControlEvent: vi.fn(),
+  broadcastGroupControlEvent: vi.fn(),
+  getGroupState: vi.fn(),
+  readGroupControlEvents: vi.fn(),
+  serializeGroupControlEvent: (e: unknown) => e,
+  DEFAULT_GROUP_CONTROL_PAGE_SIZE: 100,
+  MAX_GROUP_CONTROL_PAGE_SIZE: 500,
+  MAX_GROUP_CONTROL_PAYLOAD_BYTES: 65536,
+}));
+
+vi.mock('../services/rateLimit.js', () => ({
+  checkFirstContactLimit: vi.fn().mockResolvedValue({ allowed: true, count: 0 }),
+  checkGroupInviteLimit: vi.fn().mockResolvedValue({ allowed: true, count: 0 }),
+}));
+
+vi.mock('../services/auditLog.js', () => ({
+  actorFromRequest: vi.fn(() => ({})),
+  recordAuditEvent: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../middleware/auth.js', () => ({
@@ -219,7 +254,11 @@ describe('GET /conversations/:id/messages — edit-chain resolution (#340)', () 
 
   it('leaves tombstoned (deleted) messages visible exactly as before, independent of edit resolution', async () => {
     fixtureMessages = [
-      msg({ id: 'm1', createdAt: '2026-01-01T00:00:00.000Z', deletedAt: '2026-01-02T00:00:00.000Z' }),
+      msg({
+        id: 'm1',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        deletedAt: '2026-01-02T00:00:00.000Z',
+      }),
     ];
 
     const res = await request(makeApp()).get('/conversations/conv-1/messages');

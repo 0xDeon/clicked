@@ -18,7 +18,7 @@
 import { rpc } from '@stellar/stellar-sdk';
 import { db } from '../db/index.js';
 import { tokenTransfers, messages, conversations, users, treasuryProposals } from '../db/schema.js';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { getSocketServer } from '../lib/socket.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
@@ -180,13 +180,18 @@ async function defaultPersistTreasuryEvent(event: TreasuryProposalEvent): Promis
       rejectionsCount: event.rejectionsCount !== undefined ? event.rejectionsCount : undefined,
       updatedAt: sql`now()`,
     })
-    .where(eq(treasuryProposals.onChainId, Number(event.proposalId)))
+    .where(
+      and(
+        eq(treasuryProposals.contractId, event.contractId),
+        eq(treasuryProposals.proposalId, event.proposalId),
+      ),
+    )
     .returning();
 
   if (!row) return;
 
   const payload = {
-    proposalId: row.onChainId,
+    proposalId: row.proposalId,
     status: row.status,
     approvalsCount: row.approvalsCount,
     rejectionsCount: row.rejectionsCount,
@@ -194,7 +199,9 @@ async function defaultPersistTreasuryEvent(event: TreasuryProposalEvent): Promis
 
   // Emit to the linked conversation room if known.
   const room = row.conversationId;
-  getSocketServer()?.to(room).emit('treasury_proposal_updated', payload);
+  if (room) {
+    getSocketServer()?.to(room).emit('treasury_proposal_updated', payload);
+  }
 }
 
 /**

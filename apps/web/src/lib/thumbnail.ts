@@ -28,7 +28,7 @@ import {
   requestPresignedUpload,
   downloadAndDecryptFile,
   type FileMessagePayload,
-} from './fileEncryption.js';
+} from './fileEncryption';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 

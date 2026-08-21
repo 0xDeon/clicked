@@ -50,7 +50,9 @@ describe('sealed-box crypto', () => {
       true,
       ['deriveKey'],
     )) as CryptoKeyPair;
-    const recipientPublicKey = new Uint8Array(await crypto.subtle.exportKey('raw', recipient.publicKey));
+    const recipientPublicKey = new Uint8Array(
+      await crypto.subtle.exportKey('raw', recipient.publicKey),
+    );
 
     const ciphertext = await sealedBoxEncrypt('hello from clicked', bytesToB64(recipientPublicKey));
     const plaintext = await decryptSealedBox(ciphertext, recipient.privateKey);
@@ -71,6 +73,9 @@ describe('sealed-box crypto', () => {
         return {
           device: {
             id: `device-${index + 1}`,
+            // Identity pinning is keyed by userId, so a DeviceRecord always
+            // carries the owning user.
+            userId: `user-${index + 1}`,
             identityPublicKey: bytesToB64(publicKey),
           } satisfies DeviceRecord,
           privateKey: keyPair.privateKey,
@@ -86,7 +91,9 @@ describe('sealed-box crypto', () => {
     expect(envelopes).toHaveLength(2);
     await Promise.all(
       envelopes.map(async (envelope) => {
-        const recipient = recipients.find((candidate) => candidate.device.id === envelope.recipientDeviceId);
+        const recipient = recipients.find(
+          (candidate) => candidate.device.id === envelope.recipientDeviceId,
+        );
         expect(recipient).toBeDefined();
         await expect(decryptSealedBox(envelope.ciphertext, recipient!.privateKey)).resolves.toBe(
           'per-device payload',

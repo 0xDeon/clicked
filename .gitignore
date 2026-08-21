@@ -18,7 +18,9 @@ apps/backend/.local-storage/
 # Agent-tool isolated worktrees — internal tooling state, not project source.
 .claude/worktrees/
 
-# TypeScript build artifacts
+# TypeScript build artifacts. `apps/backend/tsconfig.json` emits to dist/
+# (already ignored above); these patterns remain only to keep a tree that
+# predates that fix from re-staging stale emitted files.
 apps/backend/src/**/*.js
 apps/backend/src/**/*.js.map
 apps/backend/src/**/*.d.ts

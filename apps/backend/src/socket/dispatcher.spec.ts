@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import RedisMock from 'ioredis-mock';
 import type { Redis } from 'ioredis';
 import type { Server as SocketIOServer } from 'socket.io';
@@ -28,21 +28,26 @@ describe('EventDispatcher with Replay Protection', () => {
       auth: {
         userId: 'test-user',
         deviceId: 'test-device',
+        walletAddress: 'GTEST',
       },
       emit: vi.fn(),
-      on: vi.fn((event, handler) => {
+      on: vi.fn((event: string, handler: unknown) => {
         if (event === 'dispatch') {
           // Store the dispatch listener for manual invocation in tests
-          (mockSocket as any).dispatchHandler = handler;
+          (mockSocket as Record<string, unknown>)['dispatchHandler'] = handler;
         }
-      }),
+        return mockSocket as AuthSocket;
+      }) as unknown as AuthSocket['on'],
       rooms: new Set(['test-room']),
     };
 
     dispatcher = new EventDispatcher(mockIo as SocketIOServer, mockSocket as AuthSocket, redis);
 
     // Register a test event handler
-    dispatcher.register('test_event', handlerSpy);
+    dispatcher.register(
+      'join_room',
+      handlerSpy as unknown as (p: Record<string, unknown>) => Promise<void>,
+    );
     dispatcher.listen();
   });
 
@@ -58,8 +63,8 @@ describe('EventDispatcher with Replay Protection', () => {
       const eventId1 = 'event-1';
       const eventId2 = 'event-2';
 
-      const envelope1 = createEnvelope('test_event', { message: 'first' }, eventId1);
-      const envelope2 = createEnvelope('test_event', { message: 'second' }, eventId2);
+      const envelope1 = createEnvelope('join_room', { message: 'first' }, eventId1);
+      const envelope2 = createEnvelope('join_room', { message: 'second' }, eventId2);
 
       // Manually invoke dispatch handler
       await (mockSocket as any).dispatchHandler(envelope1);
@@ -72,13 +77,15 @@ describe('EventDispatcher with Replay Protection', () => {
     it('should drop duplicate event (same eventId, same device) and not persist it twice', async () => {
       const eventId = 'event-123';
 
-      const envelope = createEnvelope('test_event', { message: 'duplicate' }, eventId);
+      const envelope = createEnvelope('join_room', { message: 'duplicate' }, eventId);
 
       // First invocation
       await (mockSocket as any).dispatchHandler(envelope);
 
-      // Reset spy to check second call
+      // Reset spies so the assertions below see only the replay's effects,
+      // not the first (legitimate) invocation's ack.
       handlerSpy.mockClear();
+      (mockSocket.emit as any).mockClear();
 
       // Second invocation (replay)
       await (mockSocket as any).dispatchHandler(envelope);
@@ -95,7 +102,7 @@ describe('EventDispatcher with Replay Protection', () => {
 
     it('should allow same eventId from different device', async () => {
       const eventId = 'event-123';
-      const envelope = createEnvelope('test_event', { message: 'test' }, eventId);
+      const envelope = createEnvelope('join_room', { message: 'test' }, eventId);
 
       // First device
       await (mockSocket as any).dispatchHandler(envelope);
@@ -107,6 +114,7 @@ describe('EventDispatcher with Replay Protection', () => {
       mockSocket.auth = {
         userId: 'test-user',
         deviceId: 'different-device',
+        walletAddress: 'GTEST',
       };
 
       // Recreate dispatcher with same Redis but different socket
@@ -114,19 +122,25 @@ describe('EventDispatcher with Replay Protection', () => {
         auth: {
           userId: 'test-user',
           deviceId: 'different-device',
+          walletAddress: 'GTEST',
         },
         emit: vi.fn(),
-        on: vi.fn((event, handler) => {
+        on: vi.fn((event: string, handler: unknown) => {
           if (event === 'dispatch') {
-            (mockSocket2 as any).dispatchHandler = handler;
+            (mockSocket2 as Record<string, unknown>)['dispatchHandler'] = handler;
           }
-        }),
+          return mockSocket2 as AuthSocket;
+        }) as unknown as AuthSocket['on'],
         rooms: new Set(['test-room']),
       };
 
-      const dispatcher2 = new EventDispatcher(mockIo as SocketIOServer, mockSocket2 as AuthSocket, redis);
+      const dispatcher2 = new EventDispatcher(
+        mockIo as SocketIOServer,
+        mockSocket2 as AuthSocket,
+        redis,
+      );
       const handler2Spy = vi.fn();
-      dispatcher2.register('test_event', handler2Spy);
+      dispatcher2.register('join_room', handler2Spy);
       dispatcher2.listen();
 
       // Same eventId from different device should be allowed
@@ -138,7 +152,7 @@ describe('EventDispatcher with Replay Protection', () => {
       process.env['REPLAY_PROTECTION_TTL_SECONDS'] = '1';
 
       const eventId = 'event-123';
-      const envelope = createEnvelope('test_event', { message: 'test' }, eventId);
+      const envelope = createEnvelope('join_room', { message: 'test' }, eventId);
 
       // First occurrence
       await (mockSocket as any).dispatchHandler(envelope);
@@ -164,7 +178,7 @@ describe('EventDispatcher with Replay Protection', () => {
       // eventId is required by schema, so this should fail validation before replay check
       const invalidEnvelope = {
         // Missing eventId
-        type: 'test_event',
+        type: 'join_room',
         timestamp: Date.now(),
         payload: {},
       };
@@ -184,7 +198,7 @@ describe('EventDispatcher with Replay Protection', () => {
       const consoleDebugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
 
       const eventId = 'event-123';
-      const envelope = createEnvelope('test_event', { message: 'test' }, eventId);
+      const envelope = createEnvelope('join_room', { message: 'test' }, eventId);
 
       // First occurrence
       await (mockSocket as any).dispatchHandler(envelope);
@@ -206,7 +220,7 @@ describe('EventDispatcher with Replay Protection', () => {
 
     it('should emit dispatch_ack with duplicate flag for replays', async () => {
       const eventId = 'event-123';
-      const envelope = createEnvelope('test_event', { message: 'test' }, eventId);
+      const envelope = createEnvelope('join_room', { message: 'test' }, eventId);
 
       // First occurrence
       await (mockSocket as any).dispatchHandler(envelope);
@@ -229,7 +243,7 @@ describe('EventDispatcher with Replay Protection', () => {
 
     it('should emit dispatch_ack with duplicate: false for first occurrence', async () => {
       const eventId = 'event-123';
-      const envelope = createEnvelope('test_event', { message: 'test' }, eventId);
+      const envelope = createEnvelope('join_room', { message: 'test' }, eventId);
 
       await (mockSocket as any).dispatchHandler(envelope);
 
@@ -248,13 +262,15 @@ describe('EventDispatcher with Replay Protection', () => {
         auth: {
           userId: 'test-user',
           deviceId: 'test-device',
+          walletAddress: 'GTEST',
         },
         emit: vi.fn(),
-        on: vi.fn((event, handler) => {
+        on: vi.fn((event: string, handler: unknown) => {
           if (event === 'dispatch') {
-            (mockSocketNoRedis as any).dispatchHandler = handler;
+            (mockSocketNoRedis as Record<string, unknown>)['dispatchHandler'] = handler;
           }
-        }),
+          return mockSocketNoRedis as AuthSocket;
+        }) as unknown as AuthSocket['on'],
         rooms: new Set(['test-room']),
       };
 
@@ -266,11 +282,11 @@ describe('EventDispatcher with Replay Protection', () => {
       );
 
       const handlerNoRedis = vi.fn();
-      dispatcherNoRedis.register('test_event', handlerNoRedis);
+      dispatcherNoRedis.register('join_room', handlerNoRedis);
       dispatcherNoRedis.listen();
 
       const eventId = 'event-123';
-      const envelope = createEnvelope('test_event', { message: 'test' }, eventId);
+      const envelope = createEnvelope('join_room', { message: 'test' }, eventId);
 
       // First occurrence — should process
       await (mockSocketNoRedis as any).dispatchHandler(envelope);

@@ -132,10 +132,26 @@ function makeIo() {
   };
 }
 
+// Handlers now run exclusively through the enveloped 'dispatch' path (#342)
+// — there's no more raw socket.on(type, ...) listener to grab directly.
+let envelopeSeq = 0;
+function dispatchEvent(socket: EventEmitter, type: string) {
+  return async (payload: unknown) => {
+    envelopeSeq += 1;
+    EventEmitter.prototype.emit.call(socket, 'dispatch', {
+      eventId: `test-evt-${envelopeSeq}`,
+      type,
+      timestamp: Date.now(),
+      payload,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  };
+}
+
 async function getHandler(socket: EventEmitter, io: unknown) {
   const { registerMessagingHandlers } = await import('../socket/messaging.js');
   registerMessagingHandlers(io as never, socket as never);
-  return socket.listeners('ask_assistant')[0] as (p: unknown) => Promise<void>;
+  return dispatchEvent(socket, 'ask_assistant');
 }
 
 function envelopeRows(): Array<Record<string, unknown>> {
@@ -167,9 +183,15 @@ const REPLY_MESSAGE = {
   deletedAt: null,
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   insertCalls.length = 0;
+
+  // ask_assistant is charged against a per-user budget (#375) that, with no
+  // Redis in tests, lives in a process-wide counter — without this reset the
+  // later cases in this file trip the limit instead of reaching the handler.
+  const { clearLocalRateLimitCounters } = await import('../services/rateLimiter.js');
+  clearLocalRateLimitCounters();
 
   mockMemberFindFirst.mockReset().mockResolvedValue({
     id: 'm1',
@@ -223,24 +245,29 @@ describe('ask_assistant — per-device envelope fan-out (#337)', () => {
 
     // Every active device of every member gets its own row — including both of
     // the asking user's own devices, so the reply reaches all of them.
+    // `protocol` is stamped per envelope (#364) so pre-cutover history stays
+    // interpretable after a device's capabilities change.
     expect(envelopeRows()).toEqual([
       {
         messageId: REPLY_MESSAGE.id,
         recipientDeviceId: ALICE_DEVICE_1,
         recipientUserId: ALICE,
         ciphertext: REPLY,
+        protocol: 'sealed_box',
       },
       {
         messageId: REPLY_MESSAGE.id,
         recipientDeviceId: ALICE_DEVICE_2,
         recipientUserId: ALICE,
         ciphertext: REPLY,
+        protocol: 'sealed_box',
       },
       {
         messageId: REPLY_MESSAGE.id,
         recipientDeviceId: BOB_DEVICE,
         recipientUserId: BOB,
         ciphertext: REPLY,
+        protocol: 'sealed_box',
       },
     ]);
   });

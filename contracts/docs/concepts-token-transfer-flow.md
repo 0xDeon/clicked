@@ -6,10 +6,10 @@ The `token_transfer` contract (`contracts/contracts/token_transfer/`) is a thin 
 
 The token contract it routes through can be one of two things:
 
-| Kind | Description |
-|---|---|
+| Kind                             | Description                                                                                                                                                                                                                                                                |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Stellar Asset Contract (SAC)** | Soroban's built-in wrapper that bridges a Stellar Classic asset (a `(issuer, code)` pair such as `USDC:GA5Z...)` into a SEP-41 contract address. Every Classic asset has a deterministic SAC address derived from its issuer + code. SAC is the most common backing token. |
-| **Custom SEP-41 token** | Any user-deployed Soroban contract that implements the SEP-41 interface (e.g. a mintable token, a governance token, a wrapped bridge token). |
+| **Custom SEP-41 token**          | Any user-deployed Soroban contract that implements the SEP-41 interface (e.g. a mintable token, a governance token, a wrapped bridge token).                                                                                                                               |
 
 The `token_transfer` contract is agnostic to which kind backs it — it calls `transfer` and `balance` through the `TokenClient` binding (`contracts/contracts/token_transfer/src/token_interface.rs`) and never inspects the underlying implementation.
 

@@ -101,6 +101,15 @@ export class LocalDiskObjectStore implements ObjectStoreLike {
     await rm(metaPath(key), { force: true });
   }
 
+  async headObject(key: string): Promise<{ exists: boolean; size?: number }> {
+    try {
+      const info = await stat(resolvePath(key));
+      return { exists: true, size: info.size };
+    } catch {
+      return { exists: false };
+    }
+  }
+
   async getPresignedPutUrl(
     key: string,
     _contentType: string | undefined,

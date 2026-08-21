@@ -8,13 +8,13 @@
 
 ## Overview
 
-| # | DB Name | Source File | Version | Object Stores | Encryption at Rest |
-|---|---------|------------|---------|---------------|---------------------|
-| 1 | `clicked_crypto` | [`src/lib/cryptoStore.ts`](../src/lib/cryptoStore.ts) | 2 | 3 | ❌ (plaintext JWKs + structured-clone CryptoKey) |
-| 2 | `clicked_prekeys` | [`src/lib/prekeyStore.ts`](../src/lib/prekeyStore.ts) | 1 | 2 | ❌ (plaintext JWKs) |
-| 3 | `clicked_sessions` | [`src/lib/sessionStore.ts`](../src/lib/sessionStore.ts) | 1 | 1 | ❌ (plaintext JWK for AES-GCM shared secret) |
-| 4 | `clicked_messages` | [`src/lib/messageCache.ts`](../src/lib/messageCache.ts) | 1 | 1 | ✅ (AES‑GCM, key derived from identity key via PBKDF2) |
-| 5 | `clicked-search` | [`src/lib/search/db.ts`](../src/lib/search/db.ts) | 1 | 1 | ❌ (fully decrypted plaintext) |
+| #   | DB Name            | Source File                                             | Version | Object Stores | Encryption at Rest                                     |
+| --- | ------------------ | ------------------------------------------------------- | ------- | ------------- | ------------------------------------------------------ |
+| 1   | `clicked_crypto`   | [`src/lib/cryptoStore.ts`](../src/lib/cryptoStore.ts)   | 2       | 3             | ❌ (plaintext JWKs + structured-clone CryptoKey)       |
+| 2   | `clicked_prekeys`  | [`src/lib/prekeyStore.ts`](../src/lib/prekeyStore.ts)   | 1       | 2             | ❌ (plaintext JWKs)                                    |
+| 3   | `clicked_sessions` | [`src/lib/sessionStore.ts`](../src/lib/sessionStore.ts) | 1       | 1             | ❌ (plaintext JWK for AES-GCM shared secret)           |
+| 4   | `clicked_messages` | [`src/lib/messageCache.ts`](../src/lib/messageCache.ts) | 1       | 1             | ✅ (AES‑GCM, key derived from identity key via PBKDF2) |
+| 5   | `clicked-search`   | [`src/lib/search/db.ts`](../src/lib/search/db.ts)       | 1       | 1             | ❌ (fully decrypted plaintext)                         |
 
 ---
 
@@ -26,19 +26,19 @@
 
 ### Object Store: `keys`
 
-| Property | Value |
-|----------|-------|
-| Key path | *(none — inline keys)* |
-| Indexes | *(none)* |
+| Property | Value                  |
+| -------- | ---------------------- |
+| Key path | _(none — inline keys)_ |
+| Indexes  | _(none)_               |
 
 **Stored record shape** (key: `"identity_keypair"`):
 
 ```ts
 interface StoredIdentityKeyPair {
-  id: "identity_keypair";
-  publicKey: JsonWebKey;   // ECDH P-256 public key in JWK format
-  privateKey: JsonWebKey;  // ECDH P-256 private key in JWK format
-  createdAt: number;       // epoch ms
+  id: 'identity_keypair';
+  publicKey: JsonWebKey; // ECDH P-256 public key in JWK format
+  privateKey: JsonWebKey; // ECDH P-256 private key in JWK format
+  createdAt: number; // epoch ms
 }
 ```
 
@@ -46,15 +46,15 @@ interface StoredIdentityKeyPair {
 
 ### Object Store: `deviceId`
 
-| Property | Value |
-|----------|-------|
-| Key path | *(none — inline keys)* |
-| Indexes | *(none)* |
+| Property | Value                  |
+| -------- | ---------------------- |
+| Key path | _(none — inline keys)_ |
+| Indexes  | _(none)_               |
 
 **Stored record shape** (key: `"id"`):
 
 ```ts
-string // e.g. "device_lr8x2k_a3b9c1d"
+string; // e.g. "device_lr8x2k_a3b9c1d"
 ```
 
 Generated via `Math.random()` and `Date.now()` — not cryptographically random. Stored in plaintext.
@@ -63,17 +63,17 @@ Generated via `Math.random()` and `Date.now()` — not cryptographically random.
 
 Added in **version 2** migration (`event.oldVersion < 2`).
 
-| Property | Value |
-|----------|-------|
-| Key path | *(none — inline keys)* |
-| Indexes | *(none)* |
+| Property | Value                  |
+| -------- | ---------------------- |
+| Key path | _(none — inline keys)_ |
+| Indexes  | _(none)_               |
 
 **Stored record shape** (key: `"current"`):
 
 ```ts
 interface IdentityKeyPairRecord {
-  keyPair: CryptoKeyPair;  // structured‑clone of the live CryptoKey objects
-  createdAt: number;       // epoch ms
+  keyPair: CryptoKeyPair; // structured‑clone of the live CryptoKey objects
+  createdAt: number; // epoch ms
 }
 ```
 
@@ -88,20 +88,20 @@ interface IdentityKeyPairRecord {
 
 ### Object Store: `prekeys`
 
-| Property | Value |
-|----------|-------|
-| Key path | `keyId` |
-| Indexes | `isOneTime` on `isOneTime` (unique: `false`) |
+| Property | Value                                        |
+| -------- | -------------------------------------------- |
+| Key path | `keyId`                                      |
+| Indexes  | `isOneTime` on `isOneTime` (unique: `false`) |
 
 **Stored record shape:**
 
 ```ts
 interface StoredPrekey {
-  keyId: string;              // e.g. "prekey_1722441600000_a3b9c1d"
-  publicKey: JsonWebKey;      // ECDH X25519 public key in JWK format
-  privateKeyJwk: JsonWebKey;  // ECDH X25519 private key in JWK format (not CryptoKey)
-  createdAt: number;          // epoch ms
-  isOneTime: 0 | 1;           // 1 = one-time prekey, 0 = not (used for signed prekey in this store)
+  keyId: string; // e.g. "prekey_1722441600000_a3b9c1d"
+  publicKey: JsonWebKey; // ECDH X25519 public key in JWK format
+  privateKeyJwk: JsonWebKey; // ECDH X25519 private key in JWK format (not CryptoKey)
+  createdAt: number; // epoch ms
+  isOneTime: 0 | 1; // 1 = one-time prekey, 0 = not (used for signed prekey in this store)
 }
 ```
 
@@ -111,20 +111,20 @@ interface StoredPrekey {
 
 ### Object Store: `signedPrekey`
 
-| Property | Value |
-|----------|-------|
-| Key path | *(none — inline keys)* |
-| Indexes | *(none)* |
+| Property | Value                  |
+| -------- | ---------------------- |
+| Key path | _(none — inline keys)_ |
+| Indexes  | _(none)_               |
 
 **Stored record shape** (key: `"signed"`):
 
 ```ts
 interface SignedPrekeyRecord {
-  keyId: string;              // e.g. "prekey_1722441600000_a3b9c1d"
-  publicKey: JsonWebKey;      // ECDH X25519 public key in JWK format
-  privateKeyJwk: JsonWebKey;  // ECDH X25519 private key in JWK format
-  createdAt: number;          // epoch ms
-  isOneTime: 0;               // always 0 for signed prekey
+  keyId: string; // e.g. "prekey_1722441600000_a3b9c1d"
+  publicKey: JsonWebKey; // ECDH X25519 public key in JWK format
+  privateKeyJwk: JsonWebKey; // ECDH X25519 private key in JWK format
+  createdAt: number; // epoch ms
+  isOneTime: 0; // always 0 for signed prekey
 }
 ```
 
@@ -140,19 +140,19 @@ interface SignedPrekeyRecord {
 
 ### Object Store: `sessions`
 
-| Property | Value |
-|----------|-------|
-| Key path | `sessionId` |
-| Indexes | `deviceId` on `deviceId` (unique: `true` — one session per device) |
+| Property | Value                                                              |
+| -------- | ------------------------------------------------------------------ |
+| Key path | `sessionId`                                                        |
+| Indexes  | `deviceId` on `deviceId` (unique: `true` — one session per device) |
 
 **Stored record shape:**
 
 ```ts
 interface CachedSession {
-  sessionId: string;          // e.g. "session_1722441600000_a3b9c1d"
-  deviceId: string;           // the remote device this session is with
-  sharedSecretJwk: JsonWebKey;// AES-GCM shared secret in JWK format
-  createdAt: number;          // epoch ms
+  sessionId: string; // e.g. "session_1722441600000_a3b9c1d"
+  deviceId: string; // the remote device this session is with
+  sharedSecretJwk: JsonWebKey; // AES-GCM shared secret in JWK format
+  createdAt: number; // epoch ms
 }
 ```
 
@@ -167,34 +167,35 @@ interface CachedSession {
 
 ### Object Store: `messages`
 
-| Property | Value |
-|----------|-------|
-| Key path | `id` |
-| Indexes | `conversationId` on `conversationId` (unique: `false`), `timestamp` on `timestamp` (unique: `false`) |
+| Property | Value                                                                                                |
+| -------- | ---------------------------------------------------------------------------------------------------- |
+| Key path | `id`                                                                                                 |
+| Indexes  | `conversationId` on `conversationId` (unique: `false`), `timestamp` on `timestamp` (unique: `false`) |
 
 **Stored record shape:**
 
 ```ts
 interface CachedMessage {
-  id: string;              // message UUID
-  conversationId: string;  // conversation UUID
-  content: string;         // ⚠️ ALWAYS EMPTY at rest — the real content is encrypted
-  senderId: string;        // ⚠️ ALWAYS EMPTY at rest — encrypted
-  timestamp: number;       // epoch ms — stored in plaintext
-  iv: string;              // AES-GCM initialization vector (hex)
-  encryptedContent: string;// AES-GCM ciphertext (hex) containing { content, senderId }
+  id: string; // message UUID
+  conversationId: string; // conversation UUID
+  content: string; // ⚠️ ALWAYS EMPTY at rest — the real content is encrypted
+  senderId: string; // ⚠️ ALWAYS EMPTY at rest — encrypted
+  timestamp: number; // epoch ms — stored in plaintext
+  iv: string; // AES-GCM initialization vector (hex)
+  encryptedContent: string; // AES-GCM ciphertext (hex) containing { content, senderId }
 }
 ```
 
 **Encryption scheme:**
+
 1. Derive a 256-bit AES-GCM key via PBKDF2 (SHA-256, 100k iterations) from the identity public key JWK, salted with `"clicked_cache_salt"`.
 2. On write: serialize `{ content, senderId }` as JSON, encrypt with AES-GCM, store ciphertext in `encryptedContent` along with the random IV in `iv`.
 3. On read: decrypt `encryptedContent` with the cached key and parse the JSON.
 
 **Encryption status:** ✅ Encrypted at rest. Message content and sender identity are stored as AES-GCM ciphertext. However:
+
 - `id`, `conversationId`, and `timestamp` remain in plaintext (leaking conversation membership and timing metadata).
 - The encryption key is derived from the identity public key (which is itself stored in plaintext in `clicked_crypto`), so the encryption is only as strong as the identity key's secrecy.
-
 
 > **⚠️ Subtle bug note:** The `CachedMessage` interface declares `content` and `senderId` as `string` fields, and the `addMessage` method spreads the input message (which includes `content`/`senderId`) into the stored object alongside `iv`/`encryptedContent`. This means the plaintext `content` and `senderId` are **also written to IndexedDB in the clear** alongside the ciphertext. The `getMessage` path relies on decryption, but the raw record still contains the plaintext duplicates in the DB.
 
@@ -208,10 +209,10 @@ interface CachedMessage {
 
 ### Object Store: `messages`
 
-| Property | Value |
-|----------|-------|
-| Key path | `id` |
-| Indexes | `conversationId` on `conversationId` (unique: `false`), `createdAt` on `createdAt` (unique: `false`), `conversation_created` compound on `["conversationId", "createdAt"]` (unique: `false`) |
+| Property | Value                                                                                                                                                                                        |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Key path | `id`                                                                                                                                                                                         |
+| Indexes  | `conversationId` on `conversationId` (unique: `false`), `createdAt` on `createdAt` (unique: `false`), `conversation_created` compound on `["conversationId", "createdAt"]` (unique: `false`) |
 
 **Stored record shape** (from [`types.ts`](../src/lib/search/types.ts)):
 
@@ -220,9 +221,9 @@ interface DecryptedMessage {
   id: string;
   conversationId: string;
   senderId: string;
-  plaintext: string;          // fully decrypted message body
+  plaintext: string; // fully decrypted message body
   contentType: string;
-  createdAt: string;          // ISO 8601
+  createdAt: string; // ISO 8601
   sequenceNumber?: number | null;
 }
 ```
@@ -233,13 +234,13 @@ interface DecryptedMessage {
 
 ## Encryption Summary
 
-| DB | Sensitive Data Stored | Protected? |
-|----|----------------------|------------|
-| `clicked_crypto` | Identity private key (JWK), CryptoKey handles | ❌ JWKs in plaintext; CryptoKey handles rely on browser key store |
-| `clicked_prekeys` | Prekey private keys (JWK) | ❌ Plaintext JWKs |
-| `clicked_sessions` | AES-GCM session shared secrets (JWK) | ❌ Plaintext JWKs |
-| `clicked_messages` | Message content + sender ID | ✅ AES-GCM encrypted (but see plaintext-duplicate caveat above) |
-| `clicked-search` | Fully decrypted message plaintext | ❌ No encryption at all |
+| DB                 | Sensitive Data Stored                         | Protected?                                                        |
+| ------------------ | --------------------------------------------- | ----------------------------------------------------------------- |
+| `clicked_crypto`   | Identity private key (JWK), CryptoKey handles | ❌ JWKs in plaintext; CryptoKey handles rely on browser key store |
+| `clicked_prekeys`  | Prekey private keys (JWK)                     | ❌ Plaintext JWKs                                                 |
+| `clicked_sessions` | AES-GCM session shared secrets (JWK)          | ❌ Plaintext JWKs                                                 |
+| `clicked_messages` | Message content + sender ID                   | ✅ AES-GCM encrypted (but see plaintext-duplicate caveat above)   |
+| `clicked-search`   | Fully decrypted message plaintext             | ❌ No encryption at all                                           |
 
 All databases rely on the browser's same-origin storage isolation for baseline protection. No database uses [WebCrypto non-extractable keys](https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto/generateKey#extractable) or application-level key-wrapping beyond `clicked_messages`' PBKDF2-derived AES-GCM.
 

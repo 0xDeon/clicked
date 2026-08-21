@@ -158,7 +158,9 @@ authRouter.post(
           ...(registrationId !== undefined ? { registrationId } : {}),
           // A client re-verifying with a newer `capabilities` set is the
           // "upgrade" path (#180-follow-on) — no re-registration needed.
-          ...(capabilities !== undefined ? { capabilities: normalizeCapabilities(capabilities) } : {}),
+          ...(capabilities !== undefined
+            ? { capabilities: normalizeCapabilities(capabilities) }
+            : {}),
         })
         .where(eq(devices.id, deviceId));
     } else {
@@ -171,7 +173,9 @@ authRouter.post(
           platform: platform ?? null,
           registrationId: registrationId ?? null,
           lastSeenAt: new Date(),
-          ...(capabilities !== undefined ? { capabilities: normalizeCapabilities(capabilities) } : {}),
+          ...(capabilities !== undefined
+            ? { capabilities: normalizeCapabilities(capabilities) }
+            : {}),
         })
         .returning({ id: devices.id });
       if (!newDevice) {

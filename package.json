@@ -11,7 +11,7 @@
   },
   "devDependencies": {
     "turbo": "latest",
-    "prettier": "latest",
+    "prettier": "3.9.1",
     "supertest": "^2.0.0",
     "express": "^4.18.2",
     "jsonwebtoken": "^9.0.0",

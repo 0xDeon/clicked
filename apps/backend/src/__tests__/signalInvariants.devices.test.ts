@@ -101,23 +101,37 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe('POST /devices — session/private-key state rejection', () => {
+// Device registration moved behind a fresh-wallet-signature challenge (#233):
+// POST /devices itself is now a hard 403 pointing at the link flow, so the
+// payload invariant is enforced on POST /devices/link/verify, the route that
+// actually creates the device row.
+describe('POST /devices/link/verify — session/private-key state rejection', () => {
+  const LINK_BODY = { ...VALID_DEVICE_BODY, signature: 'sig', nonce: 'nonce' };
+
   it('rejects an unrecognized top-level field with 400', async () => {
     const res = await request(makeApp())
-      .post('/devices')
-      .send({ ...VALID_DEVICE_BODY, sessionState: 'opaque-session-blob' });
+      .post('/devices/link/verify')
+      .send({ ...LINK_BODY, sessionState: 'opaque-session-blob' });
 
     expect(res.status).toBe(400);
-    expect(mockDeviceFindFirst).not.toHaveBeenCalled();
     expect(mockInsert).not.toHaveBeenCalled();
   });
 
   it('rejects a private-key field with 400', async () => {
     const res = await request(makeApp())
-      .post('/devices')
-      .send({ ...VALID_DEVICE_BODY, identityPrivateKey: 'should-never-leave-the-client' });
+      .post('/devices/link/verify')
+      .send({ ...LINK_BODY, identityPrivateKey: 'should-never-leave-the-client' });
 
     expect(res.status).toBe(400);
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /devices — retired in favour of the link flow', () => {
+  it('refuses to register a device without a fresh wallet signature', async () => {
+    const res = await request(makeApp()).post('/devices').send(VALID_DEVICE_BODY);
+
+    expect(res.status).toBe(403);
     expect(mockInsert).not.toHaveBeenCalled();
   });
 });
@@ -172,9 +186,7 @@ describe('POST /devices/:id/prekeys — session/private-key state rejection', ()
     const values = vi.fn().mockReturnValue({ onConflictDoUpdate, onConflictDoNothing });
     mockInsert.mockReturnValue({ values });
 
-    const res = await request(makeApp())
-      .post('/devices/device-1/prekeys')
-      .send(VALID_PREKEYS_BODY);
+    const res = await request(makeApp()).post('/devices/device-1/prekeys').send(VALID_PREKEYS_BODY);
 
     expect(res.status).toBe(200);
   });

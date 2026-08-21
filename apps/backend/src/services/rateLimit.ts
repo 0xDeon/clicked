@@ -6,6 +6,7 @@
  * `config/rateLimits.ts` (#375). This module only decides *what* to charge for
  * a given socket event.
  */
+import type { Redis } from 'ioredis';
 import { socketEventBucket } from '../config/rateLimits.js';
 import { consumeRateLimit, type RateLimitResult } from '../services/rateLimiter.js';
 

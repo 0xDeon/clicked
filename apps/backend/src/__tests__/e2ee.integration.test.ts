@@ -22,23 +22,29 @@ const mockFindMembership = vi.fn();
 const mockInsertMessages = vi.fn();
 const mockInsertEnvelopes = vi.fn();
 
-const mockTransaction = vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => {
-  const tx = {
-    insert: (table: string) => ({
-      values: (vals: unknown) => ({
-        returning: async () => {
-          if (table === 'messages_table') {
-            mockInsertMessages(vals);
-            const row = { ...(vals as object), id: 'msg-001', createdAt: new Date() };
-            return [row];
-          }
-          mockInsertEnvelopes(vals);
-          return [{}];
-        },
-      }),
+// The message insert uses `.values(...).returning()` while the envelope insert
+// just awaits `.values(...)`, so values() has to be both thenable and expose
+// returning() or one of the two silently records nothing.
+function recordInsert(table: string, vals: unknown) {
+  if (table === 'messages_table') {
+    mockInsertMessages(vals);
+    return [{ ...(vals as object), id: 'msg-001', createdAt: new Date() }];
+  }
+  mockInsertEnvelopes(vals);
+  return [{}];
+}
+
+function insertStub(table: string) {
+  return {
+    values: (vals: unknown) => ({
+      returning: async () => recordInsert(table, vals),
+      then: (resolve: (value: unknown) => void) => resolve(recordInsert(table, vals)),
     }),
   };
-  return cb(tx);
+}
+
+const mockTransaction = vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => {
+  return cb({ insert: insertStub });
 });
 
 vi.mock('../db/index.js', () => ({
@@ -47,18 +53,7 @@ vi.mock('../db/index.js', () => ({
       conversationMembers: { findMany: mockFindMembers, findFirst: mockFindMembership },
       devices: { findMany: mockFindDevices },
     },
-    insert: (table: string) => ({
-      values: (vals: unknown) => ({
-        returning: async () => {
-          if (table === 'messages_table') {
-            mockInsertMessages(vals);
-            return [{ ...(vals as object), id: 'msg-001', createdAt: new Date() }];
-          }
-          mockInsertEnvelopes(vals);
-          return [{}];
-        },
-      }),
-    }),
+    insert: insertStub,
     transaction: mockTransaction,
   },
 }));
@@ -77,7 +72,9 @@ vi.mock('drizzle-orm', () => ({
   isNull: vi.fn((col: unknown) => ({ isNull: col })),
 }));
 
-import { fanoutMessage, fanoutGroupMlsMessage } from '../services/fanout.js';
+// Imported dynamically: a static import is hoisted above the mock-state
+// consts above, so the vi.mock factories would run before they initialise.
+const { fanoutMessage, fanoutGroupMlsMessage } = await import('../services/fanout.js');
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
 
@@ -89,7 +86,6 @@ const DEVICE_A2 = 'device-a2'; // Alice's second device
 const DEVICE_B1 = 'device-b1';
 
 const PLAINTEXT = 'Hello, world!'; // must never appear in stored ciphertext
-const DM_CIPHERTEXT_A1 = 'AEAD:encrypted-for-a1';
 const DM_CIPHERTEXT_A2 = 'AEAD:encrypted-for-a2';
 const DM_CIPHERTEXT_B1 = 'AEAD:encrypted-for-b1';
 const MLS_GROUP_CIPHERTEXT = 'MLS:single-group-ciphertext';
@@ -105,26 +101,9 @@ beforeEach(() => {
     { id: DEVICE_B1, userId: USER_B },
   ]);
   mockFindMembership.mockResolvedValue({ id: 'mem-001' });
-  mockTransaction.mockImplementation(async (cb) => {
-    const insertedMsg = { id: 'msg-001', conversationId: CONV_ID, createdAt: new Date() };
-    const envelopes: unknown[] = [];
-    const tx = {
-      insert: (table: string) => ({
-        values: (vals: unknown) => ({
-          returning: async () => {
-            if (table === 'messages_table') {
-              mockInsertMessages(vals);
-              return [insertedMsg];
-            }
-            mockInsertEnvelopes(vals);
-            envelopes.push(vals);
-            return [{}];
-          },
-        }),
-      }),
-    };
-    return cb(tx);
-  });
+  // clearAllMocks() drops the implementation, so restate it against the same
+  // stub the module-level mock uses rather than a second, divergent one.
+  mockTransaction.mockImplementation(async (cb) => cb({ insert: insertStub }));
 });
 
 // ── 1. Server only stores ciphertext, never plaintext ─────────────────────────

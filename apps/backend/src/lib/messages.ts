@@ -22,6 +22,9 @@ export function serializeMessage<T extends MessageLike>(
   ciphertext: string | null;
   unavailable?: boolean;
 } {
+  // `content` is pulled out purely so a legacy plaintext column can never
+  // survive into a serialized response; it is intentionally discarded.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { deletedAt, envelopes, ciphertext: baseCiphertext, content, ...rest } = message;
 
   if (deletedAt) {

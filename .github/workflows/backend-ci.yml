@@ -26,6 +26,23 @@ jobs:
           --health-timeout 3s
           --health-retries 5
 
+      # The `Run migrations` step below targets DATABASE_URL, so the database
+      # it points at has to actually exist. Credentials/db name must match the
+      # DATABASE_URL declared under `env`.
+      postgres:
+        image: postgres:16-alpine
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: clicked
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     defaults:
       run:
         working-directory: apps/backend

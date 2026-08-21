@@ -46,7 +46,11 @@ function buildPreKey(seed: Uint8Array, keyId: number): PreKeyPair {
   };
 }
 
-function buildSignedPreKey(identity: IdentityKeyPair, seed: Uint8Array, keyId: number): SignedPreKeyPair {
+function buildSignedPreKey(
+  identity: IdentityKeyPair,
+  seed: Uint8Array,
+  keyId: number,
+): SignedPreKeyPair {
   const preKey = buildPreKey(seed, keyId);
   return {
     ...preKey,
@@ -63,9 +67,9 @@ describe('X3DH known-answer vectors', () => {
 
     expect(toBase64(signedPreKey.publicKey)).toBe(VECTOR.signedPreKeyPublicKey);
     expect(toBase64(signedPreKey.signature)).toBe(VECTOR.signedPreKeySignature);
-    expect(ed25519.verify(signedPreKey.signature, signedPreKey.publicKey, responderIdentity.publicKey)).toBe(
-      true,
-    );
+    expect(
+      ed25519.verify(signedPreKey.signature, signedPreKey.publicKey, responderIdentity.publicKey),
+    ).toBe(true);
     expect(toBase64(oneTimePreKey.publicKey)).toBe(VECTOR.oneTimePublicKey);
 
     const bundle: PreKeyBundle = {

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Router, type Router as RouterType } from 'express';
-import { eq, and, or, ilike, exists, sql, isNull, count } from 'drizzle-orm';
+import { asc, eq, and, or, ilike, exists, sql, isNull, count } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import {
   users,
@@ -23,32 +23,12 @@ import {
 } from '../services/mlsKeyPackages.js';
 import { signalPrekeysLowIfNeeded } from '../services/prekeyLowSignal.js';
 import { actorFromRequest, recordAuditEvent } from '../services/auditLog.js';
+import { normalizeCapabilities } from '../lib/capabilities.js';
 import { prekeyConsumedTotal } from '../lib/metrics.js';
 
 export const usersRouter: RouterType = Router();
 
 usersRouter.use(requireAuth);
-
-const rateLimitedResponse = { error: 'Too many requests' };
-
-/**
- * Limits key-bundle claims per authenticated caller and target device.
- * Ten requests per minute permits normal parallel session establishment while
- * making it impractical to drain a device's one-time prekey pool quickly.
- */
-export const keyBundleLimiter: RateLimitRequestHandler = rateLimit({
-  windowMs: 60 * 1000,
-  limit: 10,
-  keyGenerator: (req) => {
-    const callerId = (req as AuthRequest).auth?.userId ?? 'anonymous';
-    const targetUserId = req.params['userId'] ?? 'unknown-user';
-    const deviceId = req.params['deviceId'] ?? 'unknown-device';
-    return `${callerId}:${targetUserId}:${deviceId}`;
-  },
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: rateLimitedResponse,
-});
 
 usersRouter.get('/search', async (req: AuthRequest, res) => {
   const raw = req.query['q'];
@@ -238,7 +218,6 @@ usersRouter.get('/:id/presence', async (req: AuthRequest, res) => {
  */
 usersRouter.get(
   '/:userId/devices/:deviceId/key-bundle',
-  keyBundleLimiter,
   // Two buckets guard the same endpoint (#375): the per-minute limit stops a
   // scraper enumerating device bundles, and the daily quota stops a slow drip
   // that never trips it from draining a victim's one-time prekeys — which
@@ -267,35 +246,6 @@ usersRouter.get(
       res.status(409).json({ error: 'Device has not uploaded a signed prekey yet' });
       return;
     }
-
-    const claimedOneTimePreKey = await db.transaction(async (tx) => {
-      const [candidate] = await tx
-        .select({
-          id: devicePrekeys.id,
-          keyId: devicePrekeys.keyId,
-          publicKey: devicePrekeys.publicKey,
-        })
-        .from(devicePrekeys)
-        .where(
-          and(
-            eq(devicePrekeys.deviceId, deviceId),
-            eq(devicePrekeys.keyType, 'one_time'),
-            eq(devicePrekeys.consumed, false),
-          ),
-        )
-        .orderBy(devicePrekeys.createdAt)
-        .limit(1)
-        .for('update', { skipLocked: true });
-
-      if (!candidate) return null;
-
-      await tx
-        .update(devicePrekeys)
-        .set({ consumed: true })
-        .where(eq(devicePrekeys.id, candidate.id));
-
-      return { keyId: candidate.keyId, publicKey: candidate.publicKey };
-    });
 
     const claimed = await db.transaction(async (tx) => {
       const [candidate] = await tx
@@ -344,39 +294,19 @@ usersRouter.get(
 
     const claimedOneTimePreKey = claimed?.oneTimePreKey ?? null;
 
-    // Fire-and-forget: the device that owns this bundle is told to replenish
-    // once per threshold crossing. Never blocks or fails the bundle response.
     // A one-time prekey was consumed and cannot be handed out again (#376).
     // Draining a device's supply forces every later session with it down from
     // 4-DH to 3-DH, and it happens quietly, so the count left is the signal an
     // incident responder actually needs. Subject is the device owner — the
     // account this was done *to* — while the actor is whoever fetched it.
-    if (claimedOneTimePreKey) {
-      // The remaining count is the useful part but only a nice-to-have: if the
-      // count query fails, still record that a prekey was consumed rather than
-      // losing the event, and never fail the bundle fetch over bookkeeping.
-      let remaining: number | null = null;
-      try {
-        const [remainingRow] = await db
-          .select({ remaining: sql<number>`count(*)::int` })
-          .from(devicePrekeys)
-          .where(
-            and(
-              eq(devicePrekeys.deviceId, deviceId),
-              eq(devicePrekeys.keyType, 'one_time'),
-              eq(devicePrekeys.consumed, false),
-            ),
-          );
-        remaining = remainingRow?.remaining ?? 0;
-      } catch {
-        // Leave it null — the event itself is what must not be lost.
-      }
+    if (claimed) {
+      const remaining = claimed.remaining;
+
+      prekeyConsumedTotal.inc();
 
       // Fire-and-forget: the device that owns this bundle is told to replenish
       // once per threshold crossing. Never blocks or fails the bundle response.
-      if (remaining !== null) {
-        void signalPrekeysLowIfNeeded(deviceId, remaining);
-      }
+      void signalPrekeysLowIfNeeded(deviceId, remaining);
 
       void recordAuditEvent({
         action: 'key_bundle_drained',
@@ -708,7 +638,7 @@ usersRouter.patch('/me', async (req: AuthRequest, res) => {
 usersRouter.get('/:id/key-history', async (req: AuthRequest, res) => {
   const targetUserId = req.params['id'];
 
-  if (!targetUserId) {
+  if (typeof targetUserId !== 'string' || !targetUserId) {
     res.status(400).json({ error: 'User id is required' });
     return;
   }

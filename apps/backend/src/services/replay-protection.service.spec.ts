@@ -163,7 +163,7 @@ describe('ReplayProtectionService', () => {
       process.env['REPLAY_PROTECTION_TTL_SECONDS'] = '0';
       const deviceId = 'device-1';
       const eventId = 'event-1';
-      const below1 = await isReplay(redis, deviceId, eventId);
+      expect(await isReplay(redis, deviceId, eventId)).toBe(false);
       // Should use default TTL instead
       const keyBelow = getReplayProtectionRedisKey(deviceId, eventId);
       const ttlBelow = await redis.ttl(keyBelow);
@@ -174,7 +174,7 @@ describe('ReplayProtectionService', () => {
       // Invalid: above 86400
       process.env['REPLAY_PROTECTION_TTL_SECONDS'] = '100000';
       const eventId2 = 'event-2';
-      const above = await isReplay(redis, deviceId, eventId2);
+      expect(await isReplay(redis, deviceId, eventId2)).toBe(false);
       // Should use default TTL instead
       const keyAbove = getReplayProtectionRedisKey(deviceId, eventId2);
       const ttlAbove = await redis.ttl(keyAbove);
@@ -185,7 +185,7 @@ describe('ReplayProtectionService', () => {
       // Invalid: non-integer
       process.env['REPLAY_PROTECTION_TTL_SECONDS'] = 'invalid';
       const eventId3 = 'event-3';
-      const invalid = await isReplay(redis, deviceId, eventId3);
+      expect(await isReplay(redis, deviceId, eventId3)).toBe(false);
       // Should use default TTL instead
       const keyInvalid = getReplayProtectionRedisKey(deviceId, eventId3);
       const ttlInvalid = await redis.ttl(keyInvalid);

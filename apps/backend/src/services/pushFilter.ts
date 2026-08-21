@@ -106,7 +106,7 @@ export async function getEligiblePushRecipients(options: PushFilterOptions): Pro
   // Step 5: Filter out connected devices (realtime WebSocket connection exists)
   const offlineDeviceIds: string[] = [];
   for (const device of candidateDevices) {
-    if (!isDeviceConnected(device.id)) {
+    if (!(await isDeviceConnected(redis ?? null, device.id))) {
       offlineDeviceIds.push(device.id);
     }
   }
