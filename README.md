@@ -152,8 +152,19 @@ pnpm test
 
 ## 📚 Documentation
 
+**➡️ [Documentation index](docs/README.md) — every document in this repository, grouped by
+reader: new contributor, backend, frontend, contract developer, operator, security reviewer.**
+Start there; it links to everything below and is kept exhaustive.
+
+New to the project? Read the [system architecture overview](docs/architecture-overview.md)
+first — one diagram of all four apps and the external services, plus two end-to-end traces.
+
+Frequently opened:
+
 - [Devices & Prekeys API](apps/backend/docs/api-devices.md) — every `/devices` and `/user-devices` route: request/response shapes, ownership checks, prekey upload contract, and revocation side effects
 - [E2EE Onboarding Sequence](apps/backend/docs/e2ee-onboarding.md) — device registration and prekey upload flow for first-contact DM setup
+- [Contract events reference](contracts/docs/contracts-events.md) — every on-chain event, its payload, and which ones the backend listener consumes
+- [WASM size and resource budget](contracts/docs/concepts-resource-budget.md) — the 100 KB per-contract CI gate, current sizes, and headroom
 
 ---
 
