@@ -108,6 +108,9 @@ is about encryption and local state.
 | [File encryption](../apps/web/docs/concepts-file-encryption.md) | How attachments are encrypted client-side before upload. |
 | [Local search](../apps/web/docs/concepts-local-search.md) | The on-device search index over decrypted message content. |
 | [Push subscription](../apps/web/docs/concepts-push-subscription.md) | Service worker registration and push permission handling. |
+| [Service worker and offline behaviour](../apps/web/docs/concepts-service-worker.md) | `sw.js` registration/update lifecycle, the content-free push handler, notification click routing, and what works offline today. |
+| [Error handling and user feedback](../apps/web/docs/concepts-error-handling.md) | Toasts vs. inline error state, mapping backend errors to user-facing messages, and the rule that decryption failures never render as a generic crash. |
+| [Accessibility guide](../apps/web/docs/accessibility.md) | The WCAG 2.1 AA target, keyboard navigation, modal focus management, live-region announcements, and colour contrast. |
 | [Wallet and treasury UI](../apps/web/docs/concepts-wallet-treasury-ui.md) | How the wallet and treasury screens are composed and what they read from chain versus the backend. |
 
 **Client APIs and types**
@@ -130,6 +133,7 @@ The Soroban workspace in `contracts/`: `token_transfer`, `group_treasury`, and `
 | Document | What it gives you |
 | --- | --- |
 | [Contracts README](../contracts/README.md) | Workspace layout, toolchain, and how to build and test the contracts. |
+| [Contract testing guide](../contracts/docs/testing.md) | Soroban test scaffolding, auth mocking vs. asserting real auth, testing expiry via the virtual ledger clock, and the proposals → group_treasury cross-contract test setup. |
 | [Deployment and invocation](../contracts/docs/api-deployment-invocation.md) | Deploying each contract, initialising it, and invoking it from the CLI, including required environment variables. |
 | [Contract events reference](../contracts/docs/contracts-events.md) | Every published event across all three contracts, its topic and data shape, the state change it signals, and whether the backend listener consumes it. |
 | [Proposals API](../contracts/docs/api-proposals.md) | The `proposals` contract surface: creating, voting, finalising, and executing. |
