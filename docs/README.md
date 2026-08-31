@@ -81,6 +81,7 @@ listener.
 | --- | --- |
 | [JWT auth contract](../apps/backend/docs/contracts-jwt-auth.md) | Token claim shape, signing algorithm, and expiry rules. |
 | [REST schemas](../apps/backend/docs/contracts-rest-schemas.md) | Request and response body schemas shared across the REST surface. |
+| [Error code and response catalog](../apps/backend/docs/contracts-error-catalog.md) | Every error the backend can return on either transport: the REST status/`error` table, the socket `error` payload shapes, the rate-limit response, and which errors are retryable. |
 | [WebSocket payloads](../apps/backend/docs/contracts-websocket-payloads.md) | Payload shapes for each WebSocket event, as validated on the wire. |
 
 **Encryption and migrations**
@@ -125,6 +126,7 @@ is about encryption and local state.
 | [REST client](../apps/web/docs/api-rest-client.md) | The typed wrapper around the backend REST surface. |
 | [WebSocket client](../apps/web/docs/api-websocket-client.md) | Socket lifecycle, reconnection, and event subscription on the client. |
 | [Soroban client](../apps/web/docs/api-soroban-client.md) | How the web app builds, signs, and submits Soroban contract invocations. |
+| [Backend error catalog](../apps/backend/docs/contracts-error-catalog.md) | Every error the client can receive from the backend, both transports, and which ones are worth retrying. |
 | [Auth session contract](../apps/web/docs/contracts-auth-session.md) | The shape of the persisted session and what invalidates it. |
 | [IndexedDB schemas](../apps/web/docs/contracts-indexeddb-schemas.md) | Every IndexedDB object store, its keys, and its migration history. |
 | [Response types](../apps/web/docs/contracts-response-types.md) | Shared TypeScript response types used across the client. |
