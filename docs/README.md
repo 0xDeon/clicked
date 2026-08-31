@@ -44,6 +44,8 @@ You want orientation and the shortest path to a working local environment.
 | [System architecture overview](architecture-overview.md) | The single diagram of all four apps and every external service, with two traced end-to-end paths. |
 | [Runbook](runbook.md) | Day-two operations: what to do when a service is unhealthy, and how to restart pieces safely. |
 | [Observability](observability.md) | Which metrics, logs, and traces exist and where they are emitted, so you can see what your change did. |
+| [Testing strategy and conventions](testing.md) | The per-app test runners and commands, the rule that tests never start Redis, Postgres, or S3, and the conventions every new test must follow. |
+| [Security policy](../SECURITY.md) | How to report a vulnerability privately, what is in scope, and the response windows you can expect. |
 
 ### Backend developer
 
@@ -57,6 +59,7 @@ listener.
 | [Gateway architecture](../apps/backend/docs/concepts-gateway-architecture.md) | Socket.IO connection lifecycle, room semantics, and how the gateway scales horizontally over Redis pub/sub. |
 | [Delivery fan-out and receipts](../apps/backend/docs/concepts-delivery-fanout.md) | How one sent message reaches every recipient device, how receipts flow back, and which services are not actually wired into the live path. |
 | [Storage and push jobs](../apps/backend/docs/concepts-storage-push-jobs.md) | Object storage layout and the background jobs that expire files, devices, and envelopes. |
+| [Testing strategy and conventions](testing.md) | The Drizzle mocking pattern, driving socket handlers through the `dispatch` envelope, and the in-process counters that leak between tests. |
 
 **API reference**
 
@@ -78,12 +81,14 @@ listener.
 | --- | --- |
 | [JWT auth contract](../apps/backend/docs/contracts-jwt-auth.md) | Token claim shape, signing algorithm, and expiry rules. |
 | [REST schemas](../apps/backend/docs/contracts-rest-schemas.md) | Request and response body schemas shared across the REST surface. |
+| [Error code and response catalog](../apps/backend/docs/contracts-error-catalog.md) | Every error the backend can return on either transport: the REST status/`error` table, the socket `error` payload shapes, the rate-limit response, and which errors are retryable. |
 | [WebSocket payloads](../apps/backend/docs/contracts-websocket-payloads.md) | Payload shapes for each WebSocket event, as validated on the wire. |
 
 **Encryption and migrations**
 
 | Document | What it gives you |
 | --- | --- |
+| [Database migration workflow](../apps/backend/docs/migrations.md) | The drizzle-kit loop from `schema.ts` to applied SQL, the `drizzle/` layout, and how to resolve the colliding-migration merge conflict that has already broken this history once. |
 | [E2EE onboarding](../apps/backend/docs/e2ee-onboarding.md) | Device registration and prekey upload flow for first-contact DM setup. |
 | [MLS key packages](../apps/backend/docs/mls-key-packages.md) | Key package publication, consumption, and replenishment. |
 | [MLS group membership](../apps/backend/docs/mls-group-membership.md) | Adding and removing members from an MLS group and the resulting epoch changes. |
@@ -112,6 +117,7 @@ is about encryption and local state.
 | [Error handling and user feedback](../apps/web/docs/concepts-error-handling.md) | Toasts vs. inline error state, mapping backend errors to user-facing messages, and the rule that decryption failures never render as a generic crash. |
 | [Accessibility guide](../apps/web/docs/accessibility.md) | The WCAG 2.1 AA target, keyboard navigation, modal focus management, live-region announcements, and colour contrast. |
 | [Wallet and treasury UI](../apps/web/docs/concepts-wallet-treasury-ui.md) | How the wallet and treasury screens are composed and what they read from chain versus the backend. |
+| [Testing strategy and conventions](testing.md) | The web Vitest setup, the `fake-indexeddb` and WebCrypto substitutes, and the include pattern that quietly skips `.tsx` test files. |
 
 **Client APIs and types**
 
@@ -120,6 +126,7 @@ is about encryption and local state.
 | [REST client](../apps/web/docs/api-rest-client.md) | The typed wrapper around the backend REST surface. |
 | [WebSocket client](../apps/web/docs/api-websocket-client.md) | Socket lifecycle, reconnection, and event subscription on the client. |
 | [Soroban client](../apps/web/docs/api-soroban-client.md) | How the web app builds, signs, and submits Soroban contract invocations. |
+| [Backend error catalog](../apps/backend/docs/contracts-error-catalog.md) | Every error the client can receive from the backend, both transports, and which ones are worth retrying. |
 | [Auth session contract](../apps/web/docs/contracts-auth-session.md) | The shape of the persisted session and what invalidates it. |
 | [IndexedDB schemas](../apps/web/docs/contracts-indexeddb-schemas.md) | Every IndexedDB object store, its keys, and its migration history. |
 | [Response types](../apps/web/docs/contracts-response-types.md) | Shared TypeScript response types used across the client. |
@@ -160,6 +167,7 @@ Threat model, hardening, and the crypto protocol documents.
 
 | Document | What it gives you |
 | --- | --- |
+| [Security policy](../SECURITY.md) | The private disclosure channel, response windows, scope, and the extra care an on-chain finding needs. |
 | [Threat model](threat-model.md) | Assets, adversaries, trust boundaries, and the mitigations claimed for each threat. |
 | [Security fixes summary](../SECURITY_FIXES_SUMMARY.md) | A log of security issues found and the fixes applied for each. |
 | [Audit logging](security/audit-logging.md) | What is audit-logged, in what format, and what is deliberately excluded. |
@@ -194,6 +202,8 @@ Documents about the repository itself rather than about the product.
 
 | Document | What it gives you |
 | --- | --- |
+| [Security policy](../SECURITY.md) | How and where to report a vulnerability privately, and why never in a public issue or pull request. |
+| [Testing strategy and conventions](testing.md) | Cross-app testing philosophy, runners, and the conventions a contributor must follow. |
 | [Pull request template](../.github/pull_request_template.md) | The checklist every pull request is opened against. |
 | [PR notes](../pr.md) | Scratch notes for an in-flight pull request; not a reference document. |
 
